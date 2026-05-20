@@ -1,0 +1,1 @@
+"""Household finance Telegram bot."""

@@ -21,7 +21,8 @@ def _ids_from_env(name: str) -> set[int]:
 class Settings:
     telegram_bot_token: str
     google_sheet_id: str
-    service_account_file: Path
+    service_account_file: Path | None
+    service_account_json: str | None
     me_telegram_ids: set[int]
     wife_telegram_ids: set[int]
     me_label: str
@@ -36,12 +37,17 @@ class Settings:
         load_dotenv()
         token = os.environ["TELEGRAM_BOT_TOKEN"]
         sheet_id = os.environ["GOOGLE_SHEET_ID"]
-        service_account_file = Path(os.environ["GOOGLE_SERVICE_ACCOUNT_FILE"]).expanduser()
+        service_account_file_raw = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE")
+        service_account_json = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON") or None
+        service_account_file = Path(service_account_file_raw).expanduser() if service_account_file_raw else None
+        if service_account_file is None and service_account_json is None:
+            raise RuntimeError("Set GOOGLE_SERVICE_ACCOUNT_FILE for local use or GOOGLE_SERVICE_ACCOUNT_JSON for Railway.")
 
         return cls(
             telegram_bot_token=token,
             google_sheet_id=sheet_id,
             service_account_file=service_account_file,
+            service_account_json=service_account_json,
             me_telegram_ids=_ids_from_env("ME_TELEGRAM_IDS"),
             wife_telegram_ids=_ids_from_env("WIFE_TELEGRAM_IDS"),
             me_label=os.getenv("ME_LABEL", "Me"),

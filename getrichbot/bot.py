@@ -933,7 +933,11 @@ def main() -> None:
     print("GetRichBot startup reached.", flush=True)
     settings = Settings.load()
     LOGGER.info("Starting GetRichBot. Raw sheet: %s. Fixed sheet: %s.", settings.raw_expenses_sheet, settings.fixed_expenses_sheet)
-    sheets = SheetsClient(settings.google_sheet_id, settings.service_account_file)
+    sheets = SheetsClient(
+        settings.google_sheet_id,
+        service_account_file=settings.service_account_file,
+        service_account_json=settings.service_account_json,
+    )
     finance_bot = FinanceBot(settings, sheets)
 
     print("Loading Telegram library...", flush=True)

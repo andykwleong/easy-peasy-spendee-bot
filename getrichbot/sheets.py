@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 from decimal import Decimal
 from pathlib import Path
@@ -10,9 +11,10 @@ SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
 
 class SheetsClient:
-    def __init__(self, sheet_id: str, service_account_file: Path):
+    def __init__(self, sheet_id: str, service_account_file: Path | None = None, service_account_json: str | None = None):
         self.sheet_id = sheet_id
         self.service_account_file = service_account_file
+        self.service_account_json = service_account_json
         self.service: Any | None = None
 
     def _service(self):
@@ -20,7 +22,13 @@ class SheetsClient:
             from google.oauth2.service_account import Credentials
             from googleapiclient.discovery import build
 
-            credentials = Credentials.from_service_account_file(self.service_account_file, scopes=SCOPES)
+            if self.service_account_json:
+                info = json.loads(self.service_account_json)
+                credentials = Credentials.from_service_account_info(info, scopes=SCOPES)
+            elif self.service_account_file:
+                credentials = Credentials.from_service_account_file(self.service_account_file, scopes=SCOPES)
+            else:
+                raise RuntimeError("Google service account credentials are not configured.")
             self.service = build("sheets", "v4", credentials=credentials)
         return self.service
 

@@ -50,6 +50,8 @@ Use formulas or pivot tables based on `Raw Expenses`.
 3. Share your Google Sheet with the service account email.
 4. Download the service account JSON file.
 5. Copy `.env.example` to `.env` and fill in the values.
+   - Local Mac setup: set `GOOGLE_SERVICE_ACCOUNT_FILE` to the JSON file path.
+   - Railway setup: set `GOOGLE_SERVICE_ACCOUNT_JSON` to the full JSON file contents instead of using a file path.
 6. Install dependencies:
 
 ```bash
@@ -147,3 +149,4 @@ Monthly totals:
 - Shopping is automatically logged as `Shopping - Me` or `Shopping - My wife` based on who sent the message.
 - The bot does not calculate monthly totals in Telegram.
 - Google Sheets formulas or pivots should perform all summation.
+- Do not commit `.env` or your Google service account JSON file to GitHub.

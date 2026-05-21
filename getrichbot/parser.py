@@ -110,6 +110,12 @@ def extract_standalone_date(text: str, today: date | None = None) -> tuple[date 
     return None, False
 
 
+def extract_date_phrase(text: str, today: date | None = None) -> tuple[date | None, bool]:
+    reference_date = today or date.today()
+    parsed, _, needs_confirmation = _extract_expense_date(text.strip(), reference_date)
+    return parsed, needs_confirmation
+
+
 def _extract_expense_date(text: str, today: date) -> tuple[date | None, str, bool]:
     lowered = text.lower()
     if "yesterday" in lowered:

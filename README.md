@@ -23,8 +23,10 @@ Create a Google Sheet with these tabs:
 Header row:
 
 ```text
-Timestamp,Date,Month,Logged By,Raw Input,Amount,Category,Description,Input Type,Status,Telegram Chat ID,Telegram Message ID
+Entry ID,Timestamp,Date,Month,Logged By,Raw Input,Amount,Category,Description,Input Type,Status,Telegram Chat ID,Telegram Message ID
 ```
+
+`Timestamp` is time only, for example `21:34:12`. `Date` stores the expense date.
 
 ### Fixed Expenses
 
@@ -78,6 +80,10 @@ food 60 May 19
 food 60 19/5
 ```
 
+You can also upload a receipt, payment, or banking screenshot if `OPENAI_API_KEY` is configured. The bot will extract the likely expense and ask for confirmation before logging it.
+
+You can also send a voice note if `OPENAI_API_KEY` is configured. The bot will transcribe it, extract the likely expense, and ask for confirmation before logging it.
+
 You can also send multiple entries for the same date:
 
 ```text
@@ -105,8 +111,20 @@ Plain-language shortcuts:
 - `commands`
 - `undo last`
 - `delete last`
+- `delete e1a2b3`
+- `confirm abc123`
 - `confirm abc123 as Food`
 - `confirm abc123 as Food on 2026-05-19`
+
+With `OPENAI_API_KEY` configured, natural language actions also work:
+
+- `delete the $15 food expense on 16th May`
+- `how much was dinner last Friday?`
+- `change the 13th May shopping amount from 200 to 180`
+- `change date to yesterday` for pending screenshot/voice items
+- `confirm all` for pending screenshot/voice items
+
+The bot still validates actions against real `Entry ID` rows in Google Sheets before deleting or editing.
 
 ## Monthly Summary Formulas
 
@@ -115,13 +133,13 @@ In `Monthly Summary`, you can summarize raw rows directly from `Raw Expenses`.
 Category totals:
 
 ```text
-=QUERY('Raw Expenses'!C:G,"select C,G,sum(F) where J='Confirmed' group by C,G label sum(F) 'Total'",1)
+=QUERY('Raw Expenses'!D:H,"select D,H,sum(G) where K='Confirmed' group by D,H label sum(G) 'Total'",1)
 ```
 
 Monthly totals:
 
 ```text
-=QUERY('Raw Expenses'!C:F,"select C,sum(F) where C is not null group by C label sum(F) 'Total Spend'",1)
+=QUERY('Raw Expenses'!D:G,"select D,sum(G) where D is not null group by D label sum(G) 'Total Spend'",1)
 ```
 
 ## Notes

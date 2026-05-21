@@ -28,6 +28,8 @@ class Settings:
     wife_label: str
     raw_expenses_sheet: str
     fixed_expenses_sheet: str
+    openai_api_key: str | None
+    openai_model: str
 
     @classmethod
     def load(cls) -> "Settings":
@@ -46,6 +48,8 @@ class Settings:
             wife_label=os.getenv("WIFE_LABEL", "My wife"),
             raw_expenses_sheet=os.getenv("RAW_EXPENSES_SHEET", "Raw Expenses"),
             fixed_expenses_sheet=os.getenv("FIXED_EXPENSES_SHEET", "Fixed Expenses"),
+            openai_api_key=os.getenv("OPENAI_API_KEY") or None,
+            openai_model=os.getenv("OPENAI_MODEL", "gpt-5.4-mini"),
         )
 
     def label_for_user(self, telegram_user_id: int) -> str | None:

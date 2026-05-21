@@ -19,6 +19,7 @@ class ExpenseDraft:
 
 @dataclass(frozen=True)
 class ExpenseRow:
+    entry_id: str
     timestamp: datetime
     logged_by: str
     raw_input: str
@@ -34,7 +35,8 @@ class ExpenseRow:
         expense_date = self.timestamp.strftime("%Y-%m-%d")
         month = self.timestamp.strftime("%Y-%m")
         return [
-            self.timestamp.isoformat(timespec="seconds"),
+            self.entry_id,
+            self.timestamp.strftime("%H:%M:%S"),
             expense_date,
             month,
             self.logged_by,
@@ -47,3 +49,24 @@ class ExpenseRow:
             str(self.telegram_chat_id),
             str(self.telegram_message_id),
         ]
+
+
+@dataclass(frozen=True)
+class ExpenseRecord:
+    row_number: int
+    entry_id: str
+    timestamp: str
+    expense_date: str
+    month: str
+    logged_by: str
+    raw_input: str
+    amount: Decimal
+    category: str
+    description: str
+    status: str
+
+    def compact(self) -> str:
+        return (
+            f"{self.entry_id} | {self.expense_date} | {self.logged_by} | "
+            f"${self.amount:.2f} | {self.category} | {self.description} | raw: {self.raw_input}"
+        )

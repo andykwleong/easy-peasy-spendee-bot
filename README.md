@@ -87,6 +87,7 @@ groceries 45 2026-05-18
 food 60 19th May
 food 60 May 19
 food 60 19/5
+snacks 4.50
 ```
 
 You can also upload a receipt, payment, or banking screenshot if `OPENAI_API_KEY` is configured. The bot will extract the likely expense and ask for confirmation before logging it.
@@ -100,6 +101,15 @@ You can also send multiple entries for the same date:
 Food 60
 groceries 50
 personal care 20
+```
+
+Or one dated expense per line:
+
+```text
+19th May food 20.62
+17th May food 22.54
+16th May 25.18 food
+14th May 24.10 food
 ```
 
 Commands:

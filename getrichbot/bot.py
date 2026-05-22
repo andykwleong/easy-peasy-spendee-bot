@@ -600,6 +600,32 @@ class FinanceBot:
         if len(lines) < 2:
             return False
 
+        logged_by = self.settings.label_for_user(update.effective_user.id)
+        if logged_by is None:
+            await update.message.reply_text("I do not recognize this Telegram user ID yet.")
+            return True
+
+        today = datetime.now(SINGAPORE_TZ).date()
+        line_drafts = [
+            parse_expense(
+                line,
+                logged_by=logged_by,
+                me_label=self.settings.me_label,
+                wife_label=self.settings.wife_label,
+                today=today,
+            )
+            for line in lines
+        ]
+        dated_line_drafts = [draft for draft in line_drafts if draft is not None and draft.expense_date is not None]
+        if dated_line_drafts:
+            skipped_lines = [
+                line
+                for line, draft in zip(lines, line_drafts)
+                if draft is None or draft.expense_date is None
+            ]
+            await self._log_multiline_drafts(update, logged_by, dated_line_drafts, skipped_lines)
+            return True
+
         shared_date, ambiguous = extract_standalone_date(lines[0], datetime.now(SINGAPORE_TZ).date())
         if shared_date is None and not ambiguous:
             return False
@@ -607,13 +633,8 @@ class FinanceBot:
             await update.message.reply_text("The first line looks like an ambiguous date. Please use a clear date like 2026-05-19 or 19 May.")
             return True
 
-        logged_by = self.settings.label_for_user(update.effective_user.id)
-        if logged_by is None:
-            await update.message.reply_text("I do not recognize this Telegram user ID yet.")
-            return True
-
-        logged_lines = []
-        pending_ids = []
+        shared_date_drafts = []
+        skipped_lines = []
         for line in lines[1:]:
             draft = parse_expense(
                 line,
@@ -623,8 +644,9 @@ class FinanceBot:
                 today=shared_date,
             )
             if draft is None:
+                skipped_lines.append(line)
                 continue
-            draft = ExpenseDraft(
+            shared_date_drafts.append(ExpenseDraft(
                 raw_input=f"{lines[0]} | {draft.raw_input}",
                 amount=draft.amount,
                 category=draft.category,
@@ -632,19 +654,32 @@ class FinanceBot:
                 confidence=draft.confidence,
                 expense_date=shared_date,
                 needs_date_confirmation=draft.needs_date_confirmation,
-            )
+            ))
+        await self._log_multiline_drafts(update, logged_by, shared_date_drafts, skipped_lines)
+        return True
+
+    async def _log_multiline_drafts(
+        self,
+        update: Update,
+        logged_by: str,
+        drafts: list[ExpenseDraft],
+        skipped_lines: list[str] | None = None,
+    ) -> None:
+        logged_lines = []
+        pending_ids = []
+        for draft in drafts:
             if draft.category is None or draft.confidence < 0.7 or draft.needs_date_confirmation:
                 pending_ids.append(self._add_pending(draft, logged_by, update, "category"))
                 continue
             row = self._expense_row(draft, logged_by, update, draft.category, "Confirmed", "Text")
             self._append_expense(row)
             logged_lines.append(self._logged_line(row))
-
-        message = "\n\n".join(logged_lines) if logged_lines else f"No expenses logged for {self._human_date(shared_date)}."
+        message = "\n\n".join(logged_lines) if logged_lines else "No expenses logged."
         if pending_ids:
             message += "\n\nPending IDs: " + ", ".join(pending_ids)
+        if skipped_lines:
+            message += "\n\nSkipped lines:\n" + "\n".join(f"- {line}" for line in skipped_lines)
         await update.message.reply_text(message)
-        return True
 
     async def _reply_with_summary(self, update: Update, text: str) -> None:
         if update.message is None or update.effective_user is None:

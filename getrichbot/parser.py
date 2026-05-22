@@ -14,13 +14,13 @@ DAY_MONTH_RE = re.compile(
     r"\b(\d{1,2})(?:st|nd|rd|th)?\s+"
     r"(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|"
     r"sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)"
-    r"(?:\s+(\d{2,4}))?\b",
+    r"(?:\s+(\d{2,4})(?!\.\d))?\b",
     re.IGNORECASE,
 )
 MONTH_DAY_RE = re.compile(
     r"\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|"
     r"sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)"
-    r"\s+(\d{1,2})(?:st|nd|rd|th)?(?:\s+(\d{2,4}))?\b",
+    r"\s+(\d{1,2})(?:st|nd|rd|th)?(?:\s+(\d{2,4})(?!\.\d))?\b",
     re.IGNORECASE,
 )
 MONTHS = {

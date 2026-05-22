@@ -14,6 +14,14 @@ class TestParser(unittest.TestCase):
         self.assertEqual(draft.category, "Food")
         self.assertEqual(draft.description, "dinner")
 
+    def test_parse_snacks_as_food(self):
+        draft = parse_expense("21 may snacks 4.5", "Me", "Me", "My wife", today=date(2026, 5, 22))
+
+        self.assertIsNotNone(draft)
+        self.assertEqual(draft.amount, Decimal("4.5"))
+        self.assertEqual(draft.category, "Food")
+        self.assertEqual(draft.expense_date, date(2026, 5, 21))
+
     def test_parse_groceries_expense(self):
         draft = parse_expense("ntuc $82.30", "Me", "Me", "My wife")
 
@@ -64,6 +72,14 @@ class TestParser(unittest.TestCase):
         self.assertEqual(draft.category, "Food")
         self.assertEqual(draft.description, "food")
         self.assertEqual(draft.expense_date, date(2026, 5, 19))
+
+    def test_day_month_before_decimal_amount_does_not_treat_amount_as_year(self):
+        draft = parse_expense("16th may 25.18 food", "Me", "Me", "My wife", today=date(2026, 5, 22))
+
+        self.assertIsNotNone(draft)
+        self.assertEqual(draft.amount, Decimal("25.18"))
+        self.assertEqual(draft.category, "Food")
+        self.assertEqual(draft.expense_date, date(2026, 5, 16))
 
     def test_parse_month_day_date(self):
         draft = parse_expense("food 60 may 19", "Me", "Me", "My wife", today=date(2026, 5, 20))

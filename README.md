@@ -1,8 +1,18 @@
 # GetRichBot
 
-A Telegram household expense bot that captures spending from a group chat and appends raw expense rows to Google Sheets.
+GetRichBot is a private Telegram household expense bot that captures spending from a shared chat and appends confirmed raw expense rows to Google Sheets.
 
-The bot keeps Telegram focused on capture and confirmation. Google Sheets remains the source of truth for category totals, monthly totals, charts, and reporting.
+The bot keeps Telegram focused on quick capture, confirmation, edits, and deletion. Google Sheets remains the source of truth for raw data, category totals, monthly totals, charts, and reporting.
+
+## How It Works
+
+```text
+Telegram group chat
+  -> Railway-hosted Python bot
+  -> optional OpenAI extraction for screenshots, voice notes, and natural-language actions
+  -> Google Sheets raw expense log
+  -> Google Sheets monthly summary
+```
 
 ## Features
 
@@ -11,10 +21,23 @@ The bot keeps Telegram focused on capture and confirmation. Google Sheets remain
 - Categorizes expenses using your household category list.
 - Appends every confirmed entry as raw data to Google Sheets.
 - Supports pending review when category or amount is unclear.
+- Supports duplicate detection before logging repeated expenses.
+- Supports natural-language delete, edit, and question handling when OpenAI is configured.
+- Supports screenshot and voice-note extraction with confirmation before logging.
 - Supports monthly fixed expenses confirmation.
 - Sends 9am Singapore month-end fixed expense reminders when `TELEGRAM_CHAT_ID` is set.
 - Updates `Monthly Summary` with categories as rows and months as columns.
 - Supports undo for the last expense sent by a user.
+- Keeps the bot private to configured Telegram user IDs.
+
+## Requirements
+
+- Python 3.11
+- Telegram bot token from [BotFather](https://t.me/BotFather)
+- Google Sheet
+- Google Cloud service account with Google Sheets API access
+- Railway account for 24/7 hosting
+- OpenAI API key for screenshots, voice notes, natural-language edits/deletes/questions, and richer extraction
 
 ## Google Sheet Tabs
 
@@ -74,6 +97,38 @@ pip install -r requirements.txt
 ```bash
 python -m getrichbot.bot
 ```
+
+For Railway deployment, the repo includes `railway.json` with this start command:
+
+```bash
+python -u -m getrichbot.bot
+```
+
+Railway should use Python 3.11 from `runtime.txt`.
+
+## Environment Variables
+
+Create a local `.env` file from `.env.example` for local testing, and set the same values in Railway for deployment.
+
+```bash
+TELEGRAM_BOT_TOKEN=
+GOOGLE_SHEET_ID=
+GOOGLE_SERVICE_ACCOUNT_FILE=
+GOOGLE_SERVICE_ACCOUNT_JSON=
+ME_TELEGRAM_IDS=
+WIFE_TELEGRAM_IDS=
+ME_LABEL=Me
+WIFE_LABEL=My wife
+RAW_EXPENSES_SHEET=Raw Expenses
+FIXED_EXPENSES_SHEET=Fixed Expenses
+MONTHLY_SUMMARY_SHEET=Monthly Summary
+BOT_STATE_SHEET=Bot State
+TELEGRAM_CHAT_ID=
+OPENAI_API_KEY=
+OPENAI_MODEL=gpt-5.4-mini
+```
+
+Never commit real secrets. Keep them in Railway variables or your local `.env`.
 
 ## Telegram Usage
 
@@ -172,3 +227,16 @@ If Railway is running and `TELEGRAM_CHAT_ID` is set:
 - Telegram summaries and the `Monthly Summary` tab are recalculated from `Raw Expenses`.
 - If a wrong month appears in `Monthly Summary`, correct the relevant `Date` and `Month` cells in `Raw Expenses`, then let the bot refresh the summary.
 - Do not commit `.env` or your Google service account JSON file to GitHub.
+
+## Privacy And Security
+
+This bot handles personal finance data. Before making a fork public or inviting other users, review:
+
+- [SECURITY.md](SECURITY.md)
+- [PRIVACY.md](PRIVACY.md)
+
+Keep the bot in a private Telegram chat, configure only trusted Telegram user IDs, and avoid sending unnecessary sensitive details such as full card numbers or bank account numbers.
+
+## License
+
+AGPL-3.0-or-later. See [LICENSE](LICENSE).

@@ -17,6 +17,7 @@ This file contains project-specific instructions for coding agents working on Ge
 - Keep `.gitignore` protections for local environment files, virtual environments, and service account JSON files.
 - Use Railway environment variables for production secrets.
 - For Railway Google Sheets auth, prefer `GOOGLE_SERVICE_ACCOUNT_JSON` over committing or uploading a credentials file to the repo.
+- Before public-release documentation changes, check that `README.md`, `SECURITY.md`, `PRIVACY.md`, `LICENSE`, `.env.example`, and `.gitignore` do not expose private values.
 
 ## Integrations
 
@@ -45,6 +46,13 @@ This file contains project-specific instructions for coding agents working on Ge
 - Railway should use Python 3.11 via `runtime.txt`.
 - Railway starts the bot with `python -u -m getrichbot.bot` via `railway.json`.
 - Only one live bot process should run at a time. Stop the local bot when Railway is running.
+
+## Public Repository
+
+- The project license is AGPL-3.0-or-later.
+- Keep public docs clear enough for non-engineers to understand setup, privacy, security, and data flow.
+- Do not include Andy's real Telegram IDs, bot tokens, Google Sheet IDs, OpenAI keys, service account JSON, or private household finance data in examples.
+- When adding public examples, use obviously fake placeholder values.
 
 ## Code Quality
 

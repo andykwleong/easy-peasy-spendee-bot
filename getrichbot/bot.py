@@ -76,12 +76,22 @@ class PendingDelete:
     logged_by_restriction: str | None = None
 
 
+@dataclass
+class PendingDuplicate:
+    row: ExpenseRow
+    existing_record: ExpenseRecord
+    chat_id: int
+    requested_by_user_id: int
+    created_at: datetime
+
+
 class FinanceBot:
     def __init__(self, settings: Settings, sheets: SheetsClient):
         self.settings = settings
         self.sheets = sheets
         self.pending: dict[str, PendingExpense] = {}
         self.pending_deletes: dict[tuple[int, int], PendingDelete] = {}
+        self.pending_duplicates: dict[tuple[int, int], PendingDuplicate] = {}
         self.ai = None
 
     def _ai(self):
@@ -170,8 +180,9 @@ class FinanceBot:
             return
 
         row = self._expense_row(draft, logged_by, update, draft.category, "Confirmed", "Text")
-        self._append_expense(row)
-        await update.message.reply_text(self._logged_line(row))
+        logged_line = await self._append_or_hold_duplicate(update, row)
+        if logged_line:
+            await update.message.reply_text(logged_line)
 
     async def pending_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if update.message is None:
@@ -216,8 +227,9 @@ class FinanceBot:
             return
 
         row = self._expense_row_from_pending(pending, category, "Confirmed", "Text", date_override)
-        self._append_expense(row)
-        await update.message.reply_text(self._logged_line(row))
+        logged_line = await self._append_or_hold_duplicate(update, row)
+        if logged_line:
+            await update.message.reply_text(logged_line)
 
     async def handle_ai_command(self, update: Update) -> bool:
         ai = self._ai()
@@ -305,6 +317,9 @@ class FinanceBot:
         if await self._handle_pending_delete_reply(update, lowered):
             return True
 
+        if await self._handle_pending_duplicate_reply(update, lowered):
+            return True
+
         if lowered in {"help", "what can you do", "commands"}:
             await update.message.reply_text(HELP_TEXT)
             return True
@@ -369,8 +384,9 @@ class FinanceBot:
             return True
 
         row = self._expense_row_from_pending(pending, category, "Confirmed", "Text", date_override)
-        self._append_expense(row)
-        await update.message.reply_text(self._logged_line(row))
+        logged_line = await self._append_or_hold_duplicate(update, row)
+        if logged_line:
+            await update.message.reply_text(logged_line)
         return True
 
     async def handle_pending_update(self, update: Update) -> bool:
@@ -672,9 +688,10 @@ class FinanceBot:
                 pending_ids.append(self._add_pending(draft, logged_by, update, "category"))
                 continue
             row = self._expense_row(draft, logged_by, update, draft.category, "Confirmed", "Text")
-            self._append_expense(row)
-            logged_lines.append(self._logged_line(row))
-        message = "\n\n".join(logged_lines) if logged_lines else "No expenses logged."
+            logged_line = await self._append_or_hold_duplicate(update, row)
+            if logged_line:
+                logged_lines.append(logged_line)
+        message = "\n\n".join(logged_lines) if logged_lines else "No new expenses logged."
         if pending_ids:
             message += "\n\nPending IDs: " + ", ".join(pending_ids)
         if skipped_lines:
@@ -751,6 +768,66 @@ class FinanceBot:
         except ValueError:
             date_text = record.expense_date
         return f"${record.amount:.2f} logged as {record.category} - {date_text} [{record.entry_id}]"
+
+    async def _append_or_hold_duplicate(self, update: Update, row: ExpenseRow) -> str | None:
+        if update.message is None or update.effective_user is None:
+            return None
+        duplicate = self._find_duplicate(row)
+        if duplicate is None:
+            self._append_expense(row)
+            return self._logged_line(row)
+
+        key = (update.effective_chat.id, update.effective_user.id)
+        self.pending_duplicates[key] = PendingDuplicate(
+            row=row,
+            existing_record=duplicate,
+            chat_id=update.effective_chat.id,
+            requested_by_user_id=update.effective_user.id,
+            created_at=datetime.now(SINGAPORE_TZ),
+        )
+        await update.message.reply_text(self._duplicate_prompt(row, duplicate))
+        return None
+
+    async def _handle_pending_duplicate_reply(self, update: Update, lowered: str) -> bool:
+        if update.message is None or update.effective_user is None:
+            return False
+        key = (update.effective_chat.id, update.effective_user.id)
+        pending = self.pending_duplicates.get(key)
+        if pending is None:
+            return False
+
+        if lowered in {"cancel", "no", "discard", "delete", "delete duplicate"}:
+            self.pending_duplicates.pop(key, None)
+            await update.message.reply_text("Duplicate not logged.")
+            return True
+
+        if lowered != "confirm":
+            return False
+
+        self.pending_duplicates.pop(key, None)
+        self._append_expense(pending.row)
+        await update.message.reply_text(self._logged_line(pending.row))
+        return True
+
+    def _find_duplicate(self, row: ExpenseRow) -> ExpenseRecord | None:
+        if row.input_type.lower() == "fixed":
+            return None
+        records = self.sheets.get_expense_records(self.settings.raw_expenses_sheet)
+        row_date = row.timestamp.strftime("%Y-%m-%d")
+        for record in reversed(records):
+            if record.status.lower() != "confirmed" or record.input_type.lower() == "fixed":
+                continue
+            if record.expense_date == row_date and record.amount == row.amount and record.category == row.category:
+                return record
+        return None
+
+    def _duplicate_prompt(self, row: ExpenseRow, existing: ExpenseRecord) -> str:
+        return (
+            "Possible duplicate found:\n\n"
+            f"Existing: {self._delete_candidate_line(existing)}\n\n"
+            f"New: ${row.amount:.2f} to {row.category} - {self._human_date(row.timestamp.date())} - {row.description}\n\n"
+            'Reply: "confirm" to log anyway or "cancel" to delete'
+        )
 
     def _add_fixed_expenses_for_month(self, month_date, logged_by: str, chat_id: int | str, message_id: int | str) -> int:
         fixed = self.sheets.get_fixed_expenses(self.settings.fixed_expenses_sheet)
@@ -976,7 +1053,7 @@ class FinanceBot:
 
         logged_lines = []
         if instruction.confirm_positions:
-            logged_lines = self._confirm_pending_positions(update, instruction.confirm_positions)
+            logged_lines = await self._confirm_pending_positions(update, instruction.confirm_positions)
 
         response_parts = []
         if instruction.update_positions:
@@ -1012,7 +1089,7 @@ class FinanceBot:
                 reason=pending.reason,
             )
 
-    def _confirm_pending_positions(self, update: Update, positions: list[int]) -> list[str]:
+    async def _confirm_pending_positions(self, update: Update, positions: list[int]) -> list[str]:
         matching = self._matching_pending(update)
         logged_lines = []
         for position in sorted(set(positions), reverse=True):
@@ -1023,8 +1100,9 @@ class FinanceBot:
                 continue
             self.pending.pop(pending_id, None)
             row = self._expense_row_from_pending(pending, pending.draft.category, "Confirmed", pending.reason.title(), None)
-            self._append_expense(row)
-            logged_lines.append(self._logged_line(row))
+            logged_line = await self._append_or_hold_duplicate(update, row)
+            if logged_line:
+                logged_lines.append(logged_line)
         return list(reversed(logged_lines))
 
     async def _confirm_all_pending(self, update: Update) -> None:
@@ -1046,8 +1124,9 @@ class FinanceBot:
                 continue
             self.pending.pop(pending_id, None)
             row = self._expense_row_from_pending(pending, pending.draft.category, "Confirmed", pending.reason.title(), None)
-            self._append_expense(row)
-            logged_lines.append(self._logged_line(row))
+            logged_line = await self._append_or_hold_duplicate(update, row)
+            if logged_line:
+                logged_lines.append(logged_line)
 
         if logged_lines:
             await update.message.reply_text("\n\n".join(logged_lines))

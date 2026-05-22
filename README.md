@@ -152,6 +152,8 @@ The bot still validates actions against real `Entry ID` rows in Google Sheets be
 
 Delete requests ask for confirmation before removing a row. Reply `yes` to delete, or `cancel`.
 
+When a new expense has the same date, amount, and category as an existing confirmed expense, the bot flags it as a possible duplicate. Reply `confirm` to log it anyway, or `cancel` to discard the new duplicate attempt.
+
 ## Monthly Automation
 
 If Railway is running and `TELEGRAM_CHAT_ID` is set:

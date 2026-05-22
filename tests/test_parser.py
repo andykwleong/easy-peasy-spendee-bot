@@ -22,6 +22,12 @@ class TestParser(unittest.TestCase):
         self.assertEqual(draft.category, "Food")
         self.assertEqual(draft.expense_date, date(2026, 5, 21))
 
+    def test_parse_tea_as_food(self):
+        draft = parse_expense("tea 3.5", "Me", "Me", "My wife", today=date(2026, 5, 22))
+
+        self.assertIsNotNone(draft)
+        self.assertEqual(draft.category, "Food")
+
     def test_parse_groceries_expense(self):
         draft = parse_expense("ntuc $82.30", "Me", "Me", "My wife")
 

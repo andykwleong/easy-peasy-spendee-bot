@@ -43,7 +43,7 @@ CATEGORY_KEYWORDS = {
     "Maintenance - Archi": ["archi maintenance", "archi mcst", "archi condo"],
     "Maintenance - Hillview": ["hillview maintenance", "hillview mcst", "hillview condo"],
     "Groceries": ["grocery", "groceries", "ntuc", "fairprice", "cold storage", "redmart", "sheng siong", "supermarket"],
-    "Food": ["food", "dinner", "lunch", "breakfast", "snack", "snacks", "coffee", "restaurant", "meal", "cafe", "mcdonald", "grabfood"],
+    "Food": ["food", "dinner", "lunch", "breakfast", "snack", "snacks", "coffee", "tea", "restaurant", "meal", "cafe", "mcdonald", "grabfood"],
     "Bills (Electricity)": ["electricity", "sp utilities", "utilities", "power", "water bill"],
     "Bills (Singtel)": ["singtel"],
     "Bills (Arlyn)": ["arlyn"],

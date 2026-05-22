@@ -29,6 +29,9 @@ class Settings:
     wife_label: str
     raw_expenses_sheet: str
     fixed_expenses_sheet: str
+    monthly_summary_sheet: str
+    bot_state_sheet: str
+    telegram_chat_id: int | None
     openai_api_key: str | None
     openai_model: str
 
@@ -54,6 +57,9 @@ class Settings:
             wife_label=os.getenv("WIFE_LABEL", "My wife"),
             raw_expenses_sheet=os.getenv("RAW_EXPENSES_SHEET", "Raw Expenses"),
             fixed_expenses_sheet=os.getenv("FIXED_EXPENSES_SHEET", "Fixed Expenses"),
+            monthly_summary_sheet=os.getenv("MONTHLY_SUMMARY_SHEET", "Monthly Summary"),
+            bot_state_sheet=os.getenv("BOT_STATE_SHEET", "Bot State"),
+            telegram_chat_id=_optional_int("TELEGRAM_CHAT_ID"),
             openai_api_key=os.getenv("OPENAI_API_KEY") or None,
             openai_model=os.getenv("OPENAI_MODEL", "gpt-5.4-mini"),
         )
@@ -64,3 +70,10 @@ class Settings:
         if telegram_user_id in self.wife_telegram_ids:
             return self.wife_label
         return None
+
+
+def _optional_int(name: str) -> int | None:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return None
+    return int(raw)

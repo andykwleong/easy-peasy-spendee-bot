@@ -3,7 +3,7 @@ from datetime import date
 from decimal import Decimal
 
 from getrichbot.models import ExpenseRecord
-from getrichbot.summary import build_spending_summary, format_spending_summary, parse_summary_period
+from getrichbot.summary import build_monthly_summary_table, build_spending_summary, format_spending_summary, parse_summary_period
 
 
 def record(expense_date: str, amount: str, category: str, status: str = "Confirmed") -> ExpenseRecord:
@@ -18,6 +18,7 @@ def record(expense_date: str, amount: str, category: str, status: str = "Confirm
         amount=Decimal(amount),
         category=category,
         description="test",
+        input_type="Text",
         status=status,
     )
 
@@ -68,6 +69,21 @@ class TestSummary(unittest.TestCase):
         self.assertIn("Food: $15.00", message)
         self.assertIn("Total: $15.00", message)
         self.assertNotIn("Entries", message)
+
+    def test_monthly_summary_table_uses_categories_as_rows_and_months_as_columns(self):
+        table = build_monthly_summary_table(
+            [
+                record("2026-05-03", "15", "Food"),
+                record("2026-05-04", "20", "Groceries"),
+                record("2026-06-01", "30", "Food"),
+            ],
+            include_month="2026-07",
+        )
+
+        self.assertEqual(table[0], ["Category", "2026-05", "2026-06", "2026-07"])
+        self.assertIn(["Groceries", "20.00", "", ""], table)
+        self.assertIn(["Food", "15.00", "30.00", ""], table)
+        self.assertEqual(table[-1], ["Total", "35.00", "30.00", "0.00"])
 
 
 if __name__ == "__main__":

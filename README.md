@@ -12,6 +12,8 @@ The bot keeps Telegram focused on capture and confirmation. Google Sheets remain
 - Appends every confirmed entry as raw data to Google Sheets.
 - Supports pending review when category or amount is unclear.
 - Supports monthly fixed expenses confirmation.
+- Sends 9am Singapore month-end fixed expense reminders when `TELEGRAM_CHAT_ID` is set.
+- Updates `Monthly Summary` with categories as rows and months as columns.
 - Supports undo for the last expense sent by a user.
 
 ## Google Sheet Tabs
@@ -40,7 +42,11 @@ Add your fixed expense categories here with default amounts. `Active` should be 
 
 ### Monthly Summary
 
-Use formulas or pivot tables based on `Raw Expenses`.
+The bot can maintain this tab automatically. Rows are all fixed and non-fixed categories. Columns are months, for example `2026-05`, `2026-06`, and each cell is the total for that category and month. A `Total` row is added at the bottom.
+
+### Bot State
+
+The bot creates this tab automatically when needed. It stores small markers so Railway restarts do not resend the same month-end reminder or final summary.
 
 ## Setup
 
@@ -52,6 +58,7 @@ Use formulas or pivot tables based on `Raw Expenses`.
 5. Copy `.env.example` to `.env` and fill in the values.
    - Local Mac setup: set `GOOGLE_SERVICE_ACCOUNT_FILE` to the JSON file path.
    - Railway setup: set `GOOGLE_SERVICE_ACCOUNT_JSON` to the full JSON file contents instead of using a file path.
+   - For scheduled Railway reminders, set `TELEGRAM_CHAT_ID` to the group chat ID shown by `/whoami`.
 6. Install dependencies:
 
 ```bash
@@ -101,6 +108,7 @@ Commands:
 - `/start` - show bot help
 - `/whoami` - show your Telegram numeric user ID for setup
 - `/pending` - show entries needing confirmation
+- `/summary` - show this month's checkpoint summary
 - `/confirm <pending_id> <category>` - confirm a pending entry
 - `/undo` - delete your latest logged row from Google Sheets
 - `/fixed` - preview active fixed expenses
@@ -117,6 +125,10 @@ Plain-language shortcuts:
 - `confirm abc123`
 - `confirm abc123 as Food`
 - `confirm abc123 as Food on 2026-05-19`
+- `summary`
+- `summary this month`
+- `summary last month`
+- `confirm fixed`
 
 With `OPENAI_API_KEY` configured, natural language actions also work:
 
@@ -128,25 +140,18 @@ With `OPENAI_API_KEY` configured, natural language actions also work:
 
 The bot still validates actions against real `Entry ID` rows in Google Sheets before deleting or editing.
 
-## Monthly Summary Formulas
+## Monthly Automation
 
-In `Monthly Summary`, you can summarize raw rows directly from `Raw Expenses`.
+If Railway is running and `TELEGRAM_CHAT_ID` is set:
 
-Category totals:
-
-```text
-=QUERY('Raw Expenses'!D:H,"select D,H,sum(G) where K='Confirmed' group by D,H label sum(G) 'Total'",1)
-```
-
-Monthly totals:
-
-```text
-=QUERY('Raw Expenses'!D:G,"select D,sum(G) where D is not null group by D label sum(G) 'Total Spend'",1)
-```
+- On the last day of the month at 9am Singapore time, the bot sends a fixed expenses reminder.
+- Reply `confirm fixed` to add active fixed expenses to `Raw Expenses`.
+- Fixed expenses are dated on the last day of that month.
+- On the 1st of each month at 9am Singapore time, the bot refreshes `Monthly Summary` and sends the previous month's final summary.
+- The bot avoids adding the same fixed category twice for the same month.
 
 ## Notes
 
 - Shopping is automatically logged as `Shopping - Me` or `Shopping - My wife` based on who sent the message.
-- The bot does not calculate monthly totals in Telegram.
-- Google Sheets formulas or pivots should perform all summation.
+- Telegram summaries and the `Monthly Summary` tab are recalculated from `Raw Expenses`.
 - Do not commit `.env` or your Google service account JSON file to GitHub.

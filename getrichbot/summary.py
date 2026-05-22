@@ -74,6 +74,30 @@ def build_spending_summary(records: list[ExpenseRecord], period: SummaryPeriod) 
     return SpendingSummary(period=period, categories=categories, total=total)
 
 
+def build_monthly_summary_table(records: list[ExpenseRecord], include_month: str | None = None) -> list[list[str]]:
+    months = sorted({record.month for record in records if record.status.lower() == "confirmed" and record.month})
+    if include_month and include_month not in months:
+        months.append(include_month)
+        months.sort()
+
+    header = ["Category", *months]
+    rows = [header]
+    month_totals = {month: Decimal("0") for month in months}
+    category_months: dict[str, dict[str, Decimal]] = {category: {} for category in ALL_CATEGORIES}
+
+    for record in records:
+        if record.status.lower() != "confirmed" or record.category not in category_months or record.month not in months:
+            continue
+        category_total = category_months[record.category].get(record.month, Decimal("0")) + record.amount
+        category_months[record.category][record.month] = category_total
+        month_totals[record.month] += record.amount
+
+    for category in ALL_CATEGORIES:
+        rows.append([category, *[_format_optional_amount(category_months[category].get(month)) for month in months]])
+    rows.append(["Total", *[f"{month_totals[month]:.2f}" for month in months]])
+    return rows
+
+
 def format_spending_summary(summary: SpendingSummary) -> str:
     start_text = summary.period.start.strftime("%-d %B")
     end_text = summary.period.end.strftime("%-d %B %Y")
@@ -84,3 +108,9 @@ def format_spending_summary(summary: SpendingSummary) -> str:
     lines.extend(f"{item.category}: ${item.total:.2f}" for item in summary.categories)
     lines.append(f"Total: ${summary.total:.2f}")
     return "\n\n".join(lines)
+
+
+def _format_optional_amount(value: Decimal | None) -> str:
+    if value is None or value == 0:
+        return ""
+    return f"{value:.2f}"

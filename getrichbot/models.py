@@ -63,6 +63,7 @@ class ExpenseRecord:
     amount: Decimal
     category: str
     description: str
+    input_type: str
     status: str
 
     def compact(self) -> str:

@@ -125,10 +125,60 @@ class SheetsClient:
                     amount=amount,
                     category=_cell(row, 7),
                     description=_cell(row, 8),
+                    input_type=_cell(row, 9),
                     status=_cell(row, 10),
                 )
             )
         return records
+
+    def update_monthly_summary(self, sheet_name: str, rows: list[list[str]]) -> None:
+        self._ensure_sheet(sheet_name)
+        self._service().spreadsheets().values().clear(
+            spreadsheetId=self.sheet_id,
+            range=f"{sheet_name}!A:ZZ",
+            body={},
+        ).execute()
+        self._service().spreadsheets().values().update(
+            spreadsheetId=self.sheet_id,
+            range=f"{sheet_name}!A1",
+            valueInputOption="USER_ENTERED",
+            body={"values": rows},
+        ).execute()
+
+    def get_state_value(self, sheet_name: str, key: str) -> str | None:
+        self._ensure_sheet(sheet_name)
+        result = self._service().spreadsheets().values().get(
+            spreadsheetId=self.sheet_id,
+            range=f"{sheet_name}!A:B",
+        ).execute()
+        for row in result.get("values", []):
+            if _cell(row, 0) == key:
+                return _cell(row, 1)
+        return None
+
+    def set_state_value(self, sheet_name: str, key: str, value: str) -> None:
+        self._ensure_sheet(sheet_name)
+        result = self._service().spreadsheets().values().get(
+            spreadsheetId=self.sheet_id,
+            range=f"{sheet_name}!A:B",
+        ).execute()
+        rows = result.get("values", [])
+        for index, row in enumerate(rows, start=1):
+            if _cell(row, 0) == key:
+                self._service().spreadsheets().values().update(
+                    spreadsheetId=self.sheet_id,
+                    range=f"{sheet_name}!B{index}",
+                    valueInputOption="USER_ENTERED",
+                    body={"values": [[value]]},
+                ).execute()
+                return
+        self._service().spreadsheets().values().append(
+            spreadsheetId=self.sheet_id,
+            range=f"{sheet_name}!A:B",
+            valueInputOption="USER_ENTERED",
+            insertDataOption="INSERT_ROWS",
+            body={"values": [[key, value]]},
+        ).execute()
 
     def update_expense_record(
         self,
@@ -162,13 +212,7 @@ class SheetsClient:
         ).execute()
 
     def _delete_sheet_row(self, sheet_name: str, one_based_row_number: int) -> None:
-        metadata = self._service().spreadsheets().get(spreadsheetId=self.sheet_id).execute()
-        sheet_id = None
-        for sheet in metadata.get("sheets", []):
-            properties = sheet.get("properties", {})
-            if properties.get("title") == sheet_name:
-                sheet_id = properties["sheetId"]
-                break
+        sheet_id = self._sheet_id(sheet_name)
         if sheet_id is None:
             raise ValueError(f"Sheet tab not found: {sheet_name}")
 
@@ -189,6 +233,22 @@ class SheetsClient:
                 ]
             },
         ).execute()
+
+    def _ensure_sheet(self, sheet_name: str) -> None:
+        if self._sheet_id(sheet_name) is not None:
+            return
+        self._service().spreadsheets().batchUpdate(
+            spreadsheetId=self.sheet_id,
+            body={"requests": [{"addSheet": {"properties": {"title": sheet_name}}}]},
+        ).execute()
+
+    def _sheet_id(self, sheet_name: str) -> int | None:
+        metadata = self._service().spreadsheets().get(spreadsheetId=self.sheet_id).execute()
+        for sheet in metadata.get("sheets", []):
+            properties = sheet.get("properties", {})
+            if properties.get("title") == sheet_name:
+                return properties["sheetId"]
+        return None
 
 
 def _cell(row: list[str], index: int) -> str:

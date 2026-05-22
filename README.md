@@ -140,6 +140,8 @@ With `OPENAI_API_KEY` configured, natural language actions also work:
 
 The bot still validates actions against real `Entry ID` rows in Google Sheets before deleting or editing.
 
+Delete requests ask for confirmation before removing a row. Reply `yes` to delete, or `cancel`.
+
 ## Monthly Automation
 
 If Railway is running and `TELEGRAM_CHAT_ID` is set:

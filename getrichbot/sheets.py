@@ -66,19 +66,28 @@ class SheetsClient:
         return expenses
 
     def delete_last_matching_row(self, sheet_name: str, logged_by: str) -> bool:
-        result = self._service().spreadsheets().values().get(
-            spreadsheetId=self.sheet_id,
-            range=f"{sheet_name}!A2:M",
-        ).execute()
-        rows = result.get("values", [])
+        record = self.get_last_matching_record(sheet_name, logged_by)
+        if record is None:
+            return False
+        self._delete_sheet_row(sheet_name, record.row_number)
+        return True
 
-        for index in range(len(rows) - 1, -1, -1):
-            row = rows[index]
-            if _cell(row, 4) == logged_by:
-                sheet_row_number = index + 2
-                self._delete_sheet_row(sheet_name, sheet_row_number)
-                return True
-        return False
+    def get_last_matching_record(self, sheet_name: str, logged_by: str) -> ExpenseRecord | None:
+        records = self.get_expense_records(sheet_name)
+        for record in reversed(records):
+            if record.logged_by == logged_by:
+                return record
+        return None
+
+    def get_record_by_id(self, sheet_name: str, entry_id: str, logged_by: str | None = None) -> ExpenseRecord | None:
+        records = self.get_expense_records(sheet_name)
+        for record in reversed(records):
+            if record.entry_id.lower() != entry_id.lower():
+                continue
+            if logged_by is not None and record.logged_by != logged_by:
+                return None
+            return record
+        return None
 
     def delete_entry_by_id(self, sheet_name: str, entry_id: str, logged_by: str | None = None) -> bool:
         result = self._service().spreadsheets().values().get(

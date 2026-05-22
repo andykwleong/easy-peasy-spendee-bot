@@ -17,7 +17,7 @@ from zoneinfo import ZoneInfo
 from getrichbot.categories import ALL_CATEGORIES, FIXED_CATEGORIES, VARIABLE_CATEGORIES
 from getrichbot.config import Settings
 from getrichbot.image_utils import prepare_image_for_vision
-from getrichbot.models import ExpenseDraft, ExpenseRow
+from getrichbot.models import ExpenseDraft, ExpenseRecord, ExpenseRow
 from getrichbot.parser import extract_date_phrase, extract_standalone_date, parse_expense
 from getrichbot.sheets import SheetsClient
 from getrichbot.summary import build_spending_summary, format_spending_summary, parse_summary_period
@@ -67,11 +67,21 @@ class PendingExpense:
     reason: str
 
 
+@dataclass
+class PendingDelete:
+    record: ExpenseRecord
+    chat_id: int
+    requested_by_user_id: int
+    created_at: datetime
+    logged_by_restriction: str | None = None
+
+
 class FinanceBot:
     def __init__(self, settings: Settings, sheets: SheetsClient):
         self.settings = settings
         self.sheets = sheets
         self.pending: dict[str, PendingExpense] = {}
+        self.pending_deletes: dict[tuple[int, int], PendingDelete] = {}
         self.ai = None
 
     def _ai(self):
@@ -236,17 +246,19 @@ class FinanceBot:
             return True
 
         if intent.action == "delete":
-            deleted = []
+            matches = []
             for entry_id in intent.entry_ids:
-                if entry_id not in by_id:
-                    continue
-                if self.sheets.delete_entry_by_id(self.settings.raw_expenses_sheet, entry_id):
-                    deleted.append(entry_id)
-            if deleted:
-                self._refresh_monthly_summary()
-                await update.message.reply_text("Deleted: " + ", ".join(deleted))
-            else:
+                record = by_id.get(entry_id)
+                if record is not None:
+                    matches.append(record)
+            if not matches:
                 await update.message.reply_text("I could not find a matching entry to delete.")
+            elif len(matches) > 1:
+                lines = ["I found multiple possible deletes. Please delete one at a time:"]
+                lines.extend(self._delete_candidate_line(record) for record in matches)
+                await update.message.reply_text("\n\n".join(lines))
+            else:
+                await self._ask_delete_confirmation(update, matches[0])
             return True
 
         if intent.action == "edit":
@@ -290,6 +302,9 @@ class FinanceBot:
         text = (update.message.text or "").strip()
         lowered = text.lower()
 
+        if await self._handle_pending_delete_reply(update, lowered):
+            return True
+
         if lowered in {"help", "what can you do", "commands"}:
             await update.message.reply_text(HELP_TEXT)
             return True
@@ -307,10 +322,11 @@ class FinanceBot:
             if logged_by is None:
                 await update.message.reply_text("I do not recognize this Telegram user ID yet.")
                 return True
-            deleted = self.sheets.delete_last_matching_row(self.settings.raw_expenses_sheet, logged_by)
-            if deleted:
-                self._refresh_monthly_summary()
-            await update.message.reply_text("Deleted your latest logged expense." if deleted else "I could not find an expense to delete for you.")
+            record = self.sheets.get_last_matching_record(self.settings.raw_expenses_sheet, logged_by)
+            if record is None:
+                await update.message.reply_text("I could not find an expense to delete for you.")
+                return True
+            await self._ask_delete_confirmation(update, record, logged_by_restriction=logged_by)
             return True
 
         delete_match = re.match(r"^(?:delete|remove)\s+([a-z0-9]{6})$", lowered, re.IGNORECASE)
@@ -319,14 +335,15 @@ class FinanceBot:
             if logged_by is None:
                 await update.message.reply_text("I do not recognize this Telegram user ID yet.")
                 return True
-            deleted = self.sheets.delete_entry_by_id(
+            record = self.sheets.get_record_by_id(
                 self.settings.raw_expenses_sheet,
                 delete_match.group(1),
                 logged_by=logged_by,
             )
-            if deleted:
-                self._refresh_monthly_summary()
-            await update.message.reply_text("Deleted that expense." if deleted else "I could not find that expense under your entries.")
+            if record is None:
+                await update.message.reply_text("I could not find that expense under your entries.")
+                return True
+            await self._ask_delete_confirmation(update, record, logged_by_restriction=logged_by)
             return True
 
         if lowered in {"confirm all", "log all", "extract all"}:
@@ -530,12 +547,11 @@ class FinanceBot:
             await update.message.reply_text("I do not recognize this Telegram user ID yet.")
             return
 
-        deleted = self.sheets.delete_last_matching_row(self.settings.raw_expenses_sheet, logged_by)
-        if deleted:
-            self._refresh_monthly_summary()
-            await update.message.reply_text("Deleted your latest logged expense.")
-        else:
+        record = self.sheets.get_last_matching_record(self.settings.raw_expenses_sheet, logged_by)
+        if record is None:
             await update.message.reply_text("I could not find an expense to delete for you.")
+            return
+        await self._ask_delete_confirmation(update, record, logged_by_restriction=logged_by)
 
     async def fixed_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if update.message is None:
@@ -643,6 +659,63 @@ class FinanceBot:
         records = self.sheets.get_expense_records(self.settings.raw_expenses_sheet)
         summary = build_spending_summary(records, period)
         await update.message.reply_text(format_spending_summary(summary))
+
+    async def _ask_delete_confirmation(
+        self,
+        update: Update,
+        record: ExpenseRecord,
+        logged_by_restriction: str | None = None,
+    ) -> None:
+        if update.message is None or update.effective_user is None:
+            return
+        key = (update.effective_chat.id, update.effective_user.id)
+        self.pending_deletes[key] = PendingDelete(
+            record=record,
+            chat_id=update.effective_chat.id,
+            requested_by_user_id=update.effective_user.id,
+            created_at=datetime.now(SINGAPORE_TZ),
+            logged_by_restriction=logged_by_restriction,
+        )
+        await update.message.reply_text(
+            f"Delete {self._delete_candidate_line(record)}?\n\n"
+            "Reply: yes to delete, or cancel."
+        )
+
+    async def _handle_pending_delete_reply(self, update: Update, lowered: str) -> bool:
+        if update.message is None or update.effective_user is None:
+            return False
+        key = (update.effective_chat.id, update.effective_user.id)
+        pending = self.pending_deletes.get(key)
+        if pending is None:
+            return False
+
+        if lowered in {"cancel", "no", "stop", "never mind", "nevermind"}:
+            self.pending_deletes.pop(key, None)
+            await update.message.reply_text("Delete cancelled.")
+            return True
+
+        if lowered not in {"yes", "y", "confirm", "delete it", "yes delete", "confirm delete"}:
+            return False
+
+        deleted = self.sheets.delete_entry_by_id(
+            self.settings.raw_expenses_sheet,
+            pending.record.entry_id,
+            logged_by=pending.logged_by_restriction,
+        )
+        self.pending_deletes.pop(key, None)
+        if deleted:
+            self._refresh_monthly_summary()
+            await update.message.reply_text(f"Deleted {self._delete_candidate_line(pending.record)}.")
+        else:
+            await update.message.reply_text("I could not find that expense anymore. It may already be deleted.")
+        return True
+
+    def _delete_candidate_line(self, record: ExpenseRecord) -> str:
+        try:
+            date_text = datetime.fromisoformat(record.expense_date).strftime("%-d %B %Y")
+        except ValueError:
+            date_text = record.expense_date
+        return f"${record.amount:.2f} logged as {record.category} - {date_text} [{record.entry_id}]"
 
     def _add_fixed_expenses_for_month(self, month_date, logged_by: str, chat_id: int | str, message_id: int | str) -> int:
         fixed = self.sheets.get_fixed_expenses(self.settings.fixed_expenses_sheet)

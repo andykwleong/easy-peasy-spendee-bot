@@ -44,6 +44,8 @@ Add your fixed expense categories here with default amounts. `Active` should be 
 
 The bot can maintain this tab automatically. Rows are all fixed and non-fixed categories. Columns are months, for example `2026-05`, `2026-06`, and each cell is the total for that category and month. A `Total` row is added at the bottom.
 
+If an unexpected month appears, for example `2023-05`, check `Raw Expenses` for a row with the wrong `Date` or `Month`. Fix the source row in `Raw Expenses`; do not only delete the column from `Monthly Summary`, because the bot rebuilds the summary from raw rows.
+
 ### Bot State
 
 The bot creates this tab automatically when needed. It stores small markers so Railway restarts do not resend the same month-end reminder or final summary.
@@ -168,4 +170,5 @@ If Railway is running and `TELEGRAM_CHAT_ID` is set:
 
 - Shopping is automatically logged as `Shopping - Me` or `Shopping - My wife` based on who sent the message.
 - Telegram summaries and the `Monthly Summary` tab are recalculated from `Raw Expenses`.
+- If a wrong month appears in `Monthly Summary`, correct the relevant `Date` and `Month` cells in `Raw Expenses`, then let the bot refresh the summary.
 - Do not commit `.env` or your Google service account JSON file to GitHub.

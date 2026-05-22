@@ -30,6 +30,8 @@ This file contains project-specific instructions for coding agents working on Ge
 - `Raw Expenses` contains all confirmed expense rows.
 - `Fixed Expenses` contains active fixed expense setup.
 - `Monthly Summary` is generated from `Raw Expenses`; rows are categories and columns are months.
+- If `Monthly Summary` shows an unexpected month, investigate and fix the source row in `Raw Expenses` instead of manually deleting the summary column.
+- Date parsing must not treat decimal amounts as years. For example, `shopping 20th may 23.20` should resolve to the current/default year for `20 May`, not year 2023.
 - `Bot State` stores small idempotency markers so Railway restarts do not duplicate scheduled reminders or final summaries.
 - Fixed expenses should be dated on the last day of the relevant month.
 - Scheduled monthly reminders/summaries run at 9am Singapore time when `TELEGRAM_CHAT_ID` is configured.

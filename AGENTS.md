@@ -34,6 +34,7 @@ This file contains project-specific instructions for coding agents working on Ge
 - Fixed expenses should be dated on the last day of the relevant month.
 - Scheduled monthly reminders/summaries run at 9am Singapore time when `TELEGRAM_CHAT_ID` is configured.
 - Avoid duplicate fixed expense inserts for the same category and month.
+- Delete operations must be confirmation-based. Show the matched expense and wait for explicit confirmation before deleting from Google Sheets.
 
 ## Deployment
 

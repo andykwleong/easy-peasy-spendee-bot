@@ -23,6 +23,24 @@ def record(expense_date: str, amount: str, category: str, status: str = "Confirm
     )
 
 
+def record_with_month(expense_date: str, month: str, amount: str, category: str) -> ExpenseRecord:
+    item = record(expense_date, amount, category)
+    return ExpenseRecord(
+        row_number=item.row_number,
+        entry_id=item.entry_id,
+        timestamp=item.timestamp,
+        expense_date=item.expense_date,
+        month=month,
+        logged_by=item.logged_by,
+        raw_input=item.raw_input,
+        amount=item.amount,
+        category=item.category,
+        description=item.description,
+        input_type=item.input_type,
+        status=item.status,
+    )
+
+
 class TestSummary(unittest.TestCase):
     def test_summary_defaults_to_current_month_checkpoint(self):
         period = parse_summary_period("summary", date(2026, 5, 22))
@@ -84,6 +102,14 @@ class TestSummary(unittest.TestCase):
         self.assertIn(["Groceries", "20.00", "", ""], table)
         self.assertIn(["Food", "15.00", "30.00", ""], table)
         self.assertEqual(table[-1], ["Total", "35.00", "30.00", "0.00"])
+
+    def test_monthly_summary_uses_date_when_month_column_is_wrong(self):
+        table = build_monthly_summary_table([
+            record_with_month("2026-05-20", "2023-05", "23.20", "Shopping - Me")
+        ])
+
+        self.assertEqual(table[0], ["Category", "2026-05"])
+        self.assertIn(["Shopping - Me", "23.20"], table)
 
 
 if __name__ == "__main__":

@@ -708,6 +708,7 @@ class FinanceBot:
         if period is None:
             await update.message.reply_text("Try: summary, summary this month, or summary last month.")
             return
+        self._refresh_monthly_summary(period.start.strftime("%Y-%m"))
         records = self.sheets.get_expense_records(self.settings.raw_expenses_sheet)
         summary = build_spending_summary(records, period)
         await update.message.reply_text(format_spending_summary(summary))

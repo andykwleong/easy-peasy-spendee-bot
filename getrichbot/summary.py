@@ -75,7 +75,8 @@ def build_spending_summary(records: list[ExpenseRecord], period: SummaryPeriod) 
 
 
 def build_monthly_summary_table(records: list[ExpenseRecord], include_month: str | None = None) -> list[list[str]]:
-    months = sorted({record.month for record in records if record.status.lower() == "confirmed" and record.month})
+    record_months = [_month_from_record_date(record) for record in records if record.status.lower() == "confirmed"]
+    months = sorted({month for month in record_months if month is not None})
     if include_month and include_month not in months:
         months.append(include_month)
         months.sort()
@@ -86,11 +87,12 @@ def build_monthly_summary_table(records: list[ExpenseRecord], include_month: str
     category_months: dict[str, dict[str, Decimal]] = {category: {} for category in ALL_CATEGORIES}
 
     for record in records:
-        if record.status.lower() != "confirmed" or record.category not in category_months or record.month not in months:
+        record_month = _month_from_record_date(record)
+        if record.status.lower() != "confirmed" or record.category not in category_months or record_month not in months:
             continue
-        category_total = category_months[record.category].get(record.month, Decimal("0")) + record.amount
-        category_months[record.category][record.month] = category_total
-        month_totals[record.month] += record.amount
+        category_total = category_months[record.category].get(record_month, Decimal("0")) + record.amount
+        category_months[record.category][record_month] = category_total
+        month_totals[record_month] += record.amount
 
     for category in ALL_CATEGORIES:
         rows.append([category, *[_format_optional_amount(category_months[category].get(month)) for month in months]])
@@ -114,3 +116,10 @@ def _format_optional_amount(value: Decimal | None) -> str:
     if value is None or value == 0:
         return ""
     return f"{value:.2f}"
+
+
+def _month_from_record_date(record: ExpenseRecord) -> str | None:
+    try:
+        return date.fromisoformat(record.expense_date).strftime("%Y-%m")
+    except ValueError:
+        return None

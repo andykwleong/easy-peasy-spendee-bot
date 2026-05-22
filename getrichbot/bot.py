@@ -18,6 +18,7 @@ from getrichbot.image_utils import prepare_image_for_vision
 from getrichbot.models import ExpenseDraft, ExpenseRow
 from getrichbot.parser import extract_date_phrase, extract_standalone_date, parse_expense
 from getrichbot.sheets import SheetsClient
+from getrichbot.summary import build_spending_summary, format_spending_summary, parse_summary_period
 
 LOGGER = logging.getLogger(__name__)
 SINGAPORE_TZ = ZoneInfo("Asia/Singapore")
@@ -37,6 +38,7 @@ Useful commands:
 /whoami - show your Telegram ID
 /pending - show items needing review
 /categories - show categories
+/summary - show this month's checkpoint
 /fixed - preview fixed expenses
 /confirmfixed - add fixed expenses
 /undo - delete your latest logged expense
@@ -94,6 +96,12 @@ class FinanceBot:
 
     async def categories(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text("Categories:\n" + "\n".join(f"- {category}" for category in ALL_CATEGORIES))
+
+    async def summary_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if update.message is None:
+            return
+        text = "summary " + " ".join(context.args)
+        await self._reply_with_summary(update, text)
 
     async def handle_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if update.message is None or update.effective_user is None:
@@ -275,6 +283,10 @@ class FinanceBot:
 
         if lowered in {"help", "what can you do", "commands"}:
             await update.message.reply_text(HELP_TEXT)
+            return True
+
+        if re.search(r"\bsummary\b", lowered):
+            await self._reply_with_summary(update, text)
             return True
 
         if lowered in {"undo", "undo last", "delete last", "remove last"}:
@@ -607,6 +619,20 @@ class FinanceBot:
             message += "\n\nPending IDs: " + ", ".join(pending_ids)
         await update.message.reply_text(message)
         return True
+
+    async def _reply_with_summary(self, update: Update, text: str) -> None:
+        if update.message is None or update.effective_user is None:
+            return
+        if self.settings.label_for_user(update.effective_user.id) is None:
+            await update.message.reply_text("I do not recognize this Telegram user ID yet.")
+            return
+        period = parse_summary_period(text, datetime.now(SINGAPORE_TZ).date())
+        if period is None:
+            await update.message.reply_text("Try: summary, summary this month, or summary last month.")
+            return
+        records = self.sheets.get_expense_records(self.settings.raw_expenses_sheet)
+        summary = build_spending_summary(records, period)
+        await update.message.reply_text(format_spending_summary(summary))
 
     def _pending_extractions_message(self, expenses, logged_by: str, update: Update, reason: str, title: str) -> str:
         lines = [title]
@@ -960,6 +986,7 @@ def main() -> None:
     application.add_handler(CommandHandler("whoami", finance_bot.whoami))
     application.add_handler(CommandHandler("categories", finance_bot.categories))
     application.add_handler(CommandHandler("pending", finance_bot.pending_command))
+    application.add_handler(CommandHandler("summary", finance_bot.summary_command))
     application.add_handler(CommandHandler("confirm", finance_bot.confirm_command))
     application.add_handler(CommandHandler("undo", finance_bot.undo_command))
     application.add_handler(CommandHandler("fixed", finance_bot.fixed_command))

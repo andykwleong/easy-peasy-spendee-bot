@@ -38,6 +38,9 @@ This file contains project-specific instructions for coding agents working on Ge
 - Scheduled monthly reminders/summaries run at 9am Singapore time when `TELEGRAM_CHAT_ID` is configured.
 - Avoid duplicate fixed expense inserts for the same category and month.
 - Delete operations must be confirmation-based. Show the matched expense and wait for explicit confirmation before deleting from Google Sheets.
+- Baby-related variable spending should map to `Bills (Baby)` before shopping, even for phrases like `baby shoes`.
+- Specific bill keywords should beat generic bill matching: `SP bills` and `electricity bills` -> `Bills (Electricity)`, `singtel` -> `Bills (Singtel)`, `arlyn` or `ar;yn` -> `Bills (Arlyn)`, `misc bills` -> `Bills (Misc.)`, and `insurance` -> `Bills (Insurance)`.
+- A bare 6-character entry ID should be treated as a delete lookup, not parsed as an expense amount.
 
 ## Deployment
 

@@ -361,6 +361,23 @@ class FinanceBot:
             await self._ask_delete_confirmation(update, record, logged_by_restriction=logged_by)
             return True
 
+        bare_entry_id_match = re.fullmatch(r"[a-f0-9]{6}", lowered, re.IGNORECASE)
+        if bare_entry_id_match is not None:
+            logged_by = self.settings.label_for_user(update.effective_user.id)
+            if logged_by is None:
+                await update.message.reply_text("I do not recognize this Telegram user ID yet.")
+                return True
+            record = self.sheets.get_record_by_id(
+                self.settings.raw_expenses_sheet,
+                bare_entry_id_match.group(0),
+                logged_by=logged_by,
+            )
+            if record is None:
+                await update.message.reply_text("I could not find that expense under your entries.")
+                return True
+            await self._ask_delete_confirmation(update, record, logged_by_restriction=logged_by)
+            return True
+
         if lowered in {"confirm all", "log all", "extract all"}:
             await self._confirm_all_pending(update)
             return True
@@ -1218,8 +1235,34 @@ class FinanceBot:
 def _normalize_category(raw: str) -> str:
     lowered = raw.strip().lower()
     aliases = {
+        "baby": "Bills (Baby)",
+        "baby bill": "Bills (Baby)",
+        "baby bills": "Bills (Baby)",
+        "bill baby": "Bills (Baby)",
+        "bills baby": "Bills (Baby)",
+        "electricity": "Bills (Electricity)",
+        "electricity bill": "Bills (Electricity)",
+        "electricity bills": "Bills (Electricity)",
+        "sp bill": "Bills (Electricity)",
+        "sp bills": "Bills (Electricity)",
+        "sp utilities": "Bills (Electricity)",
+        "utilities": "Bills (Electricity)",
         "grocery": "Groceries",
         "groceries": "Groceries",
+        "singtel": "Bills (Singtel)",
+        "singtel bill": "Bills (Singtel)",
+        "singtel bills": "Bills (Singtel)",
+        "arlyn": "Bills (Arlyn)",
+        "ar;yn": "Bills (Arlyn)",
+        "arlyn bill": "Bills (Arlyn)",
+        "arlyn bills": "Bills (Arlyn)",
+        "misc bill": "Bills (Misc.)",
+        "misc bills": "Bills (Misc.)",
+        "other bill": "Bills (Misc.)",
+        "other bills": "Bills (Misc.)",
+        "insurance": "Bills (Insurance)",
+        "insurance bill": "Bills (Insurance)",
+        "insurance bills": "Bills (Insurance)",
     }
     if lowered in aliases:
         return aliases[lowered]

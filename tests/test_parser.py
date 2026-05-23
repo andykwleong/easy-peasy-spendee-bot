@@ -47,6 +47,38 @@ class TestParser(unittest.TestCase):
         self.assertIsNotNone(draft)
         self.assertEqual(draft.category, "Shopping - My wife")
 
+    def test_baby_beats_shopping_keywords(self):
+        draft = parse_expense("$80 baby shoes", "My wife", "Me", "My wife", today=date(2026, 5, 23))
+
+        self.assertIsNotNone(draft)
+        self.assertEqual(draft.amount, Decimal("80"))
+        self.assertEqual(draft.category, "Bills (Baby)")
+
+    def test_baby_beats_generic_bills(self):
+        draft = parse_expense("$80 bills baby", "My wife", "Me", "My wife", today=date(2026, 5, 23))
+
+        self.assertIsNotNone(draft)
+        self.assertEqual(draft.category, "Bills (Baby)")
+
+    def test_bills_keywords_map_to_specific_categories(self):
+        examples = {
+            "SP bills 120": "Bills (Electricity)",
+            "electricity bills 120": "Bills (Electricity)",
+            "singtel 80": "Bills (Singtel)",
+            "ar;yn 55": "Bills (Arlyn)",
+            "misc bills 10": "Bills (Misc.)",
+            "insurance 300": "Bills (Insurance)",
+        }
+
+        for text, expected_category in examples.items():
+            with self.subTest(text=text):
+                draft = parse_expense(text, "Me", "Me", "My wife", today=date(2026, 5, 23))
+                self.assertIsNotNone(draft)
+                self.assertEqual(draft.category, expected_category)
+
+    def test_entry_id_is_not_parsed_as_expense(self):
+        self.assertIsNone(parse_expense("1d9c9a", "My wife", "Me", "My wife", today=date(2026, 5, 23)))
+
     def test_unknown_category_becomes_pending_candidate(self):
         draft = parse_expense("random merchant 12", "Me", "Me", "My wife")
 

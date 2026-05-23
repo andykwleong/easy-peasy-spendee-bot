@@ -224,6 +224,9 @@ If Railway is running and `TELEGRAM_CHAT_ID` is set:
 ## Notes
 
 - Shopping is automatically logged as `Shopping - Me` or `Shopping - My wife` based on who sent the message.
+- Baby-related spending, including `baby shoes`, maps to `Bills (Baby)` before shopping.
+- Specific bill keywords map directly: `SP bills` and `electricity bills` to `Bills (Electricity)`, `singtel` to `Bills (Singtel)`, `arlyn` or `ar;yn` to `Bills (Arlyn)`, `misc bills` to `Bills (Misc.)`, and `insurance` to `Bills (Insurance)`.
+- A bare entry ID like `1d9c9a` opens the delete confirmation for that expense, so it will not be mistaken for a $9 expense.
 - Telegram summaries and the `Monthly Summary` tab are recalculated from `Raw Expenses`.
 - If a wrong month appears in `Monthly Summary`, correct the relevant `Date` and `Month` cells in `Raw Expenses`, then let the bot refresh the summary.
 - Do not commit `.env` or your Google service account JSON file to GitHub.

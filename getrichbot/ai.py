@@ -9,6 +9,13 @@ from pydantic import BaseModel, Field
 from getrichbot.categories import ALL_CATEGORIES
 from getrichbot.models import ExpenseRecord
 
+CATEGORY_GUIDANCE = (
+    "Category priority: baby, baby shoes, diapers, formula, milk powder, and childcare mean Bills (Baby), "
+    "even if the item also looks like shopping. SP bills, SP utilities, electricity bills, utilities, and water bills mean Bills (Electricity). "
+    "Singtel means Bills (Singtel). Arlyn or ar;yn means Bills (Arlyn). "
+    "Misc bills or other bills mean Bills (Misc.). Insurance, AIA, Prudential, Great Eastern, and Income insurance mean Bills (Insurance)."
+)
+
 
 class EntryUpdate(BaseModel):
     entry_id: str
@@ -64,7 +71,8 @@ class AIInterpreter:
             "Return only a structured action. Use only entry IDs that appear in the provided rows. "
             "For delete/edit, choose the best matching existing row. If multiple rows match and the user did not specify enough detail, ask for clarification. "
             "For questions, answer from the provided rows only. If the answer is not in the rows, say you cannot find it. "
-            "Do not invent expenses or entry IDs. Categories must match the allowed categories exactly."
+            "Do not invent expenses or entry IDs. Categories must match the allowed categories exactly. "
+            + CATEGORY_GUIDANCE
         )
         user = (
             f"Today is {today.isoformat()} in Singapore. Telegram sender is {logged_by}.\n\n"
@@ -92,7 +100,8 @@ class AIInterpreter:
             "For shopping, use the sender's shopping category: Shopping - Me for Me, Shopping - My wife for My wife. "
             "Resolve relative dates like yesterday using the provided current date. "
             "If a date appears once in a sentence with multiple expenses and later expenses do not have their own explicit date, "
-            "apply that same date to all expenses in the sentence."
+            "apply that same date to all expenses in the sentence. "
+            + CATEGORY_GUIDANCE
         )
         user = (
             f"Today is {today.isoformat()} in Singapore. Telegram sender is {logged_by}.\n\n"
@@ -117,7 +126,8 @@ class AIInterpreter:
             "If the user says confirm all, set confirm_positions to all positions. "
             "If the user says change/update an entry, set update_positions and the new category and/or date. "
             "If the user combines instructions, return confirm_and_update. "
-            "Use YYYY-MM-DD dates, resolving relative dates from today's date."
+            "Use YYYY-MM-DD dates, resolving relative dates from today's date. "
+            + CATEGORY_GUIDANCE
         )
         user = (
             f"Today is {today.isoformat()}.\n\n"
@@ -151,7 +161,8 @@ class AIInterpreter:
             "Use only the allowed categories exactly. For shopping, use the sender's shopping category: "
             "Shopping - Me for Me, Shopping - My wife for My wife. If date is not visible, use today's date. "
             "If a weekday is shown without a full date, infer the most recent past matching weekday from today's date. "
-            "For numeric dates like 12/5/26, interpret as DD/MM/YY for Singapore unless other context is obvious."
+            "For numeric dates like 12/5/26, interpret as DD/MM/YY for Singapore unless other context is obvious. "
+            + CATEGORY_GUIDANCE
         )
         user = (
             f"Today is {today.isoformat()} in Singapore. Telegram sender is {logged_by}.\n\n"

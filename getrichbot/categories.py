@@ -44,12 +44,12 @@ CATEGORY_KEYWORDS = {
     "Maintenance - Hillview": ["hillview maintenance", "hillview mcst", "hillview condo"],
     "Groceries": ["grocery", "groceries", "ntuc", "fairprice", "cold storage", "redmart", "sheng siong", "supermarket"],
     "Food": ["food", "dinner", "lunch", "breakfast", "snack", "snacks", "coffee", "tea", "restaurant", "meal", "cafe", "mcdonald", "grabfood"],
-    "Bills (Electricity)": ["electricity", "sp utilities", "utilities", "power", "water bill"],
-    "Bills (Singtel)": ["singtel"],
-    "Bills (Arlyn)": ["arlyn"],
-    "Bills (Misc.)": ["bill", "bills", "misc bill"],
+    "Bills (Electricity)": ["electricity", "electricity bill", "electricity bills", "sp bill", "sp bills", "sp utilities", "utilities", "power", "water bill", "water bills"],
+    "Bills (Singtel)": ["singtel", "singtel bill", "singtel bills"],
+    "Bills (Arlyn)": ["arlyn", "ar;yn", "arlyn bill", "arlyn bills"],
+    "Bills (Misc.)": ["bill", "bills", "misc bill", "misc bills", "other bill", "other bills"],
     "Bills (Insurance)": ["insurance", "aia", "prudential", "great eastern", "income insurance"],
-    "Bills (Baby)": ["baby", "diaper", "diapers", "milk powder", "formula", "childcare"],
+    "Bills (Baby)": ["baby", "baby bill", "baby bills", "diaper", "diapers", "milk powder", "formula", "childcare"],
     "Education": ["education", "school", "course", "tuition", "book", "books"],
     "Travel": ["travel", "hotel", "flight", "airbnb", "airline", "trip"],
     "Transport/Car": ["grab", "gojek", "taxi", "petrol", "parking", "erp", "car", "transport", "mrt", "bus"],
@@ -72,4 +72,13 @@ SHOPPING_KEYWORDS = [
     "dress",
     "shoes",
     "bag",
+]
+
+BILL_PRIORITY_KEYWORDS = [
+    ("Bills (Baby)", ["baby", "baby bill", "baby bills", "diaper", "diapers", "milk powder", "formula", "childcare"]),
+    ("Bills (Electricity)", ["electricity", "electricity bill", "electricity bills", "sp bill", "sp bills", "sp utilities", "utilities", "water bill", "water bills"]),
+    ("Bills (Singtel)", ["singtel", "singtel bill", "singtel bills"]),
+    ("Bills (Arlyn)", ["arlyn", "ar;yn", "arlyn bill", "arlyn bills"]),
+    ("Bills (Insurance)", ["insurance", "aia", "prudential", "great eastern", "income insurance"]),
+    ("Bills (Misc.)", ["misc bill", "misc bills", "other bill", "other bills"]),
 ]

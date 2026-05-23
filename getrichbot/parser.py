@@ -4,10 +4,11 @@ import re
 from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
 
-from getrichbot.categories import CATEGORY_KEYWORDS, SHOPPING_KEYWORDS
+from getrichbot.categories import BILL_PRIORITY_KEYWORDS, CATEGORY_KEYWORDS, SHOPPING_KEYWORDS
 from getrichbot.models import ExpenseDraft
 
 AMOUNT_RE = re.compile(r"(?:(?:S\$|\$)\s*)?(\d+(?:,\d{3})*(?:\.\d{1,2})?)", re.IGNORECASE)
+ENTRY_ID_RE = re.compile(r"^[a-f0-9]{6}$", re.IGNORECASE)
 ISO_DATE_RE = re.compile(r"\b(\d{4}-\d{1,2}-\d{1,2})\b")
 SLASH_DATE_RE = re.compile(r"\b(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?\b")
 DAY_MONTH_RE = re.compile(
@@ -59,6 +60,9 @@ def parse_expense(
     today: date | None = None,
 ) -> ExpenseDraft | None:
     cleaned = " ".join(text.strip().split())
+    if ENTRY_ID_RE.fullmatch(cleaned):
+        return None
+
     amount = _extract_amount(cleaned)
     if amount is None:
         return None
@@ -198,7 +202,11 @@ def _remove_word(text: str, word: str) -> str:
 def _categorize(description: str, logged_by: str, me_label: str, wife_label: str) -> tuple[str | None, float]:
     lowered = description.lower()
 
-    if any(keyword in lowered for keyword in SHOPPING_KEYWORDS):
+    for category, keywords in BILL_PRIORITY_KEYWORDS:
+        if any(_contains_keyword(lowered, keyword) for keyword in keywords):
+            return category, 0.95
+
+    if any(_contains_keyword(lowered, keyword) for keyword in SHOPPING_KEYWORDS):
         if logged_by == wife_label:
             return "Shopping - My wife", 0.9
         if logged_by == me_label:
@@ -207,7 +215,7 @@ def _categorize(description: str, logged_by: str, me_label: str, wife_label: str
     best_category: str | None = None
     best_score = 0
     for category, keywords in CATEGORY_KEYWORDS.items():
-        score = sum(1 for keyword in keywords if keyword in lowered)
+        score = sum(1 for keyword in keywords if _contains_keyword(lowered, keyword))
         if score > best_score:
             best_category = category
             best_score = score
@@ -215,3 +223,7 @@ def _categorize(description: str, logged_by: str, me_label: str, wife_label: str
     if best_category is None:
         return None, 0.0
     return best_category, min(0.95, 0.55 + (best_score * 0.2))
+
+
+def _contains_keyword(text: str, keyword: str) -> bool:
+    return re.search(rf"(?<![a-z0-9]){re.escape(keyword.lower())}(?![a-z0-9])", text) is not None

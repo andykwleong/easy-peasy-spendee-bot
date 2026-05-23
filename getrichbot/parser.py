@@ -4,7 +4,7 @@ import re
 from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
 
-from getrichbot.categories import BILL_PRIORITY_KEYWORDS, CATEGORY_KEYWORDS, SHOPPING_KEYWORDS
+from getrichbot.categories import BILL_PRIORITY_KEYWORDS, CATEGORY_KEYWORDS, SHOPPING_CATEGORIES, SHOPPING_KEYWORDS
 from getrichbot.models import ExpenseDraft
 
 AMOUNT_RE = re.compile(r"(?:(?:S\$|\$)\s*)?(\d+(?:,\d{3})*(?:\.\d{1,2})?)", re.IGNORECASE)
@@ -208,9 +208,9 @@ def _categorize(description: str, logged_by: str, me_label: str, wife_label: str
 
     if any(_contains_keyword(lowered, keyword) for keyword in SHOPPING_KEYWORDS):
         if logged_by == wife_label:
-            return "Shopping - My wife", 0.9
+            return SHOPPING_CATEGORIES.get("wife"), 0.9
         if logged_by == me_label:
-            return "Shopping - Me", 0.9
+            return SHOPPING_CATEGORIES.get("me"), 0.9
 
     best_category: str | None = None
     best_score = 0

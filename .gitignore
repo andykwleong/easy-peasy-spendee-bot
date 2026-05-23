@@ -8,3 +8,4 @@ __pycache__/
 service-account*.json
 *.json
 !railway.json
+!categories.example.json

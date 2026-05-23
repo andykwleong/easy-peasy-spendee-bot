@@ -2,6 +2,7 @@ import unittest
 from datetime import date
 from decimal import Decimal
 
+from getrichbot.categories import CATEGORY_ALIASES, SHOPPING_CATEGORIES
 from getrichbot.parser import extract_standalone_date, parse_expense
 
 
@@ -39,36 +40,40 @@ class TestParser(unittest.TestCase):
         draft = parse_expense("uniqlo 120", "Me", "Me", "My wife")
 
         self.assertIsNotNone(draft)
-        self.assertEqual(draft.category, "Shopping - Me")
+        self.assertEqual(draft.category, SHOPPING_CATEGORIES["me"])
 
     def test_parse_shopping_for_wife(self):
         draft = parse_expense("uniqlo 120", "My wife", "Me", "My wife")
 
         self.assertIsNotNone(draft)
-        self.assertEqual(draft.category, "Shopping - My wife")
+        self.assertEqual(draft.category, SHOPPING_CATEGORIES["wife"])
 
     def test_baby_beats_shopping_keywords(self):
         draft = parse_expense("$80 baby shoes", "My wife", "Me", "My wife", today=date(2026, 5, 23))
 
         self.assertIsNotNone(draft)
         self.assertEqual(draft.amount, Decimal("80"))
-        self.assertEqual(draft.category, "Bills (Baby)")
+        self.assertEqual(draft.category, CATEGORY_ALIASES["baby"])
 
     def test_baby_beats_generic_bills(self):
         draft = parse_expense("$80 bills baby", "My wife", "Me", "My wife", today=date(2026, 5, 23))
 
         self.assertIsNotNone(draft)
-        self.assertEqual(draft.category, "Bills (Baby)")
+        self.assertEqual(draft.category, CATEGORY_ALIASES["baby"])
 
     def test_bills_keywords_map_to_specific_categories(self):
         examples = {
-            "SP bills 120": "Bills (Electricity)",
-            "electricity bills 120": "Bills (Electricity)",
-            "singtel 80": "Bills (Singtel)",
-            "ar;yn 55": "Bills (Arlyn)",
-            "misc bills 10": "Bills (Misc.)",
-            "insurance 300": "Bills (Insurance)",
+            "electricity bills 120": CATEGORY_ALIASES["electricity"],
+            "insurance 300": CATEGORY_ALIASES["insurance"],
         }
+        if "sp bills" in CATEGORY_ALIASES:
+            examples["SP bills 120"] = CATEGORY_ALIASES["sp bills"]
+        if "singtel" in CATEGORY_ALIASES:
+            examples["singtel 80"] = CATEGORY_ALIASES["singtel"]
+        if "ar;yn" in CATEGORY_ALIASES:
+            examples["ar;yn 55"] = CATEGORY_ALIASES["ar;yn"]
+        if "misc bills" in CATEGORY_ALIASES:
+            examples["misc bills 10"] = CATEGORY_ALIASES["misc bills"]
 
         for text, expected_category in examples.items():
             with self.subTest(text=text):

@@ -6,15 +6,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from getrichbot.categories import ALL_CATEGORIES
+from getrichbot.categories import ALL_CATEGORIES, SHOPPING_CATEGORIES, category_guidance_text
 from getrichbot.models import ExpenseRecord
-
-CATEGORY_GUIDANCE = (
-    "Category priority: baby, baby shoes, diapers, formula, milk powder, and childcare mean Bills (Baby), "
-    "even if the item also looks like shopping. SP bills, SP utilities, electricity bills, utilities, and water bills mean Bills (Electricity). "
-    "Singtel means Bills (Singtel). Arlyn or ar;yn means Bills (Arlyn). "
-    "Misc bills or other bills mean Bills (Misc.). Insurance, AIA, Prudential, Great Eastern, and Income insurance mean Bills (Insurance)."
-)
 
 
 class EntryUpdate(BaseModel):
@@ -72,7 +65,7 @@ class AIInterpreter:
             "For delete/edit, choose the best matching existing row. If multiple rows match and the user did not specify enough detail, ask for clarification. "
             "For questions, answer from the provided rows only. If the answer is not in the rows, say you cannot find it. "
             "Do not invent expenses or entry IDs. Categories must match the allowed categories exactly. "
-            + CATEGORY_GUIDANCE
+            + category_guidance_text()
         )
         user = (
             f"Today is {today.isoformat()} in Singapore. Telegram sender is {logged_by}.\n\n"
@@ -93,15 +86,16 @@ class AIInterpreter:
 
     def extract_from_text(self, text: str, today: date, logged_by: str) -> ExpenseExtractionResult:
         category_text = "\n".join(f"- {category}" for category in ALL_CATEGORIES)
+        shopping_text = _shopping_guidance()
         system = (
             "Extract household expenses from a short natural language message. "
             "Understand amounts written as words, including Singapore-style phrases like 'eighteen fifty dollars' meaning 18.50. "
             "Return one or more expenses. Use only allowed categories exactly. "
-            "For shopping, use the sender's shopping category: Shopping - Me for Me, Shopping - My wife for My wife. "
+            f"{shopping_text} "
             "Resolve relative dates like yesterday using the provided current date. "
             "If a date appears once in a sentence with multiple expenses and later expenses do not have their own explicit date, "
             "apply that same date to all expenses in the sentence. "
-            + CATEGORY_GUIDANCE
+            + category_guidance_text()
         )
         user = (
             f"Today is {today.isoformat()} in Singapore. Telegram sender is {logged_by}.\n\n"
@@ -127,7 +121,7 @@ class AIInterpreter:
             "If the user says change/update an entry, set update_positions and the new category and/or date. "
             "If the user combines instructions, return confirm_and_update. "
             "Use YYYY-MM-DD dates, resolving relative dates from today's date. "
-            + CATEGORY_GUIDANCE
+            + category_guidance_text()
         )
         user = (
             f"Today is {today.isoformat()}.\n\n"
@@ -154,15 +148,16 @@ class AIInterpreter:
     ) -> ExpenseExtractionResult:
         encoded = base64.b64encode(image_bytes).decode("ascii")
         category_text = "\n".join(f"- {category}" for category in ALL_CATEGORIES)
+        shopping_text = _shopping_guidance()
         system = (
             "Extract all visible household expenses from a receipt, payment, or banking screenshot. "
             "Return structured data only. If there are multiple transactions, return all of them as separate expenses. "
             "If an amount or merchant is unclear, skip that row or ask a short clarification question. "
-            "Use only the allowed categories exactly. For shopping, use the sender's shopping category: "
-            "Shopping - Me for Me, Shopping - My wife for My wife. If date is not visible, use today's date. "
+            "Use only the allowed categories exactly. "
+            f"{shopping_text} If date is not visible, use today's date. "
             "If a weekday is shown without a full date, infer the most recent past matching weekday from today's date. "
             "For numeric dates like 12/5/26, interpret as DD/MM/YY for Singapore unless other context is obvious. "
-            + CATEGORY_GUIDANCE
+            + category_guidance_text()
         )
         user = (
             f"Today is {today.isoformat()} in Singapore. Telegram sender is {logged_by}.\n\n"
@@ -196,3 +191,15 @@ class AIInterpreter:
             file=(filename, audio_bytes),
         )
         return response.text.strip()
+
+
+def _shopping_guidance() -> str:
+    me_category = SHOPPING_CATEGORIES.get("me")
+    wife_category = SHOPPING_CATEGORIES.get("wife")
+    if me_category and wife_category:
+        return f"For shopping, use the sender's shopping category: {me_category} for Me, {wife_category} for My wife."
+    if me_category:
+        return f"For shopping from Me, use {me_category}."
+    if wife_category:
+        return f"For shopping from My wife, use {wife_category}."
+    return "For shopping, use the most relevant allowed shopping category."

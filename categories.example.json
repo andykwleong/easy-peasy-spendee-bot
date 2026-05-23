@@ -1,0 +1,58 @@
+{
+  "variable_categories": [
+    "Food",
+    "Groceries",
+    "Utilities",
+    "Insurance",
+    "Childcare",
+    "Shopping - Person A",
+    "Shopping - Person B",
+    "Transport",
+    "Personal care",
+    "Entertainment"
+  ],
+  "fixed_categories": [
+    "Rent or mortgage",
+    "Loan repayment",
+    "Subscriptions"
+  ],
+  "category_keywords": {
+    "Food": ["food", "dinner", "lunch", "breakfast", "snack", "coffee", "tea", "restaurant", "meal", "cafe"],
+    "Groceries": ["grocery", "groceries", "supermarket", "market"],
+    "Utilities": ["electricity", "electricity bill", "water bill", "utilities", "internet bill", "phone bill"],
+    "Insurance": ["insurance"],
+    "Childcare": ["baby", "childcare", "diaper", "diapers", "formula"],
+    "Transport": ["taxi", "petrol", "parking", "car", "transport", "train", "bus"],
+    "Personal care": ["haircut", "salon", "skincare", "facial", "personal care"],
+    "Entertainment": ["movie", "cinema", "concert", "game", "games"]
+  },
+  "priority_keywords": [
+    {
+      "category": "Childcare",
+      "keywords": ["baby", "childcare", "diaper", "diapers", "formula"]
+    },
+    {
+      "category": "Utilities",
+      "keywords": ["electricity", "electricity bill", "water bill", "utilities"]
+    },
+    {
+      "category": "Insurance",
+      "keywords": ["insurance"]
+    }
+  ],
+  "shopping_keywords": ["shopping", "shop", "shopee", "lazada", "amazon", "clothes", "shirt", "dress", "shoes", "bag"],
+  "shopping_categories": {
+    "me": "Shopping - Person A",
+    "wife": "Shopping - Person B"
+  },
+  "category_aliases": {
+    "baby": "Childcare",
+    "childcare": "Childcare",
+    "grocery": "Groceries",
+    "groceries": "Groceries",
+    "electricity": "Utilities",
+    "electricity bill": "Utilities",
+    "utilities": "Utilities",
+    "insurance": "Insurance"
+  }
+}

@@ -2,6 +2,7 @@ import unittest
 from datetime import date
 from decimal import Decimal
 
+from getrichbot.categories import SHOPPING_CATEGORIES
 from getrichbot.models import ExpenseRecord
 from getrichbot.summary import build_monthly_summary_table, build_spending_summary, format_spending_summary, parse_summary_period
 
@@ -104,12 +105,13 @@ class TestSummary(unittest.TestCase):
         self.assertEqual(table[-1], ["Total", "35.00", "30.00", "0.00"])
 
     def test_monthly_summary_uses_date_when_month_column_is_wrong(self):
+        shopping_category = SHOPPING_CATEGORIES["me"]
         table = build_monthly_summary_table([
-            record_with_month("2026-05-20", "2023-05", "23.20", "Shopping - Me")
+            record_with_month("2026-05-20", "2023-05", "23.20", shopping_category)
         ])
 
         self.assertEqual(table[0], ["Category", "2026-05"])
-        self.assertIn(["Shopping - Me", "23.20"], table)
+        self.assertIn([shopping_category, "23.20"], table)
 
 
 if __name__ == "__main__":

@@ -2,6 +2,7 @@ import unittest
 from decimal import Decimal
 
 from getrichbot.bot import FinanceBot, _normalize_category
+from getrichbot.categories import CATEGORY_ALIASES
 from getrichbot.models import ExpenseRecord
 
 
@@ -31,15 +32,13 @@ class TestDeleteConfirmation(unittest.TestCase):
 
     def test_category_aliases_for_bills(self):
         aliases = {
-            "baby": "Bills (Baby)",
-            "bills baby": "Bills (Baby)",
-            "sp bills": "Bills (Electricity)",
-            "electricity bills": "Bills (Electricity)",
-            "singtel": "Bills (Singtel)",
-            "ar;yn": "Bills (Arlyn)",
-            "misc bills": "Bills (Misc.)",
-            "insurance": "Bills (Insurance)",
+            "baby": CATEGORY_ALIASES["baby"],
+            "electricity bills": CATEGORY_ALIASES["electricity"],
+            "insurance": CATEGORY_ALIASES["insurance"],
         }
+        for optional_alias in ["bills baby", "sp bills", "singtel", "ar;yn", "misc bills"]:
+            if optional_alias in CATEGORY_ALIASES:
+                aliases[optional_alias] = CATEGORY_ALIASES[optional_alias]
 
         for raw, expected in aliases.items():
             with self.subTest(raw=raw):
@@ -100,7 +99,7 @@ class TestBareEntryIdDelete(unittest.IsolatedAsyncioTestCase):
             logged_by="My wife",
             raw_input="$80 baby shoes",
             amount=Decimal("80"),
-            category="Bills (Baby)",
+            category=CATEGORY_ALIASES["baby"],
             description="baby shoes",
             input_type="Text",
             status="Confirmed",
@@ -111,7 +110,7 @@ class TestBareEntryIdDelete(unittest.IsolatedAsyncioTestCase):
         handled = await bot.handle_plain_language_command(update)
 
         self.assertTrue(handled)
-        self.assertIn("Delete $80.00 logged as Bills (Baby) - 23 May 2026 [1d9c9a]?", update.message.replies[0])
+        self.assertIn(f"Delete $80.00 logged as {CATEGORY_ALIASES['baby']} - 23 May 2026 [1d9c9a]?", update.message.replies[0])
 
 
 if __name__ == "__main__":

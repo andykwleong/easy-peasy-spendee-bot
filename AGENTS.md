@@ -38,8 +38,8 @@ This file contains project-specific instructions for coding agents working on Ge
 - Scheduled monthly reminders/summaries run at 9am Singapore time when `TELEGRAM_CHAT_ID` is configured.
 - Avoid duplicate fixed expense inserts for the same category and month.
 - Delete operations must be confirmation-based. Show the matched expense and wait for explicit confirmation before deleting from Google Sheets.
-- Baby-related variable spending should map to `Bills (Baby)` before shopping, even for phrases like `baby shoes`.
-- Specific bill keywords should beat generic bill matching: `SP bills` and `electricity bills` -> `Bills (Electricity)`, `singtel` -> `Bills (Singtel)`, `arlyn` or `ar;yn` -> `Bills (Arlyn)`, `misc bills` -> `Bills (Misc.)`, and `insurance` -> `Bills (Insurance)`.
+- User-specific categories should live in private config through `categories.json`, `CATEGORIES_FILE`, or Railway's `CATEGORIES_JSON`; do not hardcode personal category lists in public source.
+- Category priority keywords and aliases should come from category config and should beat generic category matching.
 - A bare 6-character entry ID should be treated as a delete lookup, not parsed as an expense amount.
 
 ## Deployment
@@ -54,7 +54,7 @@ This file contains project-specific instructions for coding agents working on Ge
 
 - The project license is AGPL-3.0-or-later.
 - Keep public docs clear enough for non-engineers to understand setup, privacy, security, and data flow.
-- Do not include Andy's real Telegram IDs, bot tokens, Google Sheet IDs, OpenAI keys, service account JSON, or private household finance data in examples.
+- Do not include Andy's real Telegram IDs, bot tokens, Google Sheet IDs, OpenAI keys, service account JSON, private category list, or private household finance data in examples.
 - When adding public examples, use obviously fake placeholder values.
 
 ## Code Quality

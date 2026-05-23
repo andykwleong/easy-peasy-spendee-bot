@@ -9,6 +9,7 @@ Depending on how you use it, the bot may process:
 - Telegram user IDs and chat IDs
 - Expense text you send in Telegram
 - Expense amounts, dates, categories, and descriptions
+- Your private category names and keyword rules
 - Screenshots you upload for expense extraction
 - Voice notes you upload for transcription and extraction
 - Fixed expense categories and default amounts from your Google Sheet

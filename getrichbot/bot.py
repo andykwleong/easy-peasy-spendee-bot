@@ -14,7 +14,7 @@ from datetime import timedelta
 from time import perf_counter
 from zoneinfo import ZoneInfo
 
-from getrichbot.categories import ALL_CATEGORIES, FIXED_CATEGORIES, VARIABLE_CATEGORIES
+from getrichbot.categories import ALL_CATEGORIES, CATEGORY_ALIASES, FIXED_CATEGORIES, VARIABLE_CATEGORIES
 from getrichbot.config import Settings
 from getrichbot.image_utils import prepare_image_for_vision
 from getrichbot.models import ExpenseDraft, ExpenseRecord, ExpenseRow
@@ -1234,38 +1234,8 @@ class FinanceBot:
 
 def _normalize_category(raw: str) -> str:
     lowered = raw.strip().lower()
-    aliases = {
-        "baby": "Bills (Baby)",
-        "baby bill": "Bills (Baby)",
-        "baby bills": "Bills (Baby)",
-        "bill baby": "Bills (Baby)",
-        "bills baby": "Bills (Baby)",
-        "electricity": "Bills (Electricity)",
-        "electricity bill": "Bills (Electricity)",
-        "electricity bills": "Bills (Electricity)",
-        "sp bill": "Bills (Electricity)",
-        "sp bills": "Bills (Electricity)",
-        "sp utilities": "Bills (Electricity)",
-        "utilities": "Bills (Electricity)",
-        "grocery": "Groceries",
-        "groceries": "Groceries",
-        "singtel": "Bills (Singtel)",
-        "singtel bill": "Bills (Singtel)",
-        "singtel bills": "Bills (Singtel)",
-        "arlyn": "Bills (Arlyn)",
-        "ar;yn": "Bills (Arlyn)",
-        "arlyn bill": "Bills (Arlyn)",
-        "arlyn bills": "Bills (Arlyn)",
-        "misc bill": "Bills (Misc.)",
-        "misc bills": "Bills (Misc.)",
-        "other bill": "Bills (Misc.)",
-        "other bills": "Bills (Misc.)",
-        "insurance": "Bills (Insurance)",
-        "insurance bill": "Bills (Insurance)",
-        "insurance bills": "Bills (Insurance)",
-    }
-    if lowered in aliases:
-        return aliases[lowered]
+    if lowered in CATEGORY_ALIASES:
+        return CATEGORY_ALIASES[lowered]
     for category in ALL_CATEGORIES:
         if category.lower() == lowered:
             return category

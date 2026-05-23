@@ -18,7 +18,7 @@ Telegram group chat
 
 - Logs expenses from Telegram text messages.
 - Maps each Telegram sender to either `Me` or `My wife`.
-- Categorizes expenses using your household category list.
+- Categorizes expenses using your private household category config.
 - Appends every confirmed entry as raw data to Google Sheets.
 - Supports pending review when category or amount is unclear.
 - Supports duplicate detection before logging repeated expenses.
@@ -73,6 +73,60 @@ If an unexpected month appears, for example `2023-05`, check `Raw Expenses` for 
 
 The bot creates this tab automatically when needed. It stores small markers so Railway restarts do not resend the same month-end reminder or final summary.
 
+## Category Setup
+
+Categories are user-specific and should stay private. The public repo includes [categories.example.json](categories.example.json) only as a safe template.
+
+For local use:
+
+1. Copy `categories.example.json` to `categories.json`.
+2. Edit `categories.json` with your own categories and keywords.
+3. Keep `CATEGORIES_FILE=categories.json` in `.env`.
+
+For Railway:
+
+1. Open your private `categories.json`.
+2. Copy the full JSON content.
+3. Paste it into a Railway variable named `CATEGORIES_JSON`.
+
+`categories.json` is ignored by Git, so your real household category list is not committed.
+
+Category config fields:
+
+- `variable_categories` - normal expense categories users can log from Telegram.
+- `fixed_categories` - monthly recurring categories shown in the `Fixed Expenses` sheet.
+- `category_keywords` - words that help the bot choose a category.
+- `priority_keywords` - category rules that should win before general matching, for example baby-related items before shopping.
+- `shopping_keywords` - words that count as shopping.
+- `shopping_categories` - sender-based shopping categories for `me` and `wife`.
+- `category_aliases` - short names users can say when confirming or editing categories.
+
+Example:
+
+```json
+{
+  "variable_categories": ["Food", "Groceries", "Utilities", "Shopping - Person A", "Shopping - Person B"],
+  "fixed_categories": ["Rent or mortgage", "Subscriptions"],
+  "category_keywords": {
+    "Food": ["dinner", "lunch", "coffee"],
+    "Utilities": ["electricity", "water bill"]
+  },
+  "priority_keywords": [
+    {"category": "Utilities", "keywords": ["electricity", "water bill"]}
+  ],
+  "shopping_keywords": ["shopping", "shoes", "clothes"],
+  "shopping_categories": {
+    "me": "Shopping - Person A",
+    "wife": "Shopping - Person B"
+  },
+  "category_aliases": {
+    "electricity": "Utilities"
+  }
+}
+```
+
+The category names in your Google Sheet must match the names in your category config.
+
 ## Setup
 
 1. Create a Telegram bot with BotFather and get the bot token.
@@ -115,6 +169,8 @@ TELEGRAM_BOT_TOKEN=
 GOOGLE_SHEET_ID=
 GOOGLE_SERVICE_ACCOUNT_FILE=
 GOOGLE_SERVICE_ACCOUNT_JSON=
+CATEGORIES_FILE=categories.json
+CATEGORIES_JSON=
 ME_TELEGRAM_IDS=
 WIFE_TELEGRAM_IDS=
 ME_LABEL=Me
@@ -223,9 +279,8 @@ If Railway is running and `TELEGRAM_CHAT_ID` is set:
 
 ## Notes
 
-- Shopping is automatically logged as `Shopping - Me` or `Shopping - My wife` based on who sent the message.
-- Baby-related spending, including `baby shoes`, maps to `Bills (Baby)` before shopping.
-- Specific bill keywords map directly: `SP bills` and `electricity bills` to `Bills (Electricity)`, `singtel` to `Bills (Singtel)`, `arlyn` or `ar;yn` to `Bills (Arlyn)`, `misc bills` to `Bills (Misc.)`, and `insurance` to `Bills (Insurance)`.
+- Shopping can be logged into sender-specific shopping categories based on your category config.
+- Priority keywords and aliases come from your category config.
 - A bare entry ID like `1d9c9a` opens the delete confirmation for that expense, so it will not be mistaken for a $9 expense.
 - Telegram summaries and the `Monthly Summary` tab are recalculated from `Raw Expenses`.
 - If a wrong month appears in `Monthly Summary`, correct the relevant `Date` and `Month` cells in `Raw Expenses`, then let the bot refresh the summary.

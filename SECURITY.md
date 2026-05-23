@@ -16,6 +16,8 @@ Sensitive values should live in Railway variables or a local `.env` file that is
 - `GOOGLE_SHEET_ID`
 - `GOOGLE_SERVICE_ACCOUNT_FILE`
 - `GOOGLE_SERVICE_ACCOUNT_JSON`
+- `CATEGORIES_JSON`
+- private `categories.json` files
 - `ME_TELEGRAM_IDS`
 - `WIFE_TELEGRAM_IDS`
 - `TELEGRAM_CHAT_ID`

@@ -26,7 +26,7 @@ DEFAULT_CATEGORY_CONFIG: dict[str, Any] = {
         "Subscriptions",
     ],
     "category_keywords": {
-        "Food": ["food", "dinner", "lunch", "breakfast", "snack", "coffee", "tea", "restaurant", "meal", "cafe"],
+        "Food": ["food", "dinner", "lunch", "breakfast", "dessert", "snack", "coffee", "tea", "restaurant", "meal", "cafe"],
         "Groceries": ["grocery", "groceries", "supermarket", "market"],
         "Utilities": ["electricity", "electricity bill", "water bill", "utilities", "internet bill", "phone bill"],
         "Insurance": ["insurance"],

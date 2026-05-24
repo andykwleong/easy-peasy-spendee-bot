@@ -18,7 +18,7 @@ from getrichbot.categories import ALL_CATEGORIES, CATEGORY_ALIASES, FIXED_CATEGO
 from getrichbot.config import Settings
 from getrichbot.image_utils import prepare_image_for_vision
 from getrichbot.models import ExpenseDraft, ExpenseRecord, ExpenseRow
-from getrichbot.parser import extract_date_phrase, extract_standalone_date, parse_expense
+from getrichbot.parser import extract_date_phrase, extract_standalone_date, parse_expense, parse_expenses
 from getrichbot.sheets import SheetsClient
 from getrichbot.summary import build_spending_summary, format_spending_summary, parse_summary_period
 from getrichbot.summary import build_monthly_summary_table
@@ -151,13 +151,18 @@ class FinanceBot:
             await update.message.reply_text("I do not recognize this Telegram user ID yet.")
             return
 
-        draft = parse_expense(
+        drafts = parse_expenses(
             update.message.text or "",
             logged_by=logged_by,
             me_label=self.settings.me_label,
             wife_label=self.settings.wife_label,
             today=datetime.now(SINGAPORE_TZ).date(),
         )
+        if len(drafts) > 1:
+            await self._log_multiline_drafts(update, logged_by, drafts)
+            return
+
+        draft = drafts[0] if drafts else None
         if draft is None:
             return
 
@@ -657,6 +662,23 @@ class FinanceBot:
                 if draft is None or draft.expense_date is None
             ]
             await self._log_multiline_drafts(update, logged_by, dated_line_drafts, skipped_lines)
+            return True
+
+        if line_drafts and all(draft is not None for draft in line_drafts):
+            today_line_drafts = [
+                ExpenseDraft(
+                    raw_input=draft.raw_input,
+                    amount=draft.amount,
+                    category=draft.category,
+                    description=draft.description,
+                    confidence=draft.confidence,
+                    expense_date=today,
+                    needs_date_confirmation=draft.needs_date_confirmation,
+                )
+                for draft in line_drafts
+                if draft is not None
+            ]
+            await self._log_multiline_drafts(update, logged_by, today_line_drafts)
             return True
 
         shared_date, ambiguous = extract_standalone_date(lines[0], datetime.now(SINGAPORE_TZ).date())

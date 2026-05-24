@@ -59,6 +59,10 @@ def parse_expense(
     wife_label: str,
     today: date | None = None,
 ) -> ExpenseDraft | None:
+    drafts = parse_expenses(text, logged_by, me_label, wife_label, today)
+    if len(drafts) == 1:
+        return drafts[0]
+
     cleaned = " ".join(text.strip().split())
     if ENTRY_ID_RE.fullmatch(cleaned):
         return None
@@ -82,6 +86,72 @@ def parse_expense(
     )
 
 
+def parse_expenses(
+    text: str,
+    logged_by: str,
+    me_label: str,
+    wife_label: str,
+    today: date | None = None,
+) -> list[ExpenseDraft]:
+    cleaned = " ".join(text.strip().split())
+    if ENTRY_ID_RE.fullmatch(cleaned):
+        return []
+
+    reference_date = today or date.today()
+    expense_date, without_date, needs_date_confirmation = _extract_expense_date(cleaned, reference_date)
+    matches = list(AMOUNT_RE.finditer(without_date))
+    if len(matches) < 2 or not _has_amount_list_separators(without_date, matches):
+        draft = _parse_single_expense(cleaned, logged_by, me_label, wife_label, reference_date)
+        return [draft] if draft is not None else []
+
+    description = _description_without_amounts(without_date, matches)
+    category, confidence = _categorize(description, logged_by, me_label, wife_label)
+    parsed_amounts = []
+    for match in matches:
+        amount = _amount_from_match(match)
+        if amount is None:
+            return []
+        parsed_amounts.append(amount)
+
+    return [
+        ExpenseDraft(
+            raw_input=cleaned,
+            amount=amount,
+            category=category,
+            description=description or cleaned,
+            confidence=confidence,
+            expense_date=expense_date or reference_date,
+            needs_date_confirmation=needs_date_confirmation,
+        )
+        for amount in parsed_amounts
+    ]
+
+
+def _parse_single_expense(
+    cleaned: str,
+    logged_by: str,
+    me_label: str,
+    wife_label: str,
+    reference_date: date,
+) -> ExpenseDraft | None:
+    amount = _extract_amount(cleaned)
+    if amount is None:
+        return None
+
+    expense_date, without_date, needs_date_confirmation = _extract_expense_date(cleaned, reference_date)
+    description = _description_without_amount(without_date)
+    category, confidence = _categorize(description, logged_by, me_label, wife_label)
+    return ExpenseDraft(
+        raw_input=cleaned,
+        amount=amount,
+        category=category,
+        description=description or cleaned,
+        confidence=confidence,
+        expense_date=expense_date,
+        needs_date_confirmation=needs_date_confirmation,
+    )
+
+
 def _extract_amount(text: str) -> Decimal | None:
     matches = list(AMOUNT_RE.finditer(text))
     if not matches:
@@ -89,7 +159,11 @@ def _extract_amount(text: str) -> Decimal | None:
 
     # Household expense messages normally have one amount. If there are multiple,
     # take the last one because "dinner for 2 60" is common.
-    raw = matches[-1].group(1).replace(",", "")
+    return _amount_from_match(matches[-1])
+
+
+def _amount_from_match(match: re.Match[str]) -> Decimal | None:
+    raw = match.group(1).replace(",", "")
     try:
         return Decimal(raw)
     except InvalidOperation:
@@ -104,6 +178,26 @@ def _description_without_amount(text: str) -> str:
     before = text[: match.start()].strip(" -:")
     after = text[match.end() :].strip(" -:")
     return " ".join(part for part in [before, after] if part).strip()
+
+
+def _description_without_amounts(text: str, matches: list[re.Match[str]]) -> str:
+    parts = []
+    position = 0
+    for match in matches:
+        parts.append(text[position: match.start()])
+        position = match.end()
+    parts.append(text[position:])
+    description = "".join(parts)
+    description = re.sub(r"\b(?:and|plus)\b|[,&+]", " ", description, flags=re.IGNORECASE)
+    return " ".join(description.strip(" -:").split())
+
+
+def _has_amount_list_separators(text: str, matches: list[re.Match[str]]) -> bool:
+    for previous, current in zip(matches, matches[1:]):
+        separator = text[previous.end(): current.start()].strip().lower()
+        if not re.fullmatch(r"(?:and|plus|[,&+])", separator):
+            return False
+    return True
 
 
 def extract_standalone_date(text: str, today: date | None = None) -> tuple[date | None, bool]:

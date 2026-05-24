@@ -40,6 +40,8 @@ This file contains project-specific instructions for coding agents working on Ge
 - Delete operations must be confirmation-based. Show the matched expense and wait for explicit confirmation before deleting from Google Sheets.
 - User-specific categories should live in private config through `categories.json`, `CATEGORIES_FILE`, or Railway's `CATEGORIES_JSON`; do not hardcode personal category lists in public source.
 - Category priority keywords and aliases should come from category config and should beat generic category matching.
+- A message with one clear category and multiple listed amounts, for example `groceries 63 and 15.20`, should log separate rows for each amount. This is not split-bill behavior.
+- Multiple undated expense lines should log as separate rows dated today.
 - A bare 6-character entry ID should be treated as a delete lookup, not parsed as an expense amount.
 
 ## Deployment

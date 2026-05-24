@@ -3,7 +3,7 @@ from datetime import date
 from decimal import Decimal
 
 from getrichbot.categories import CATEGORY_ALIASES, SHOPPING_CATEGORIES
-from getrichbot.parser import extract_standalone_date, parse_expense
+from getrichbot.parser import extract_standalone_date, parse_expense, parse_expenses
 
 
 class TestParser(unittest.TestCase):
@@ -35,6 +35,21 @@ class TestParser(unittest.TestCase):
         self.assertIsNotNone(draft)
         self.assertEqual(draft.amount, Decimal("82.30"))
         self.assertEqual(draft.category, "Groceries")
+
+    def test_parse_same_category_multiple_amounts(self):
+        drafts = parse_expenses("Groceries 63 and 15.2", "Me", "Me", "My wife", today=date(2026, 5, 24))
+
+        self.assertEqual(len(drafts), 2)
+        self.assertEqual([draft.amount for draft in drafts], [Decimal("63"), Decimal("15.2")])
+        self.assertTrue(all(draft.category == "Groceries" for draft in drafts))
+        self.assertTrue(all(draft.expense_date == date(2026, 5, 24) for draft in drafts))
+
+    def test_does_not_split_count_and_amount(self):
+        drafts = parse_expenses("dinner for 2 60", "Me", "Me", "My wife", today=date(2026, 5, 24))
+
+        self.assertEqual(len(drafts), 1)
+        self.assertEqual(drafts[0].amount, Decimal("60"))
+        self.assertEqual(drafts[0].category, "Food")
 
     def test_parse_shopping_for_me(self):
         draft = parse_expense("uniqlo 120", "Me", "Me", "My wife")

@@ -92,6 +92,7 @@ class AIInterpreter:
             "Understand amounts written as words, including Singapore-style phrases like 'eighteen fifty dollars' meaning 18.50. "
             "Return one or more expenses. Use only allowed categories exactly. "
             f"{shopping_text} "
+            "If a message gives one clear category with multiple listed amounts, such as 'groceries 63 and 15.2', return separate expenses with the same category. "
             "Resolve relative dates like yesterday using the provided current date. "
             "If a date appears once in a sentence with multiple expenses and later expenses do not have their own explicit date, "
             "apply that same date to all expenses in the sentence. "

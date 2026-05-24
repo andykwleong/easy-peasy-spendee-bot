@@ -1,5 +1,8 @@
 import unittest
+from datetime import date
+from datetime import datetime as real_datetime
 from decimal import Decimal
+from unittest.mock import patch
 
 from getrichbot.bot import FinanceBot
 from getrichbot.models import ExpenseRecord
@@ -125,6 +128,22 @@ class TestMultiline(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Possible duplicate found:", update.message.replies[0])
         self.assertIn('Reply: "confirm" to log anyway or "cancel" to delete', update.message.replies[0])
         self.assertIn("Logged $50.00 to Groceries", update.message.replies[-1])
+
+    async def test_logs_multiple_undated_lines_for_today(self):
+        sheets = FakeSheets()
+        bot = FinanceBot(FakeSettings(), sheets)
+        update = FakeUpdate("Dinner 83.93\nDessert 22.54")
+
+        with patch("getrichbot.bot.datetime") as fake_datetime:
+            fake_datetime.now.return_value = real_datetime(2026, 5, 24, 12, 0, 0)
+            fake_datetime.combine.side_effect = real_datetime.combine
+            handled = await bot.handle_multiline_text(update, context=None)
+
+        self.assertTrue(handled)
+        self.assertEqual(len(sheets.rows), 2)
+        self.assertEqual([str(row.amount) for row in sheets.rows], ["83.93", "22.54"])
+        self.assertTrue(all(row.category == "Food" for row in sheets.rows))
+        self.assertEqual([row.timestamp.date().isoformat() for row in sheets.rows], ["2026-05-24", "2026-05-24"])
 
 
 if __name__ == "__main__":

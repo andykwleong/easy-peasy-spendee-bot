@@ -201,6 +201,7 @@ food 60 19th May
 food 60 May 19
 food 60 19/5
 snacks 4.50
+groceries 63 and 15.20
 ```
 
 You can also upload a receipt, payment, or banking screenshot if `OPENAI_API_KEY` is configured. The bot will extract the likely expense and ask for confirmation before logging it.
@@ -223,6 +224,13 @@ Or one dated expense per line:
 17th May food 22.54
 16th May 25.18 food
 14th May 24.10 food
+```
+
+Or one undated expense per line. These default to today:
+
+```text
+Dinner 83.93
+Dessert 22.54
 ```
 
 Commands:
@@ -281,6 +289,8 @@ If Railway is running and `TELEGRAM_CHAT_ID` is set:
 
 - Shopping can be logged into sender-specific shopping categories based on your category config.
 - Priority keywords and aliases come from your category config.
+- A clear list of amounts under one category, such as `groceries 63 and 15.20`, logs as separate expense rows.
+- Multiple undated expense lines default to today's date.
 - A bare entry ID like `1d9c9a` opens the delete confirmation for that expense, so it will not be mistaken for a $9 expense.
 - Telegram summaries and the `Monthly Summary` tab are recalculated from `Raw Expenses`.
 - If a wrong month appears in `Monthly Summary`, correct the relevant `Date` and `Month` cells in `Raw Expenses`, then let the bot refresh the summary.

@@ -88,8 +88,11 @@ For Railway:
 1. Open your private `categories.json`.
 2. Copy the full JSON content.
 3. Paste it into a Railway variable named `CATEGORIES_JSON`.
+4. Redeploy or let Railway redeploy from the latest GitHub push.
 
 `categories.json` is ignored by Git, so your real household category list is not committed.
+
+When you add or change keywords locally, update Railway's `CATEGORIES_JSON` too. Otherwise the hosted bot will keep using the older Railway copy.
 
 Category config fields:
 
@@ -204,6 +207,8 @@ snacks 4.50
 groceries 63 and 15.20
 ```
 
+`groceries 63 and 15.20` logs two separate grocery rows for today. This is not bill splitting; it is just a quick way to enter multiple separate expenses under the same category.
+
 You can also upload a receipt, payment, or banking screenshot if `OPENAI_API_KEY` is configured. The bot will extract the likely expense and ask for confirmation before logging it.
 
 You can also send a voice note if `OPENAI_API_KEY` is configured. The bot will transcribe it, extract the likely expense, and ask for confirmation before logging it.
@@ -232,6 +237,8 @@ Or one undated expense per line. These default to today:
 Dinner 83.93
 Dessert 22.54
 ```
+
+Each line is logged as its own row. The bot uses your category keywords to decide the category, so words like `dessert` only work when they are included in your private category config.
 
 Commands:
 
@@ -291,6 +298,7 @@ If Railway is running and `TELEGRAM_CHAT_ID` is set:
 - Priority keywords and aliases come from your category config.
 - A clear list of amounts under one category, such as `groceries 63 and 15.20`, logs as separate expense rows.
 - Multiple undated expense lines default to today's date.
+- Category keyword changes must be copied to Railway's `CATEGORIES_JSON` for the hosted bot to use them.
 - A bare entry ID like `1d9c9a` opens the delete confirmation for that expense, so it will not be mistaken for a $9 expense.
 - Telegram summaries and the `Monthly Summary` tab are recalculated from `Raw Expenses`.
 - If a wrong month appears in `Monthly Summary`, correct the relevant `Date` and `Month` cells in `Raw Expenses`, then let the bot refresh the summary.

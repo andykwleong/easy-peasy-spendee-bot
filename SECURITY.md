@@ -27,6 +27,8 @@ Google service account JSON files are private credentials. Keep them outside the
 
 If a Telegram bot token, OpenAI API key, or Google service account key is exposed, rotate it immediately in the relevant provider dashboard and redeploy Railway with the new value.
 
+If your private category config is exposed, remove it from the public repo and update Railway's `CATEGORIES_JSON` if needed. Category names are not usually credentials, but they can still reveal personal household information.
+
 ## Access Control
 
 This bot is intended to be private. Configure only trusted Telegram user IDs in `ME_TELEGRAM_IDS` and `WIFE_TELEGRAM_IDS`.

@@ -28,6 +28,8 @@ Telegram processes messages and media according to Telegram's own service terms 
 
 Railway hosts the bot process when deployed. Railway environment variables should hold production secrets such as Telegram tokens, OpenAI keys, and Google service account JSON.
 
+Your private category configuration may also live in Railway as `CATEGORIES_JSON`. Do not commit your real `categories.json` file if your category names or keywords are personal.
+
 ## What The Bot Does Not Do
 
 - It does not publish your expenses publicly.

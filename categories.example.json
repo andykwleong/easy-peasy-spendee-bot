@@ -9,7 +9,8 @@
     "Shopping - Person B",
     "Transport",
     "Personal care",
-    "Entertainment"
+    "Entertainment",
+    "Gifts"
   ],
   "fixed_categories": [
     "Rent or mortgage",
@@ -24,7 +25,8 @@
     "Childcare": ["baby", "childcare", "diaper", "diapers", "formula"],
     "Transport": ["taxi", "petrol", "parking", "car", "transport", "train", "bus"],
     "Personal care": ["haircut", "salon", "skincare", "facial", "personal care"],
-    "Entertainment": ["movie", "cinema", "concert", "game", "games"]
+    "Entertainment": ["movie", "cinema", "concert", "game", "games"],
+    "Gifts": ["gift", "gifts", "present", "birthday"]
   },
   "priority_keywords": [
     {
@@ -53,6 +55,8 @@
     "electricity": "Utilities",
     "electricity bill": "Utilities",
     "utilities": "Utilities",
-    "insurance": "Insurance"
+    "insurance": "Insurance",
+    "gift": "Gifts",
+    "gifts": "Gifts"
   }
 }

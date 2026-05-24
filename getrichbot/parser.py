@@ -134,11 +134,11 @@ def _parse_single_expense(
     wife_label: str,
     reference_date: date,
 ) -> ExpenseDraft | None:
-    amount = _extract_amount(cleaned)
+    expense_date, without_date, needs_date_confirmation = _extract_expense_date(cleaned, reference_date)
+    amount = _extract_amount(without_date)
     if amount is None:
         return None
 
-    expense_date, without_date, needs_date_confirmation = _extract_expense_date(cleaned, reference_date)
     description = _description_without_amount(without_date)
     category, confidence = _categorize(description, logged_by, me_label, wife_label)
     return ExpenseDraft(
@@ -212,6 +212,15 @@ def extract_date_phrase(text: str, today: date | None = None) -> tuple[date | No
     reference_date = today or date.today()
     parsed, _, needs_confirmation = _extract_expense_date(text.strip(), reference_date)
     return parsed, needs_confirmation
+
+
+def categorize_description(
+    description: str,
+    logged_by: str,
+    me_label: str,
+    wife_label: str,
+) -> tuple[str | None, float]:
+    return _categorize(description, logged_by, me_label, wife_label)
 
 
 def _extract_expense_date(text: str, today: date) -> tuple[date | None, str, bool]:

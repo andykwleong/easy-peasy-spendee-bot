@@ -263,6 +263,10 @@ Plain-language shortcuts:
 - `confirm abc123`
 - `confirm abc123 as Food`
 - `confirm abc123 as Food on 2026-05-19`
+- `confirm 2`
+- `confirm 2 as Gifts`
+- `gift`
+- `change spend date to 21 May`
 - `summary`
 - `summary this month`
 - `summary last month`
@@ -299,6 +303,8 @@ If Railway is running and `TELEGRAM_CHAT_ID` is set:
 - A clear list of amounts under one category, such as `groceries 63 and 15.20`, logs as separate expense rows.
 - Multiple undated expense lines default to today's date.
 - Category keyword changes must be copied to Railway's `CATEGORIES_JSON` for the hosted bot to use them.
+- Follow-up replies can update pending entries, for example `gift` or `confirm 2 as Gifts`.
+- `change spend date to 21 May` updates the latest logged expense for that sender.
 - A bare entry ID like `1d9c9a` opens the delete confirmation for that expense, so it will not be mistaken for a $9 expense.
 - Telegram summaries and the `Monthly Summary` tab are recalculated from `Raw Expenses`.
 - If a wrong month appears in `Monthly Summary`, correct the relevant `Date` and `Month` cells in `Raw Expenses`, then let the bot refresh the summary.

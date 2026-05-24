@@ -18,7 +18,7 @@ from getrichbot.categories import ALL_CATEGORIES, CATEGORY_ALIASES, FIXED_CATEGO
 from getrichbot.config import Settings
 from getrichbot.image_utils import prepare_image_for_vision
 from getrichbot.models import ExpenseDraft, ExpenseRecord, ExpenseRow
-from getrichbot.parser import extract_date_phrase, extract_standalone_date, parse_expense, parse_expenses
+from getrichbot.parser import categorize_description, extract_date_phrase, extract_standalone_date, parse_expense, parse_expenses
 from getrichbot.sheets import SheetsClient
 from getrichbot.summary import build_spending_summary, format_spending_summary, parse_summary_period
 from getrichbot.summary import build_monthly_summary_table
@@ -337,6 +337,10 @@ class FinanceBot:
             await self._confirm_fixed_for_month(update, datetime.now(SINGAPORE_TZ).date())
             return True
 
+        if any(phrase in lowered for phrase in ["change spend date", "change spending date", "change logged date", "change expense date"]):
+            await self._change_latest_logged_date(update, text)
+            return True
+
         if lowered in {"undo", "undo last", "delete last", "remove last"}:
             logged_by = self.settings.label_for_user(update.effective_user.id)
             if logged_by is None:
@@ -432,6 +436,24 @@ class FinanceBot:
         if lowered in {"yes", "ok", "okay", "looks good", "correct", "log it", "confirm", "confirm them", "log them"}:
             await self._confirm_all_pending(update)
             return True
+
+        position_match = re.fullmatch(r"confirm\s+(\d+|first|second|third|fourth|fifth)(?:\s+(?:as\s+)?(.+))?", lowered)
+        if position_match is not None:
+            position = _position_from_text(position_match.group(1))
+            category = _normalize_category(position_match.group(2)) if position_match.group(2) else None
+            logged_lines = await self._confirm_pending_positions(update, [position], category)
+            if logged_lines:
+                await update.message.reply_text("\n\n".join(logged_lines))
+            else:
+                await update.message.reply_text(self._pending_summary(update, "That pending entry still needs a category:"))
+            return True
+
+        category_reply = _normalize_category(lowered)
+        if category_reply in VARIABLE_CATEGORIES:
+            changed = self._update_unclear_pending_categories(update, category_reply)
+            if changed:
+                await update.message.reply_text(self._pending_summary(update, f"Updated pending category to {category_reply}:"))
+                return True
 
         if any(phrase in lowered for phrase in ["change date", "date to", "make it", "make them", "both", "all", "were yesterday", "was yesterday"]):
             parsed_date, ambiguous = extract_date_phrase(text, today)
@@ -752,6 +774,37 @@ class FinanceBot:
         summary = build_spending_summary(records, period)
         await update.message.reply_text(format_spending_summary(summary))
 
+    async def _change_latest_logged_date(self, update: Update, text: str) -> None:
+        if update.message is None or update.effective_user is None:
+            return
+        logged_by = self.settings.label_for_user(update.effective_user.id)
+        if logged_by is None:
+            await update.message.reply_text("I do not recognize this Telegram user ID yet.")
+            return
+
+        parsed_date, ambiguous = extract_date_phrase(text, datetime.now(SINGAPORE_TZ).date())
+        if ambiguous:
+            await update.message.reply_text("That date is ambiguous. Try: change spend date to 2026-05-21 or 21 May.")
+            return
+        if parsed_date is None:
+            await update.message.reply_text("I could not read that date. Try: change spend date to 21 May.")
+            return
+
+        record = self.sheets.get_last_matching_record(self.settings.raw_expenses_sheet, logged_by)
+        if record is None:
+            await update.message.reply_text("I could not find a recent logged expense to update.")
+            return
+
+        self.sheets.update_expense_record(
+            self.settings.raw_expenses_sheet,
+            record.row_number,
+            expense_date=parsed_date.isoformat(),
+        )
+        self._refresh_monthly_summary(parsed_date.strftime("%Y-%m"))
+        await update.message.reply_text(
+            f"Updated {self._delete_candidate_line(record)} to {self._human_date(parsed_date)}."
+        )
+
     async def _ask_delete_confirmation(
         self,
         update: Update,
@@ -1052,6 +1105,7 @@ class FinanceBot:
                 f"{self._human_date(date_value)} - {pending.draft.description} [{pending_id}]"
             )
         lines.append("Reply: confirm all")
+        lines.append("Or: confirm 2 as Food")
         return "\n\n".join(lines)
 
     async def _handle_ai_pending_instruction(self, update: Update, text: str) -> bool:
@@ -1129,21 +1183,58 @@ class FinanceBot:
                 reason=pending.reason,
             )
 
-    async def _confirm_pending_positions(self, update: Update, positions: list[int]) -> list[str]:
+    def _update_unclear_pending_categories(self, update: Update, category: str) -> bool:
+        changed = False
+        for pending_id, pending in self._matching_pending(update):
+            if pending.draft.category in VARIABLE_CATEGORIES:
+                continue
+            draft = pending.draft
+            self.pending[pending_id] = PendingExpense(
+                draft=ExpenseDraft(
+                    raw_input=draft.raw_input,
+                    amount=draft.amount,
+                    category=category,
+                    description=draft.description,
+                    confidence=max(draft.confidence, 0.95),
+                    expense_date=draft.expense_date,
+                    needs_date_confirmation=draft.needs_date_confirmation,
+                ),
+                logged_by=pending.logged_by,
+                chat_id=pending.chat_id,
+                message_id=pending.message_id,
+                created_at=pending.created_at,
+                reason=pending.reason,
+            )
+            changed = True
+        return changed
+
+    async def _confirm_pending_positions(self, update: Update, positions: list[int], category_override: str | None = None) -> list[str]:
         matching = self._matching_pending(update)
         logged_lines = []
         for position in sorted(set(positions), reverse=True):
             if position < 1 or position > len(matching):
                 continue
             pending_id, pending = matching[position - 1]
-            if pending.draft.category not in VARIABLE_CATEGORIES:
+            category = category_override or pending.draft.category or self._infer_pending_category(pending)
+            if category not in VARIABLE_CATEGORIES:
                 continue
             self.pending.pop(pending_id, None)
-            row = self._expense_row_from_pending(pending, pending.draft.category, "Confirmed", pending.reason.title(), None)
+            row = self._expense_row_from_pending(pending, category, "Confirmed", pending.reason.title(), None)
             logged_line = await self._append_or_hold_duplicate(update, row)
             if logged_line:
                 logged_lines.append(logged_line)
         return list(reversed(logged_lines))
+
+    def _infer_pending_category(self, pending: PendingExpense) -> str | None:
+        category, confidence = categorize_description(
+            pending.draft.description,
+            pending.logged_by,
+            self.settings.me_label,
+            self.settings.wife_label,
+        )
+        if confidence >= 0.7:
+            return category
+        return None
 
     async def _confirm_all_pending(self, update: Update) -> None:
         if update.message is None or update.effective_user is None:
@@ -1265,6 +1356,20 @@ def _normalize_category(raw: str) -> str:
         if category.lower().startswith(lowered):
             return category
     return raw
+
+
+def _position_from_text(raw: str) -> int:
+    positions = {
+        "first": 1,
+        "second": 2,
+        "third": 3,
+        "fourth": 4,
+        "fifth": 5,
+    }
+    lowered = raw.strip().lower()
+    if lowered in positions:
+        return positions[lowered]
+    return int(lowered)
 
 
 def _looks_like_ai_request(text: str) -> bool:

@@ -19,6 +19,7 @@ DEFAULT_CATEGORY_CONFIG: dict[str, Any] = {
         "Transport",
         "Personal care",
         "Entertainment",
+        "Gifts",
     ],
     "fixed_categories": [
         "Rent or mortgage",
@@ -34,6 +35,7 @@ DEFAULT_CATEGORY_CONFIG: dict[str, Any] = {
         "Transport": ["taxi", "petrol", "parking", "car", "transport", "train", "bus"],
         "Personal care": ["haircut", "salon", "skincare", "facial", "personal care"],
         "Entertainment": ["movie", "cinema", "concert", "game", "games"],
+        "Gifts": ["gift", "gifts", "present", "birthday"],
     },
     "priority_keywords": [
         {"category": "Childcare", "keywords": ["baby", "childcare", "diaper", "diapers", "formula"]},
@@ -54,6 +56,8 @@ DEFAULT_CATEGORY_CONFIG: dict[str, Any] = {
         "electricity bill": "Utilities",
         "utilities": "Utilities",
         "insurance": "Insurance",
+        "gift": "Gifts",
+        "gifts": "Gifts",
     },
 }
 

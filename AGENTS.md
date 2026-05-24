@@ -43,6 +43,8 @@ This file contains project-specific instructions for coding agents working on Ge
 - If local category keywords change, remind Andy to update Railway's `CATEGORIES_JSON` because `categories.json` is private and ignored by Git.
 - A message with one clear category and multiple listed amounts, for example `groceries 63 and 15.20`, should log separate rows for each amount. This is not split-bill behavior.
 - Multiple undated expense lines should log as separate rows dated today.
+- Date-like text such as `21 May` should be removed before amount selection, so `30 gifts spent on 21 May` logs `$30`, not `$21`.
+- Follow-up replies should handle normal wording such as `confirm 2`, `gift`, and `change spend date to 21 May`.
 - A bare 6-character entry ID should be treated as a delete lookup, not parsed as an expense amount.
 
 ## Deployment

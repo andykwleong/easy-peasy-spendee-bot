@@ -51,6 +51,14 @@ class TestParser(unittest.TestCase):
         self.assertEqual(drafts[0].amount, Decimal("60"))
         self.assertEqual(drafts[0].category, "Food")
 
+    def test_date_is_removed_before_amount_selection(self):
+        draft = parse_expense("30 gifts spent on 21 may", "Me", "Me", "My wife", today=date(2026, 5, 24))
+
+        self.assertIsNotNone(draft)
+        self.assertEqual(draft.amount, Decimal("30"))
+        self.assertEqual(draft.category, "Gifts")
+        self.assertEqual(draft.expense_date, date(2026, 5, 21))
+
     def test_parse_shopping_for_me(self):
         draft = parse_expense("uniqlo 120", "Me", "Me", "My wife")
 

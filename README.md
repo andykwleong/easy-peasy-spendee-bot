@@ -105,6 +105,14 @@ shopping,Shopping - Sender,Normal,TRUE
 
 The category names in `Raw Expenses`, `Fixed Expenses`, `Categories`, and `Category Keywords` should match exactly.
 
+Category loading order:
+
+1. The bot first tries the Google Sheet tabs named by `CATEGORIES_SHEET` and `CATEGORY_KEYWORDS_SHEET`.
+2. If those tabs are missing or empty, it can fall back to `CATEGORIES_JSON`.
+3. If `CATEGORIES_JSON` is also empty, it can fall back to a local categories file or the public example defaults.
+
+Leaving `CATEGORIES_JSON` in Railway is fine as a backup, but the Google Sheet tabs are the main setup. If `/categories` shows old categories, check that the Sheet tabs are named correctly and that any old Railway fallback value is not hiding a Sheet setup problem.
+
 The public repo still includes [categories.example.json](categories.example.json) as a fallback/template for open-source users who do not want to use Google Sheet category tabs.
 
 ## Setup
@@ -167,6 +175,8 @@ OPENAI_MODEL=gpt-5.4-mini
 ```
 
 Never commit real secrets. Keep them in Railway variables or your local `.env`.
+
+For categories, most users should only set `CATEGORIES_SHEET` and `CATEGORY_KEYWORDS_SHEET`. `CATEGORIES_FILE` and `CATEGORIES_JSON` are optional fallback options for people who do not want to manage categories in Google Sheets.
 
 ## Telegram Usage
 

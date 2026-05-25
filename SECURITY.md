@@ -30,6 +30,8 @@ If a Telegram bot token, OpenAI API key, or Google service account key is expose
 
 If your private category config is exposed, remove it from the public repo and review your Google Sheet sharing settings. Category names are not usually credentials, but they can still reveal personal household information.
 
+Category setup should normally live in the private Google Sheet `Categories` and `Category Keywords` tabs. Keeping `CATEGORIES_JSON` in Railway is acceptable as a private fallback, but treat it like sensitive configuration, keep it updated if you use it, and remove it if it becomes stale or confusing.
+
 ## Access Control
 
 This bot is intended to be private. Configure only trusted Telegram user IDs in `ME_TELEGRAM_IDS` and `WIFE_TELEGRAM_IDS`.

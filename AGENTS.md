@@ -39,6 +39,7 @@ This file contains project-specific instructions for coding agents working on Ge
 - Avoid duplicate fixed expense inserts for the same category and month.
 - Delete operations must be confirmation-based. Show the matched expense and wait for explicit confirmation before deleting from Google Sheets.
 - User-specific categories should live in the Google Sheet `Categories` and `Category Keywords` tabs; do not hardcode personal category lists in public source.
+- Category loading order is Google Sheet tabs first, then `CATEGORIES_JSON`, then local/example fallback. A stale Railway `CATEGORIES_JSON` value can hide a Sheet tab setup issue, so mention this when debugging category surprises.
 - Category priority keywords and aliases should come from the Google Sheet category tabs and should beat generic category matching.
 - A message with one clear category and multiple listed amounts, for example `groceries 63 and 15.20`, should log separate rows for each amount. This is not split-bill behavior.
 - Multiple undated expense lines should log as separate rows dated today.

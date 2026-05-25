@@ -129,6 +129,42 @@ def _validate_config(config: dict[str, Any]) -> None:
         raise RuntimeError(f"Category config references unknown categories: {unique}")
 
 
+def configure_category_config(config: dict[str, Any]) -> None:
+    variable_categories = _string_list(config.get("variable_categories", []))
+    fixed_categories = _string_list(config.get("fixed_categories", []))
+    all_categories = variable_categories + fixed_categories
+    category_keywords = _keyword_map(config.get("category_keywords", {}))
+    priority_keywords = _priority_keywords(config.get("priority_keywords", []))
+    shopping_keywords = _string_list(config.get("shopping_keywords", []))
+    shopping_categories = _string_map(config.get("shopping_categories", {}))
+    category_aliases = _string_map(config.get("category_aliases", {}))
+
+    if not variable_categories:
+        raise RuntimeError("Category config must include at least one variable category.")
+
+    missing = [
+        category
+        for category in [*category_keywords.keys(), *shopping_categories.values(), *category_aliases.values()]
+        if category and category not in all_categories
+    ]
+    missing.extend(category for category, _ in priority_keywords if category not in all_categories)
+    if missing:
+        unique = ", ".join(sorted(set(missing)))
+        raise RuntimeError(f"Category config references unknown categories: {unique}")
+
+    VARIABLE_CATEGORIES[:] = variable_categories
+    FIXED_CATEGORIES[:] = fixed_categories
+    ALL_CATEGORIES[:] = all_categories
+    CATEGORY_KEYWORDS.clear()
+    CATEGORY_KEYWORDS.update(category_keywords)
+    BILL_PRIORITY_KEYWORDS[:] = priority_keywords
+    SHOPPING_KEYWORDS[:] = shopping_keywords
+    SHOPPING_CATEGORIES.clear()
+    SHOPPING_CATEGORIES.update(shopping_categories)
+    CATEGORY_ALIASES.clear()
+    CATEGORY_ALIASES.update(category_aliases)
+
+
 def category_guidance_text() -> str:
     parts: list[str] = []
     if BILL_PRIORITY_KEYWORDS:

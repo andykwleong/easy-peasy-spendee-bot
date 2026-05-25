@@ -65,6 +65,64 @@ class SheetsClient:
             )
         return expenses
 
+    def get_category_config(self, categories_sheet: str, keywords_sheet: str) -> dict[str, Any]:
+        category_rows = self._get_values_first_available(
+            [categories_sheet, "Categories", "categories"],
+            "A2:D",
+        )
+        keyword_rows = self._get_values_first_available(
+            [keywords_sheet, "Category Keywords", "Category Keyword", "Categories Keyword", "categories keyword"],
+            "A2:D",
+        )
+
+        variable_categories: list[str] = []
+        fixed_categories: list[str] = []
+        shopping_categories: dict[str, str] = {}
+
+        for row in category_rows:
+            category = _cell(row, 0)
+            category_type = _cell(row, 1).lower()
+            active = _cell(row, 2).lower()
+            shopping_owner = _cell(row, 3).lower()
+            if not category or active not in {"true", "yes", "y", "1"}:
+                continue
+            if category_type == "fixed":
+                fixed_categories.append(category)
+            else:
+                variable_categories.append(category)
+            if shopping_owner:
+                shopping_categories[shopping_owner] = category
+
+        category_keywords: dict[str, list[str]] = {}
+        priority_keywords: list[dict[str, Any]] = []
+        category_aliases: dict[str, str] = {}
+        shopping_keywords: list[str] = []
+
+        for row in keyword_rows:
+            keyword = _cell(row, 0).lower()
+            category = _cell(row, 1)
+            priority = _cell(row, 2).lower()
+            active = _cell(row, 3).lower()
+            if not keyword or not category or active not in {"true", "yes", "y", "1"}:
+                continue
+            if category.lower() == "shopping - sender":
+                shopping_keywords.append(keyword)
+                continue
+            category_keywords.setdefault(category, []).append(keyword)
+            category_aliases[keyword] = category
+            if priority == "priority":
+                priority_keywords.append({"category": category, "keywords": [keyword]})
+
+        return {
+            "variable_categories": variable_categories,
+            "fixed_categories": fixed_categories,
+            "category_keywords": category_keywords,
+            "priority_keywords": priority_keywords,
+            "shopping_keywords": shopping_keywords,
+            "shopping_categories": shopping_categories,
+            "category_aliases": category_aliases,
+        }
+
     def delete_last_matching_row(self, sheet_name: str, logged_by: str) -> bool:
         record = self.get_last_matching_record(sheet_name, logged_by)
         if record is None:
@@ -258,6 +316,22 @@ class SheetsClient:
             if properties.get("title") == sheet_name:
                 return properties["sheetId"]
         return None
+
+    def _get_values_first_available(self, sheet_names: list[str], cell_range: str) -> list[list[str]]:
+        seen = []
+        for sheet_name in sheet_names:
+            if not sheet_name or sheet_name in seen:
+                continue
+            seen.append(sheet_name)
+            try:
+                result = self._service().spreadsheets().values().get(
+                    spreadsheetId=self.sheet_id,
+                    range=f"{sheet_name}!{cell_range}",
+                ).execute()
+            except Exception:
+                continue
+            return result.get("values", [])
+        return []
 
 
 def _cell(row: list[str], index: int) -> str:

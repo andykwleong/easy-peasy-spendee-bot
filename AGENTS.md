@@ -38,9 +38,8 @@ This file contains project-specific instructions for coding agents working on Ge
 - Scheduled monthly reminders/summaries run at 9am Singapore time when `TELEGRAM_CHAT_ID` is configured.
 - Avoid duplicate fixed expense inserts for the same category and month.
 - Delete operations must be confirmation-based. Show the matched expense and wait for explicit confirmation before deleting from Google Sheets.
-- User-specific categories should live in private config through `categories.json`, `CATEGORIES_FILE`, or Railway's `CATEGORIES_JSON`; do not hardcode personal category lists in public source.
-- Category priority keywords and aliases should come from category config and should beat generic category matching.
-- If local category keywords change, remind Andy to update Railway's `CATEGORIES_JSON` because `categories.json` is private and ignored by Git.
+- User-specific categories should live in the Google Sheet `Categories` and `Category Keywords` tabs; do not hardcode personal category lists in public source.
+- Category priority keywords and aliases should come from the Google Sheet category tabs and should beat generic category matching.
 - A message with one clear category and multiple listed amounts, for example `groceries 63 and 15.20`, should log separate rows for each amount. This is not split-bill behavior.
 - Multiple undated expense lines should log as separate rows dated today.
 - Date-like text such as `21 May` should be removed before amount selection, so `30 gifts spent on 21 May` logs `$30`, not `$21`.

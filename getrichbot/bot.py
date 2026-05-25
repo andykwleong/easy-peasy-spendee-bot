@@ -14,7 +14,7 @@ from datetime import timedelta
 from time import perf_counter
 from zoneinfo import ZoneInfo
 
-from getrichbot.categories import ALL_CATEGORIES, CATEGORY_ALIASES, FIXED_CATEGORIES, VARIABLE_CATEGORIES
+from getrichbot.categories import ALL_CATEGORIES, CATEGORY_ALIASES, FIXED_CATEGORIES, VARIABLE_CATEGORIES, configure_category_config
 from getrichbot.config import Settings
 from getrichbot.image_utils import prepare_image_for_vision
 from getrichbot.models import ExpenseDraft, ExpenseRecord, ExpenseRow
@@ -1409,6 +1409,16 @@ def main() -> None:
         service_account_file=settings.service_account_file,
         service_account_json=settings.service_account_json,
     )
+    sheet_category_config = sheets.get_category_config(settings.categories_sheet, settings.category_keywords_sheet)
+    if sheet_category_config.get("variable_categories"):
+        configure_category_config(sheet_category_config)
+        LOGGER.info(
+            "Loaded %d variable and %d fixed categories from Google Sheets.",
+            len(VARIABLE_CATEGORIES),
+            len(FIXED_CATEGORIES),
+        )
+    else:
+        LOGGER.warning("No categories found in Google Sheets. Falling back to JSON/default category config.")
     finance_bot = FinanceBot(settings, sheets)
 
     print("Loading Telegram library...", flush=True)

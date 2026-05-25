@@ -18,6 +18,7 @@ Sensitive values should live in Railway variables or a local `.env` file that is
 - `GOOGLE_SERVICE_ACCOUNT_JSON`
 - `CATEGORIES_JSON`
 - private `categories.json` files
+- private category setup in Google Sheets
 - `ME_TELEGRAM_IDS`
 - `WIFE_TELEGRAM_IDS`
 - `TELEGRAM_CHAT_ID`
@@ -27,7 +28,7 @@ Google service account JSON files are private credentials. Keep them outside the
 
 If a Telegram bot token, OpenAI API key, or Google service account key is exposed, rotate it immediately in the relevant provider dashboard and redeploy Railway with the new value.
 
-If your private category config is exposed, remove it from the public repo and update Railway's `CATEGORIES_JSON` if needed. Category names are not usually credentials, but they can still reveal personal household information.
+If your private category config is exposed, remove it from the public repo and review your Google Sheet sharing settings. Category names are not usually credentials, but they can still reveal personal household information.
 
 ## Access Control
 

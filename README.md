@@ -75,60 +75,37 @@ The bot creates this tab automatically when needed. It stores small markers so R
 
 ## Category Setup
 
-Categories are user-specific and should stay private. The public repo includes [categories.example.json](categories.example.json) only as a safe template.
+Categories are user-specific and should stay private. The recommended setup is to store categories in your Google Sheet so you can edit them without changing code or Railway variables.
 
-For local use:
+Create a `Categories` tab:
 
-1. Copy `categories.example.json` to `categories.json`.
-2. Edit `categories.json` with your own categories and keywords.
-3. Keep `CATEGORIES_FILE=categories.json` in `.env`.
-
-For Railway:
-
-1. Open your private `categories.json`.
-2. Copy the full JSON content.
-3. Paste it into a Railway variable named `CATEGORIES_JSON`.
-4. Redeploy or let Railway redeploy from the latest GitHub push.
-
-`categories.json` is ignored by Git, so your real household category list is not committed.
-
-When you add or change keywords locally, update Railway's `CATEGORIES_JSON` too. Otherwise the hosted bot will keep using the older Railway copy.
-
-Category config fields:
-
-- `variable_categories` - normal expense categories users can log from Telegram.
-- `fixed_categories` - monthly recurring categories shown in the `Fixed Expenses` sheet.
-- `category_keywords` - words that help the bot choose a category.
-- `priority_keywords` - category rules that should win before general matching, for example baby-related items before shopping.
-- `shopping_keywords` - words that count as shopping.
-- `shopping_categories` - sender-based shopping categories for `me` and `wife`.
-- `category_aliases` - short names users can say when confirming or editing categories.
-
-Example:
-
-```json
-{
-  "variable_categories": ["Food", "Groceries", "Utilities", "Shopping - Person A", "Shopping - Person B"],
-  "fixed_categories": ["Rent or mortgage", "Subscriptions"],
-  "category_keywords": {
-    "Food": ["dinner", "lunch", "coffee"],
-    "Utilities": ["electricity", "water bill"]
-  },
-  "priority_keywords": [
-    {"category": "Utilities", "keywords": ["electricity", "water bill"]}
-  ],
-  "shopping_keywords": ["shopping", "shoes", "clothes"],
-  "shopping_categories": {
-    "me": "Shopping - Person A",
-    "wife": "Shopping - Person B"
-  },
-  "category_aliases": {
-    "electricity": "Utilities"
-  }
-}
+```text
+Category,Type,Active,Shopping Owner
+Food,Variable,TRUE,
+Groceries,Variable,TRUE,
+Shopping - Person A,Variable,TRUE,me
+Shopping - Person B,Variable,TRUE,wife
+Rent or mortgage,Fixed,TRUE,
 ```
 
-The category names in your Google Sheet must match the names in your category config.
+Create a `Category Keywords` tab:
+
+```text
+Keyword,Category,Priority,Active
+dinner,Food,Normal,TRUE
+lunch,Food,Normal,TRUE
+grocery,Groceries,Normal,TRUE
+electricity,Utilities,Priority,TRUE
+shopping,Shopping - Sender,Normal,TRUE
+```
+
+`Shopping - Sender` is special. It means the bot should use the category marked `me` or `wife` in the `Shopping Owner` column.
+
+`Priority` keywords are checked before normal shopping/generic matching. Use them for important overrides, such as baby-related items or specific utility bills.
+
+The category names in `Raw Expenses`, `Fixed Expenses`, `Categories`, and `Category Keywords` should match exactly.
+
+The public repo still includes [categories.example.json](categories.example.json) as a fallback/template for open-source users who do not want to use Google Sheet category tabs.
 
 ## Setup
 
@@ -172,6 +149,8 @@ TELEGRAM_BOT_TOKEN=
 GOOGLE_SHEET_ID=
 GOOGLE_SERVICE_ACCOUNT_FILE=
 GOOGLE_SERVICE_ACCOUNT_JSON=
+CATEGORIES_SHEET=Categories
+CATEGORY_KEYWORDS_SHEET=Category Keywords
 CATEGORIES_FILE=categories.json
 CATEGORIES_JSON=
 ME_TELEGRAM_IDS=
@@ -302,7 +281,7 @@ If Railway is running and `TELEGRAM_CHAT_ID` is set:
 - Priority keywords and aliases come from your category config.
 - A clear list of amounts under one category, such as `groceries 63 and 15.20`, logs as separate expense rows.
 - Multiple undated expense lines default to today's date.
-- Category keyword changes must be copied to Railway's `CATEGORIES_JSON` for the hosted bot to use them.
+- Category changes should be made in the `Categories` and `Category Keywords` Google Sheet tabs.
 - Follow-up replies can update pending entries, for example `gift` or `confirm 2 as Gifts`.
 - `change spend date to 21 May` updates the latest logged expense for that sender.
 - A bare entry ID like `1d9c9a` opens the delete confirmation for that expense, so it will not be mistaken for a $9 expense.

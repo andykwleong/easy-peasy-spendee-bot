@@ -31,6 +31,8 @@ class Settings:
     fixed_expenses_sheet: str
     monthly_summary_sheet: str
     bot_state_sheet: str
+    categories_sheet: str
+    category_keywords_sheet: str
     telegram_chat_id: int | None
     openai_api_key: str | None
     openai_model: str
@@ -59,6 +61,8 @@ class Settings:
             fixed_expenses_sheet=os.getenv("FIXED_EXPENSES_SHEET", "Fixed Expenses"),
             monthly_summary_sheet=os.getenv("MONTHLY_SUMMARY_SHEET", "Monthly Summary"),
             bot_state_sheet=os.getenv("BOT_STATE_SHEET", "Bot State"),
+            categories_sheet=os.getenv("CATEGORIES_SHEET", "Categories"),
+            category_keywords_sheet=os.getenv("CATEGORY_KEYWORDS_SHEET", "Category Keywords"),
             telegram_chat_id=_optional_int("TELEGRAM_CHAT_ID"),
             openai_api_key=os.getenv("OPENAI_API_KEY") or None,
             openai_model=os.getenv("OPENAI_MODEL", "gpt-5.4-mini"),

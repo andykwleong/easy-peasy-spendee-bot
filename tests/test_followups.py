@@ -2,6 +2,7 @@ import unittest
 from decimal import Decimal
 
 from getrichbot.bot import FinanceBot
+from getrichbot.ai import EntryUpdate, ExpenseIntent
 from getrichbot.models import ExpenseDraft, ExpenseRecord
 
 
@@ -11,6 +12,7 @@ class FakeSettings:
     me_label = "Me"
     wife_label = "My wife"
     openai_api_key = None
+    openai_model = "test-model"
 
     def label_for_user(self, telegram_user_id):
         return "My wife" if telegram_user_id == 456 else None
@@ -92,6 +94,28 @@ def record() -> ExpenseRecord:
 
 
 class TestFollowups(unittest.IsolatedAsyncioTestCase):
+    async def test_change_multiple_pending_categories_keeps_items_pending(self):
+        sheets = FakeSheets()
+        bot = FinanceBot(FakeSettings(), sheets)
+        update = FakeUpdate("Change 3 to groceries and change 5 to food")
+        bot.pending = {
+            "one111": bot_pending("2", "Old Chang Kee", "Food"),
+            "two222": bot_pending("57.20", "CS Fresh", "Groceries"),
+            "three3": bot_pending("60.70", "Nai Nai Flavour", "Food"),
+            "four44": bot_pending("15.82", "Sheng Siong", "Groceries"),
+            "five55": bot_pending("30.81", "Paradise Classic", "Groceries"),
+        }
+
+        handled = await bot.handle_pending_update(update)
+
+        self.assertTrue(handled)
+        self.assertEqual(sheets.rows, [])
+        self.assertEqual(bot.pending["three3"].draft.category, "Groceries")
+        self.assertEqual(bot.pending["five55"].draft.category, "Food")
+        self.assertIn("Updated pending entries:", update.message.replies[0])
+        self.assertIn("3. $60.70 to Groceries", update.message.replies[0])
+        self.assertIn("5. $30.81 to Food", update.message.replies[0])
+
     async def test_confirm_number_confirms_pending_position(self):
         sheets = FakeSheets()
         bot = FinanceBot(FakeSettings(), sheets)
@@ -130,12 +154,51 @@ class TestFollowups(unittest.IsolatedAsyncioTestCase):
         handled = await bot.handle_plain_language_command(update)
 
         self.assertTrue(handled)
+        self.assertEqual(sheets.updated, [])
+        self.assertIn("Change this expense?", update.message.replies[0])
+        self.assertIn("After: $30.00 logged as Gifts - 21 May 2026 [4bea7c]", update.message.replies[0])
+
+        update.message = FakeMessage("yes")
+        handled = await bot.handle_plain_language_command(update)
+
+        self.assertTrue(handled)
         self.assertEqual(sheets.updated[0]["row_number"], 5)
         self.assertEqual(sheets.updated[0]["expense_date"], "2026-05-21")
         self.assertIn("Updated $30.00 logged as Gifts", update.message.replies[0])
 
+    async def test_ai_edit_requires_confirmation_before_updating_sheet(self):
+        class AISettings(FakeSettings):
+            openai_api_key = "test-key"
 
-def bot_pending(amount: str, description: str):
+        class FakeAI:
+            def interpret(self, message, records, today, logged_by):
+                return ExpenseIntent(
+                    action="edit",
+                    updates=[
+                        EntryUpdate(entry_id="4bea7c", category="Food"),
+                    ],
+                )
+
+        sheets = FakeSheets(records=[record()])
+        bot = FinanceBot(AISettings(), sheets)
+        bot.ai = FakeAI()
+        update = FakeUpdate("change the category to food")
+
+        handled = await bot.handle_ai_command(update)
+
+        self.assertTrue(handled)
+        self.assertEqual(sheets.updated, [])
+        self.assertIn("Change this expense?", update.message.replies[0])
+        self.assertIn("After: $30.00 logged as Food", update.message.replies[0])
+
+        update.message = FakeMessage("yes")
+        handled = await bot.handle_plain_language_command(update)
+
+        self.assertTrue(handled)
+        self.assertEqual(sheets.updated[0]["category"], "Food")
+
+
+def bot_pending(amount: str, description: str, category: str | None = None):
     from datetime import datetime
 
     from getrichbot.bot import PendingExpense
@@ -144,7 +207,7 @@ def bot_pending(amount: str, description: str):
         draft=ExpenseDraft(
             raw_input=description,
             amount=Decimal(amount),
-            category=None,
+            category=category,
             description=description,
             confidence=0,
         ),

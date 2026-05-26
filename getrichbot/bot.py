@@ -85,6 +85,23 @@ class PendingDuplicate:
     created_at: datetime
 
 
+@dataclass
+class PendingEditChange:
+    record: ExpenseRecord
+    amount: Decimal | None = None
+    category: str | None = None
+    description: str | None = None
+    expense_date: str | None = None
+
+
+@dataclass
+class PendingEdit:
+    changes: list[PendingEditChange]
+    chat_id: int
+    requested_by_user_id: int
+    created_at: datetime
+
+
 class FinanceBot:
     def __init__(self, settings: Settings, sheets: SheetsClient):
         self.settings = settings
@@ -92,6 +109,7 @@ class FinanceBot:
         self.pending: dict[str, PendingExpense] = {}
         self.pending_deletes: dict[tuple[int, int], PendingDelete] = {}
         self.pending_duplicates: dict[tuple[int, int], PendingDuplicate] = {}
+        self.pending_edits: dict[tuple[int, int], PendingEdit] = {}
         self.ai = None
 
     def _ai(self):
@@ -279,7 +297,7 @@ class FinanceBot:
             return True
 
         if intent.action == "edit":
-            changed = []
+            changes = []
             for update_item in intent.updates:
                 record = by_id.get(update_item.entry_id)
                 if record is None:
@@ -295,18 +313,15 @@ class FinanceBot:
                     except InvalidOperation:
                         await update.message.reply_text(f"I could not read this amount: {update_item.amount}")
                         return True
-                self.sheets.update_expense_record(
-                    self.settings.raw_expenses_sheet,
-                    record.row_number,
+                changes.append(PendingEditChange(
+                    record=record,
                     amount=amount,
                     category=category,
                     description=update_item.description,
                     expense_date=update_item.date,
-                )
-                changed.append(update_item.entry_id)
-            if changed:
-                self._refresh_monthly_summary()
-                await update.message.reply_text("Updated: " + ", ".join(changed))
+                ))
+            if changes:
+                await self._ask_edit_confirmation(update, changes)
             else:
                 await update.message.reply_text("I could not find a matching entry to update.")
             return True
@@ -318,6 +333,9 @@ class FinanceBot:
             return False
         text = (update.message.text or "").strip()
         lowered = text.lower()
+
+        if await self._handle_pending_edit_reply(update, lowered):
+            return True
 
         if await self._handle_pending_delete_reply(update, lowered):
             return True
@@ -437,6 +455,19 @@ class FinanceBot:
             await self._confirm_all_pending(update)
             return True
 
+        category_updates, invalid_categories = self._parse_pending_category_changes(lowered, len(matching))
+        if invalid_categories:
+            await update.message.reply_text(
+                "I do not recognize this category: "
+                + ", ".join(invalid_categories)
+                + "\n\nSend: categories"
+            )
+            return True
+        if category_updates:
+            self._update_pending_position_categories(update, category_updates)
+            await update.message.reply_text(self._pending_summary(update, "Updated pending entries:"))
+            return True
+
         position_match = re.fullmatch(r"confirm\s+(\d+|first|second|third|fourth|fifth)(?:\s+(?:as\s+)?(.+))?", lowered)
         if position_match is not None:
             position = _position_from_text(position_match.group(1))
@@ -470,6 +501,12 @@ class FinanceBot:
             handled = await self._handle_ai_pending_instruction(update, text)
             if handled:
                 return True
+
+        if _looks_like_pending_position_request(lowered):
+            await update.message.reply_text(
+                self._pending_summary(update, "I could not apply that change. Current pending entries:")
+            )
+            return True
 
         return False
 
@@ -795,15 +832,71 @@ class FinanceBot:
             await update.message.reply_text("I could not find a recent logged expense to update.")
             return
 
-        self.sheets.update_expense_record(
-            self.settings.raw_expenses_sheet,
-            record.row_number,
-            expense_date=parsed_date.isoformat(),
+        await self._ask_edit_confirmation(
+            update,
+            [PendingEditChange(record=record, expense_date=parsed_date.isoformat())],
         )
-        self._refresh_monthly_summary(parsed_date.strftime("%Y-%m"))
-        await update.message.reply_text(
-            f"Updated {self._delete_candidate_line(record)} to {self._human_date(parsed_date)}."
+
+    async def _ask_edit_confirmation(self, update: Update, changes: list[PendingEditChange]) -> None:
+        if update.message is None or update.effective_user is None:
+            return
+        key = (update.effective_chat.id, update.effective_user.id)
+        self.pending_edits[key] = PendingEdit(
+            changes=changes,
+            chat_id=update.effective_chat.id,
+            requested_by_user_id=update.effective_user.id,
+            created_at=datetime.now(SINGAPORE_TZ),
         )
+        title = "Change this expense?" if len(changes) == 1 else "Change these expenses?"
+        lines = [title]
+        for index, change in enumerate(changes, start=1):
+            prefix = f"{index}. " if len(changes) > 1 else ""
+            lines.append(f"{prefix}Before: {self._delete_candidate_line(change.record)}")
+            lines.append(f"{prefix}After: {self._edit_after_line(change)}")
+        lines.append("Reply: yes to update, or cancel.")
+        await update.message.reply_text("\n\n".join(lines))
+
+    async def _handle_pending_edit_reply(self, update: Update, lowered: str) -> bool:
+        if update.message is None or update.effective_user is None:
+            return False
+        key = (update.effective_chat.id, update.effective_user.id)
+        pending = self.pending_edits.get(key)
+        if pending is None:
+            return False
+
+        if lowered in {"cancel", "no", "stop", "never mind", "nevermind"}:
+            self.pending_edits.pop(key, None)
+            await update.message.reply_text("Update cancelled.")
+            return True
+
+        if lowered not in {"yes", "y", "confirm", "update", "update it", "confirm update"}:
+            return False
+
+        self.pending_edits.pop(key, None)
+        updated_lines = []
+        for change in pending.changes:
+            self.sheets.update_expense_record(
+                self.settings.raw_expenses_sheet,
+                change.record.row_number,
+                amount=change.amount,
+                category=change.category,
+                description=change.description,
+                expense_date=change.expense_date,
+            )
+            updated_lines.append(f"Updated {self._edit_after_line(change)}")
+        self._refresh_monthly_summary()
+        await update.message.reply_text("\n\n".join(updated_lines))
+        return True
+
+    def _edit_after_line(self, change: PendingEditChange) -> str:
+        amount = change.amount if change.amount is not None else change.record.amount
+        category = change.category or change.record.category
+        date_value = change.expense_date or change.record.expense_date
+        try:
+            date_text = datetime.fromisoformat(date_value).strftime("%-d %B %Y")
+        except ValueError:
+            date_text = date_value
+        return f"${amount:.2f} logged as {category} - {date_text} [{change.record.entry_id}]"
 
     async def _ask_delete_confirmation(
         self,
@@ -1183,6 +1276,58 @@ class FinanceBot:
                 reason=pending.reason,
             )
 
+    def _parse_pending_category_changes(self, text: str, pending_count: int) -> tuple[dict[int, str], list[str]]:
+        if not any(word in text for word in ["change", "update", "make"]):
+            return {}, []
+
+        position_words = "first|second|third|fourth|fifth|last|\\d+"
+        pattern = re.compile(
+            rf"(?:\b(?:change|update|make)\s+)?"
+            rf"(?P<position>{position_words})"
+            rf"(?:\s*(?:entry|one))?\s+"
+            rf"(?:to|as)\s+"
+            rf"(?P<category>[a-z][a-z0-9 /&().+-]*?)"
+            rf"(?=(?:\s*(?:,|and)\s*(?:(?:change|update|make)\s+)?(?:{position_words})"
+            rf"(?:\s*(?:entry|one))?\s+(?:to|as)\s+)|$)"
+        )
+        updates: dict[int, str] = {}
+        invalid_categories: list[str] = []
+        for match in pattern.finditer(text):
+            position = _position_from_text(match.group("position"), pending_count)
+            if position < 1 or position > pending_count:
+                continue
+            raw_category = match.group("category").strip(" .,")
+            category = _normalize_category(raw_category)
+            if category not in VARIABLE_CATEGORIES:
+                invalid_categories.append(raw_category)
+                continue
+            updates[position] = category
+        return updates, invalid_categories
+
+    def _update_pending_position_categories(self, update: Update, updates: dict[int, str]) -> None:
+        matching = self._matching_pending(update)
+        for position, category in updates.items():
+            if position < 1 or position > len(matching):
+                continue
+            pending_id, pending = matching[position - 1]
+            draft = pending.draft
+            self.pending[pending_id] = PendingExpense(
+                draft=ExpenseDraft(
+                    raw_input=draft.raw_input,
+                    amount=draft.amount,
+                    category=category,
+                    description=draft.description,
+                    confidence=max(draft.confidence, 0.95),
+                    expense_date=draft.expense_date,
+                    needs_date_confirmation=draft.needs_date_confirmation,
+                ),
+                logged_by=pending.logged_by,
+                chat_id=pending.chat_id,
+                message_id=pending.message_id,
+                created_at=pending.created_at,
+                reason=pending.reason,
+            )
+
     def _update_unclear_pending_categories(self, update: Update, category: str) -> bool:
         changed = False
         for pending_id, pending in self._matching_pending(update):
@@ -1358,7 +1503,7 @@ def _normalize_category(raw: str) -> str:
     return raw
 
 
-def _position_from_text(raw: str) -> int:
+def _position_from_text(raw: str, pending_count: int = 0) -> int:
     positions = {
         "first": 1,
         "second": 2,
@@ -1367,9 +1512,15 @@ def _position_from_text(raw: str) -> int:
         "fifth": 5,
     }
     lowered = raw.strip().lower()
+    if lowered == "last":
+        return pending_count
     if lowered in positions:
         return positions[lowered]
     return int(lowered)
+
+
+def _looks_like_pending_position_request(text: str) -> bool:
+    return bool(re.search(r"\b(change|update|make|confirm)\b.*\b(\d+|first|second|third|fourth|fifth|last|entry|one)\b", text))
 
 
 def _looks_like_ai_request(text: str) -> bool:

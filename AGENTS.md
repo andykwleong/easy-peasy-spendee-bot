@@ -38,6 +38,7 @@ This file contains project-specific instructions for coding agents working on Ge
 - Scheduled monthly reminders/summaries run at 9am Singapore time when `TELEGRAM_CHAT_ID` is configured.
 - Avoid duplicate fixed expense inserts for the same category and month.
 - Delete operations must be confirmation-based. Show the matched expense and wait for explicit confirmation before deleting from Google Sheets.
+- Existing logged expense edits must be confirmation-based. Show the before/after row and wait for explicit confirmation before updating Google Sheets.
 - User-specific categories should live in the Google Sheet `Categories` and `Category Keywords` tabs; do not hardcode personal category lists in public source.
 - Category loading order is Google Sheet tabs first, then `CATEGORIES_JSON`, then local/example fallback. A stale Railway `CATEGORIES_JSON` value can hide a Sheet tab setup issue, so mention this when debugging category surprises.
 - Category priority keywords and aliases should come from the Google Sheet category tabs and should beat generic category matching.
@@ -45,6 +46,7 @@ This file contains project-specific instructions for coding agents working on Ge
 - Multiple undated expense lines should log as separate rows dated today.
 - Date-like text such as `21 May` should be removed before amount selection, so `30 gifts spent on 21 May` logs `$30`, not `$21`.
 - Follow-up replies should handle normal wording such as `confirm 2`, `gift`, and `change spend date to 21 May`.
+- Screenshot and voice-note pending entries must remain pending after category/date changes until the user explicitly confirms logging.
 - A bare 6-character entry ID should be treated as a delete lookup, not parsed as an expense amount.
 
 ## Deployment

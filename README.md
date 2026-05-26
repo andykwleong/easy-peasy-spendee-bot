@@ -273,7 +273,11 @@ The bot still validates actions against real `Entry ID` rows in Google Sheets be
 
 Delete requests ask for confirmation before removing a row. Reply `yes` to delete, or `cancel`.
 
+Edit requests for already logged Google Sheet rows also ask for confirmation before changing the row. Reply `yes` to update, or `cancel`.
+
 When a new expense has the same date, amount, and category as an existing confirmed expense, the bot flags it as a possible duplicate. Reply `confirm` to log it anyway, or `cancel` to discard the new duplicate attempt.
+
+Screenshot and voice-note entries stay pending until you confirm them. If you change a pending screenshot or voice-note item, for example `change 3 to Groceries and change 5 to Food`, the bot updates the pending list and asks you to confirm again.
 
 ## Monthly Automation
 

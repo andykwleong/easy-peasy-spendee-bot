@@ -65,6 +65,7 @@ class PendingExpense:
     message_id: int
     created_at: datetime
     reason: str
+    batch_id: str | None = None
 
 
 @dataclass
@@ -83,6 +84,12 @@ class PendingDuplicate:
     chat_id: int
     requested_by_user_id: int
     created_at: datetime
+
+
+@dataclass
+class RecentLoggedExpense:
+    row: ExpenseRow
+    logged_at: datetime
 
 
 @dataclass
@@ -110,6 +117,8 @@ class FinanceBot:
         self.pending_deletes: dict[tuple[int, int], PendingDelete] = {}
         self.pending_duplicates: dict[tuple[int, int], PendingDuplicate] = {}
         self.pending_edits: dict[tuple[int, int], PendingEdit] = {}
+        self.latest_pending_batch: dict[tuple[int, int], str] = {}
+        self.recent_logged: list[RecentLoggedExpense] = []
         self.ai = None
 
     def _ai(self):
@@ -443,16 +452,18 @@ class FinanceBot:
         if update.message is None or update.effective_user is None:
             return False
 
-        matching = self._matching_pending(update)
+        matching = self._matching_pending(update, latest_batch_only=True)
         if not matching:
-            return False
+            matching = self._matching_pending(update)
+            if not matching:
+                return False
 
         text = text.strip()
         lowered = text.lower()
         today = datetime.now(SINGAPORE_TZ).date()
 
         if lowered in {"yes", "ok", "okay", "looks good", "correct", "log it", "confirm", "confirm them", "log them"}:
-            await self._confirm_all_pending(update)
+            await self._confirm_all_pending(update, latest_batch_only=True)
             return True
 
         category_updates, invalid_categories = self._parse_pending_category_changes(lowered, len(matching))
@@ -472,7 +483,12 @@ class FinanceBot:
         if position_match is not None:
             position = _position_from_text(position_match.group(1))
             category = _normalize_category(position_match.group(2)) if position_match.group(2) else None
-            logged_lines = await self._confirm_pending_positions(update, [position], category)
+            logged_lines = await self._confirm_pending_positions(
+                update,
+                [position],
+                category,
+                latest_batch_only=bool(self._latest_pending_batch_id(update)),
+            )
             if logged_lines:
                 await update.message.reply_text("\n\n".join(logged_lines))
             else:
@@ -961,6 +977,7 @@ class FinanceBot:
         duplicate = self._find_duplicate(row)
         if duplicate is None:
             self._append_expense(row)
+            self._remember_logged(row)
             return self._logged_line(row)
 
         key = (update.effective_chat.id, update.effective_user.id)
@@ -992,12 +1009,16 @@ class FinanceBot:
 
         self.pending_duplicates.pop(key, None)
         self._append_expense(pending.row)
+        self._remember_logged(pending.row)
         await update.message.reply_text(self._logged_line(pending.row))
         return True
 
     def _find_duplicate(self, row: ExpenseRow) -> ExpenseRecord | None:
         if row.input_type.lower() == "fixed":
             return None
+        recent_duplicate = self._find_recent_duplicate(row)
+        if recent_duplicate is not None:
+            return recent_duplicate
         records = self.sheets.get_expense_records(self.settings.raw_expenses_sheet)
         row_date = row.timestamp.strftime("%Y-%m-%d")
         for record in reversed(records):
@@ -1005,6 +1026,42 @@ class FinanceBot:
                 continue
             if record.expense_date == row_date and record.amount == row.amount and record.category == row.category:
                 return record
+        return None
+
+    def _remember_logged(self, row: ExpenseRow) -> None:
+        now = datetime.now(SINGAPORE_TZ)
+        cutoff = now - timedelta(minutes=15)
+        self.recent_logged = [item for item in self.recent_logged if item.logged_at >= cutoff]
+        self.recent_logged.append(RecentLoggedExpense(row=row, logged_at=now))
+
+    def _find_recent_duplicate(self, row: ExpenseRow) -> ExpenseRecord | None:
+        now = datetime.now(SINGAPORE_TZ)
+        cutoff = now - timedelta(minutes=15)
+        self.recent_logged = [item for item in self.recent_logged if item.logged_at >= cutoff]
+        row_date = row.timestamp.strftime("%Y-%m-%d")
+        for item in reversed(self.recent_logged):
+            existing = item.row
+            if (
+                existing.status.lower() == "confirmed"
+                and existing.input_type.lower() != "fixed"
+                and existing.timestamp.strftime("%Y-%m-%d") == row_date
+                and existing.amount == row.amount
+                and existing.category == row.category
+            ):
+                return ExpenseRecord(
+                    row_number=0,
+                    entry_id=existing.entry_id,
+                    timestamp=existing.timestamp.strftime("%H:%M:%S"),
+                    expense_date=existing.timestamp.strftime("%Y-%m-%d"),
+                    month=existing.timestamp.strftime("%Y-%m"),
+                    logged_by=existing.logged_by,
+                    raw_input=existing.raw_input,
+                    amount=existing.amount,
+                    category=existing.category,
+                    description=existing.description,
+                    input_type=existing.input_type,
+                    status=existing.status,
+                )
         return None
 
     def _duplicate_prompt(self, row: ExpenseRow, existing: ExpenseRecord) -> str:
@@ -1117,6 +1174,7 @@ class FinanceBot:
     def _pending_extractions_message(self, expenses, logged_by: str, update: Update, reason: str, title: str) -> str:
         lines = [title]
         pending_ids = []
+        batch_id = self._new_pending_batch(update)
         for expense in expenses:
             if expense.amount is None:
                 continue
@@ -1138,7 +1196,7 @@ class FinanceBot:
                 expense_date=expense_date,
                 needs_date_confirmation=False,
             )
-            pending_id = self._add_pending(draft, logged_by, update, reason)
+            pending_id = self._add_pending(draft, logged_by, update, reason, batch_id=batch_id)
             pending_ids.append(pending_id)
             date_text = self._human_date(expense_date or datetime.now(SINGAPORE_TZ).date())
             category_text = category or "category unclear"
@@ -1153,21 +1211,35 @@ class FinanceBot:
         lines.append("Or say: confirm the first entry, change the second one to Groceries")
         return "\n\n".join(lines)
 
-    def _matching_pending(self, update: Update) -> list[tuple[str, PendingExpense]]:
+    def _matching_pending(self, update: Update, latest_batch_only: bool = False) -> list[tuple[str, PendingExpense]]:
         if update.effective_user is None:
             return []
         logged_by = self.settings.label_for_user(update.effective_user.id)
         if logged_by is None:
             return []
+        latest_batch_id = self._latest_pending_batch_id(update)
         return [
             (pending_id, pending)
             for pending_id, pending in self.pending.items()
             if pending.logged_by == logged_by and pending.chat_id == update.effective_chat.id
+            and (not latest_batch_only or (latest_batch_id is not None and pending.batch_id == latest_batch_id))
         ]
+
+    def _latest_pending_batch_id(self, update: Update) -> str | None:
+        if update.effective_user is None:
+            return None
+        return self.latest_pending_batch.get((update.effective_chat.id, update.effective_user.id))
+
+    def _new_pending_batch(self, update: Update) -> str:
+        batch_id = uuid.uuid4().hex[:8]
+        if update.effective_user is not None:
+            self.latest_pending_batch[(update.effective_chat.id, update.effective_user.id)] = batch_id
+        return batch_id
 
     def _update_pending_dates(self, update: Update, parsed_date) -> bool:
         changed = False
-        for pending_id, pending in self._matching_pending(update):
+        matching = self._matching_pending(update, latest_batch_only=True) or self._matching_pending(update)
+        for pending_id, pending in matching:
             draft = pending.draft
             self.pending[pending_id] = PendingExpense(
                 draft=ExpenseDraft(
@@ -1184,13 +1256,15 @@ class FinanceBot:
                 message_id=pending.message_id,
                 created_at=pending.created_at,
                 reason=pending.reason,
+                batch_id=pending.batch_id,
             )
             changed = True
         return changed
 
     def _pending_summary(self, update: Update, title: str) -> str:
         lines = [title]
-        for index, (pending_id, pending) in enumerate(self._matching_pending(update), start=1):
+        matching = self._matching_pending(update, latest_batch_only=True) or self._matching_pending(update)
+        for index, (pending_id, pending) in enumerate(matching, start=1):
             date_value = pending.draft.expense_date or datetime.now(SINGAPORE_TZ).date()
             category = pending.draft.category or "category unclear"
             lines.append(
@@ -1206,7 +1280,7 @@ class FinanceBot:
         if ai is None or update.message is None:
             return False
 
-        matching = self._matching_pending(update)
+        matching = self._matching_pending(update, latest_batch_only=True) or self._matching_pending(update)
         if not matching:
             return False
 
@@ -1253,7 +1327,7 @@ class FinanceBot:
         return True
 
     def _update_pending_positions(self, update: Update, positions: list[int], category: str | None, parsed_date) -> None:
-        matching = self._matching_pending(update)
+        matching = self._matching_pending(update, latest_batch_only=True) or self._matching_pending(update)
         for position in positions:
             if position < 1 or position > len(matching):
                 continue
@@ -1274,6 +1348,7 @@ class FinanceBot:
                 message_id=pending.message_id,
                 created_at=pending.created_at,
                 reason=pending.reason,
+                batch_id=pending.batch_id,
             )
 
     def _parse_pending_category_changes(self, text: str, pending_count: int) -> tuple[dict[int, str], list[str]]:
@@ -1305,7 +1380,7 @@ class FinanceBot:
         return updates, invalid_categories
 
     def _update_pending_position_categories(self, update: Update, updates: dict[int, str]) -> None:
-        matching = self._matching_pending(update)
+        matching = self._matching_pending(update, latest_batch_only=True) or self._matching_pending(update)
         for position, category in updates.items():
             if position < 1 or position > len(matching):
                 continue
@@ -1326,6 +1401,7 @@ class FinanceBot:
                 message_id=pending.message_id,
                 created_at=pending.created_at,
                 reason=pending.reason,
+                batch_id=pending.batch_id,
             )
 
     def _update_unclear_pending_categories(self, update: Update, category: str) -> bool:
@@ -1349,12 +1425,19 @@ class FinanceBot:
                 message_id=pending.message_id,
                 created_at=pending.created_at,
                 reason=pending.reason,
+                batch_id=pending.batch_id,
             )
             changed = True
         return changed
 
-    async def _confirm_pending_positions(self, update: Update, positions: list[int], category_override: str | None = None) -> list[str]:
-        matching = self._matching_pending(update)
+    async def _confirm_pending_positions(
+        self,
+        update: Update,
+        positions: list[int],
+        category_override: str | None = None,
+        latest_batch_only: bool = False,
+    ) -> list[str]:
+        matching = self._matching_pending(update, latest_batch_only=latest_batch_only)
         logged_lines = []
         for position in sorted(set(positions), reverse=True):
             if position < 1 or position > len(matching):
@@ -1381,7 +1464,7 @@ class FinanceBot:
             return category
         return None
 
-    async def _confirm_all_pending(self, update: Update) -> None:
+    async def _confirm_all_pending(self, update: Update, latest_batch_only: bool = False) -> None:
         if update.message is None or update.effective_user is None:
             return
         logged_by = self.settings.label_for_user(update.effective_user.id)
@@ -1389,7 +1472,7 @@ class FinanceBot:
             await update.message.reply_text("I do not recognize this Telegram user ID yet.")
             return
 
-        matching = self._matching_pending(update)
+        matching = self._matching_pending(update, latest_batch_only=latest_batch_only)
         if not matching:
             await update.message.reply_text("No pending expenses to confirm.")
             return
@@ -1409,7 +1492,7 @@ class FinanceBot:
         else:
             await update.message.reply_text("Pending expenses still need categories. Use: confirm abc123 Food")
 
-    def _add_pending(self, draft: ExpenseDraft, logged_by: str, update: Update, reason: str) -> str:
+    def _add_pending(self, draft: ExpenseDraft, logged_by: str, update: Update, reason: str, batch_id: str | None = None) -> str:
         pending_id = uuid.uuid4().hex[:6]
         self.pending[pending_id] = PendingExpense(
             draft=draft,
@@ -1418,6 +1501,7 @@ class FinanceBot:
             message_id=update.message.message_id,
             created_at=datetime.now(SINGAPORE_TZ),
             reason=reason,
+            batch_id=batch_id,
         )
         return pending_id
 

@@ -98,12 +98,13 @@ class TestFollowups(unittest.IsolatedAsyncioTestCase):
         sheets = FakeSheets()
         bot = FinanceBot(FakeSettings(), sheets)
         update = FakeUpdate("Change 3 to groceries and change 5 to food")
+        bot.latest_pending_batch[(-100, 456)] = "screenshot"
         bot.pending = {
-            "one111": bot_pending("2", "Old Chang Kee", "Food"),
-            "two222": bot_pending("57.20", "CS Fresh", "Groceries"),
-            "three3": bot_pending("60.70", "Nai Nai Flavour", "Food"),
-            "four44": bot_pending("15.82", "Sheng Siong", "Groceries"),
-            "five55": bot_pending("30.81", "Paradise Classic", "Groceries"),
+            "one111": bot_pending("2", "Old Chang Kee", "Food", batch_id="screenshot"),
+            "two222": bot_pending("57.20", "CS Fresh", "Groceries", batch_id="screenshot"),
+            "three3": bot_pending("60.70", "Nai Nai Flavour", "Food", batch_id="screenshot"),
+            "four44": bot_pending("15.82", "Sheng Siong", "Groceries", batch_id="screenshot"),
+            "five55": bot_pending("30.81", "Paradise Classic", "Groceries", batch_id="screenshot"),
         }
 
         handled = await bot.handle_pending_update(update)
@@ -115,6 +116,47 @@ class TestFollowups(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Updated pending entries:", update.message.replies[0])
         self.assertIn("3. $60.70 to Groceries", update.message.replies[0])
         self.assertIn("5. $30.81 to Food", update.message.replies[0])
+
+    async def test_confirm_targets_latest_pending_batch_only(self):
+        sheets = FakeSheets()
+        bot = FinanceBot(FakeSettings(), sheets)
+        update = FakeUpdate("confirm")
+        bot.latest_pending_batch[(-100, 456)] = "voice"
+        bot.pending = {
+            "oldone": bot_pending("30.81", "Paradise Classic", "Food", batch_id="screenshot"),
+            "voice1": bot_pending("100", "shoes", "Shopping - My wife", batch_id="voice"),
+        }
+
+        handled = await bot.handle_pending_update(update)
+
+        self.assertTrue(handled)
+        self.assertEqual(len(sheets.rows), 1)
+        self.assertEqual(sheets.rows[0].amount, Decimal("100"))
+        self.assertEqual(sheets.rows[0].description, "shoes")
+        self.assertIn("oldone", bot.pending)
+        self.assertNotIn("voice1", bot.pending)
+
+    async def test_recent_logged_memory_catches_duplicate_before_sheet_readback(self):
+        sheets = FakeSheets(records=[])
+        bot = FinanceBot(FakeSettings(), sheets)
+        update = FakeUpdate("confirm")
+        bot.latest_pending_batch[(-100, 456)] = "screenshot"
+        first = bot_pending("30.81", "Paradise Classic", "Food", batch_id="screenshot")
+        second = bot_pending("30.81", "Paradise Classic", "Food", batch_id="voice")
+        bot.pending = {"first1": first}
+
+        await bot.handle_pending_update(update)
+
+        self.assertEqual(len(sheets.rows), 1)
+
+        bot.latest_pending_batch[(-100, 456)] = "voice"
+        bot.pending = {"voice1": second}
+        update.message = FakeMessage("confirm")
+        handled = await bot.handle_pending_update(update)
+
+        self.assertTrue(handled)
+        self.assertEqual(len(sheets.rows), 1)
+        self.assertIn("Possible duplicate found:", update.message.replies[0])
 
     async def test_confirm_number_confirms_pending_position(self):
         sheets = FakeSheets()
@@ -198,7 +240,7 @@ class TestFollowups(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sheets.updated[0]["category"], "Food")
 
 
-def bot_pending(amount: str, description: str, category: str | None = None):
+def bot_pending(amount: str, description: str, category: str | None = None, batch_id: str | None = None):
     from datetime import datetime
 
     from getrichbot.bot import PendingExpense
@@ -216,6 +258,7 @@ def bot_pending(amount: str, description: str, category: str | None = None):
         message_id=789,
         created_at=datetime(2026, 5, 24, 22, 14, 0),
         reason="category",
+        batch_id=batch_id,
     )
 
 

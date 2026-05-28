@@ -279,6 +279,8 @@ When a new expense has the same date, amount, and category as an existing confir
 
 Screenshot and voice-note entries stay pending until you confirm them. If you change a pending screenshot or voice-note item, for example `change 3 to Groceries and change 5 to Food`, the bot updates the pending list and asks you to confirm again.
 
+When a new screenshot or voice note creates a pending list, plain replies like `confirm` and `confirm all` apply to the latest pending list only. Older pending items can still be handled by their specific pending IDs.
+
 ## Monthly Automation
 
 If Railway is running and `TELEGRAM_CHAT_ID` is set:

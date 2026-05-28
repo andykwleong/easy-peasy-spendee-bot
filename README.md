@@ -281,6 +281,8 @@ Screenshot and voice-note entries stay pending until you confirm them. If you ch
 
 When a new screenshot or voice note creates a pending list, plain replies like `confirm` and `confirm all` apply to the latest pending list only. Older pending items can still be handled by their specific pending IDs.
 
+Duplicate checks use Google Sheets as the source of truth, plus a one-minute in-memory safety window for entries that were just logged but may not be visible in a read-back yet.
+
 ## Monthly Automation
 
 If Railway is running and `TELEGRAM_CHAT_ID` is set:

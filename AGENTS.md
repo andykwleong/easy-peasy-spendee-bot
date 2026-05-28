@@ -48,7 +48,7 @@ This file contains project-specific instructions for coding agents working on Ge
 - Follow-up replies should handle normal wording such as `confirm 2`, `gift`, and `change spend date to 21 May`.
 - Screenshot and voice-note pending entries must remain pending after category/date changes until the user explicitly confirms logging.
 - Plain pending replies like `confirm` and `confirm all` should target the latest pending batch for that chat/user, not older screenshot or voice-note leftovers.
-- Duplicate checks should include recently logged in-memory rows so immediately repeated confirmations are caught even before Google Sheets read-back reflects the append.
+- Duplicate checks should include a one-minute recently logged in-memory window so immediately repeated confirmations are caught even before Google Sheets read-back reflects the append.
 - A bare 6-character entry ID should be treated as a delete lookup, not parsed as an expense amount.
 
 ## Deployment

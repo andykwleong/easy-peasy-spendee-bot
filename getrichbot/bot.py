@@ -25,6 +25,7 @@ from getrichbot.summary import build_monthly_summary_table
 
 LOGGER = logging.getLogger(__name__)
 SINGAPORE_TZ = ZoneInfo("Asia/Singapore")
+RECENT_DUPLICATE_WINDOW = timedelta(minutes=1)
 HELP_TEXT = """Send expenses naturally:
 dinner 60
 ntuc 82.30
@@ -1030,13 +1031,13 @@ class FinanceBot:
 
     def _remember_logged(self, row: ExpenseRow) -> None:
         now = datetime.now(SINGAPORE_TZ)
-        cutoff = now - timedelta(minutes=15)
+        cutoff = now - RECENT_DUPLICATE_WINDOW
         self.recent_logged = [item for item in self.recent_logged if item.logged_at >= cutoff]
         self.recent_logged.append(RecentLoggedExpense(row=row, logged_at=now))
 
     def _find_recent_duplicate(self, row: ExpenseRow) -> ExpenseRecord | None:
         now = datetime.now(SINGAPORE_TZ)
-        cutoff = now - timedelta(minutes=15)
+        cutoff = now - RECENT_DUPLICATE_WINDOW
         self.recent_logged = [item for item in self.recent_logged if item.logged_at >= cutoff]
         row_date = row.timestamp.strftime("%Y-%m-%d")
         for item in reversed(self.recent_logged):

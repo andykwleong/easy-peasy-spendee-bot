@@ -44,6 +44,7 @@ This file contains project-specific instructions for coding agents working on Ge
 - Category priority keywords and aliases should come from the Google Sheet category tabs and should beat generic category matching.
 - A message with one clear category and multiple listed amounts, for example `groceries 63 and 15.20`, should log separate rows for each amount. This is not split-bill behavior.
 - Multiple undated expense lines should log as separate rows dated today.
+- In multiline messages, a standalone first-line date should apply to all following expense lines before checking for individually dated lines.
 - Date-like text such as `21 May` should be removed before amount selection, so `30 gifts spent on 21 May` logs `$30`, not `$21`.
 - Follow-up replies should handle normal wording such as `confirm 2`, `gift`, and `change spend date to 21 May`.
 - Screenshot and voice-note pending entries must remain pending after category/date changes until the user explicitly confirms logging.

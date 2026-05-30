@@ -98,6 +98,29 @@ class TestMultiline(unittest.IsolatedAsyncioTestCase):
         ])
         self.assertTrue(all(row.category == "Food" for row in sheets.rows))
 
+    async def test_standalone_date_line_applies_to_following_expenses(self):
+        sheets = FakeSheets()
+        bot = FinanceBot(FakeSettings(), sheets)
+        update = FakeUpdate(
+            "29th may\n"
+            "coffee 8.39\n"
+            "lunch 27.5\n"
+            "breakfast 8.6"
+        )
+
+        handled = await bot.handle_multiline_text(update, context=None)
+
+        self.assertTrue(handled)
+        self.assertEqual(len(sheets.rows), 3)
+        self.assertEqual([str(row.amount) for row in sheets.rows], ["8.39", "27.5", "8.6"])
+        self.assertTrue(all(row.category == "Food" for row in sheets.rows))
+        self.assertEqual([row.timestamp.date().isoformat() for row in sheets.rows], [
+            "2026-05-29",
+            "2026-05-29",
+            "2026-05-29",
+        ])
+        self.assertNotIn("Skipped lines", update.message.replies[0])
+
     async def test_logs_new_lines_and_holds_duplicate_line(self):
         existing = ExpenseRecord(
             row_number=2,

@@ -720,6 +720,36 @@ class FinanceBot:
             return True
 
         today = datetime.now(SINGAPORE_TZ).date()
+        shared_date, ambiguous = extract_standalone_date(lines[0], today)
+        if ambiguous:
+            await update.message.reply_text("The first line looks like an ambiguous date. Please use a clear date like 2026-05-19 or 19 May.")
+            return True
+        if shared_date is not None:
+            shared_date_drafts = []
+            skipped_lines = []
+            for line in lines[1:]:
+                draft = parse_expense(
+                    line,
+                    logged_by=logged_by,
+                    me_label=self.settings.me_label,
+                    wife_label=self.settings.wife_label,
+                    today=shared_date,
+                )
+                if draft is None:
+                    skipped_lines.append(line)
+                    continue
+                shared_date_drafts.append(ExpenseDraft(
+                    raw_input=f"{lines[0]} | {draft.raw_input}",
+                    amount=draft.amount,
+                    category=draft.category,
+                    description=draft.description,
+                    confidence=draft.confidence,
+                    expense_date=shared_date,
+                    needs_date_confirmation=draft.needs_date_confirmation,
+                ))
+            await self._log_multiline_drafts(update, logged_by, shared_date_drafts, skipped_lines)
+            return True
+
         line_drafts = [
             parse_expense(
                 line,
@@ -757,37 +787,7 @@ class FinanceBot:
             await self._log_multiline_drafts(update, logged_by, today_line_drafts)
             return True
 
-        shared_date, ambiguous = extract_standalone_date(lines[0], datetime.now(SINGAPORE_TZ).date())
-        if shared_date is None and not ambiguous:
-            return False
-        if ambiguous:
-            await update.message.reply_text("The first line looks like an ambiguous date. Please use a clear date like 2026-05-19 or 19 May.")
-            return True
-
-        shared_date_drafts = []
-        skipped_lines = []
-        for line in lines[1:]:
-            draft = parse_expense(
-                line,
-                logged_by=logged_by,
-                me_label=self.settings.me_label,
-                wife_label=self.settings.wife_label,
-                today=shared_date,
-            )
-            if draft is None:
-                skipped_lines.append(line)
-                continue
-            shared_date_drafts.append(ExpenseDraft(
-                raw_input=f"{lines[0]} | {draft.raw_input}",
-                amount=draft.amount,
-                category=draft.category,
-                description=draft.description,
-                confidence=draft.confidence,
-                expense_date=shared_date,
-                needs_date_confirmation=draft.needs_date_confirmation,
-            ))
-        await self._log_multiline_drafts(update, logged_by, shared_date_drafts, skipped_lines)
-        return True
+        return False
 
     async def _log_multiline_drafts(
         self,

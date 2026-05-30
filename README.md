@@ -211,6 +211,15 @@ groceries 50
 personal care 20
 ```
 
+The first line can be a standalone date. Every expense line below it inherits that date:
+
+```text
+29th May
+coffee 8.39
+lunch 27.50
+breakfast 8.60
+```
+
 Or one dated expense per line:
 
 ```text

@@ -41,7 +41,7 @@ Useful commands:
 /help - show this guide
 /whoami - show your Telegram ID
 /pending - show items needing review
-/categories - show categories
+/categories or /category - show categories
 /summary - show this month's checkpoint
 /fixed - preview fixed expenses
 /confirmfixed - add fixed expenses
@@ -1679,7 +1679,7 @@ def main() -> None:
     application.add_handler(CommandHandler("start", finance_bot.start))
     application.add_handler(CommandHandler("help", finance_bot.help_command))
     application.add_handler(CommandHandler("whoami", finance_bot.whoami))
-    application.add_handler(CommandHandler("categories", finance_bot.categories))
+    application.add_handler(CommandHandler(["categories", "category"], finance_bot.categories))
     application.add_handler(CommandHandler("pending", finance_bot.pending_command))
     application.add_handler(CommandHandler("summary", finance_bot.summary_command))
     application.add_handler(CommandHandler("confirm", finance_bot.confirm_command))

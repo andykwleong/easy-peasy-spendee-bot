@@ -464,7 +464,7 @@ class FinanceBot:
         today = datetime.now(SINGAPORE_TZ).date()
 
         if lowered in {"yes", "ok", "okay", "looks good", "correct", "log it", "confirm", "confirm them", "log them"}:
-            await self._confirm_all_pending(update, latest_batch_only=True)
+            await self._confirm_all_pending(update, latest_batch_only=bool(self._latest_pending_batch_id(update)))
             return True
 
         category_updates, invalid_categories = self._parse_pending_category_changes(lowered, len(matching))
@@ -1273,7 +1273,9 @@ class FinanceBot:
                 f"{self._human_date(date_value)} - {pending.draft.description} [{pending_id}]"
             )
         lines.append("Reply: confirm all")
-        lines.append("Or: confirm 2 as Food")
+        matching_count = len(self._matching_pending(update, latest_batch_only=True) or self._matching_pending(update))
+        if matching_count > 1:
+            lines.append("Or: confirm 2 as Food")
         return "\n\n".join(lines)
 
     async def _handle_ai_pending_instruction(self, update: Update, text: str) -> bool:

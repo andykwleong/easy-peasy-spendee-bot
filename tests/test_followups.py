@@ -188,6 +188,28 @@ class TestFollowups(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bot.pending["abc123"].draft.category, "Gifts")
         self.assertIn("Updated pending category to Gifts:", update.message.replies[0])
 
+    async def test_confirm_after_single_text_pending_category_update_logs_item(self):
+        sheets = FakeSheets()
+        bot = FinanceBot(FakeSettings(), sheets)
+        update = FakeUpdate("Food")
+        bot.pending = {"abc123": bot_pending("31.90", "Pizza")}
+
+        handled = await bot.handle_pending_update(update)
+
+        self.assertTrue(handled)
+        self.assertEqual(bot.pending["abc123"].draft.category, "Food")
+        self.assertIn("Reply: confirm all", update.message.replies[0])
+        self.assertNotIn("confirm 2 as Food", update.message.replies[0])
+
+        update.message = FakeMessage("Confirm")
+        handled = await bot.handle_pending_update(update)
+
+        self.assertTrue(handled)
+        self.assertEqual(len(sheets.rows), 1)
+        self.assertEqual(sheets.rows[0].amount, Decimal("31.90"))
+        self.assertEqual(sheets.rows[0].category, "Food")
+        self.assertNotIn("abc123", bot.pending)
+
     async def test_change_spend_date_updates_latest_logged_expense(self):
         sheets = FakeSheets(records=[record()])
         bot = FinanceBot(FakeSettings(), sheets)

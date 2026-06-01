@@ -113,6 +113,14 @@ class TestSummary(unittest.TestCase):
         self.assertEqual(table[0], ["Category", "2026-05"])
         self.assertIn([shopping_category, "23.20"], table)
 
+    def test_monthly_summary_includes_confirmed_categories_not_in_config(self):
+        table = build_monthly_summary_table([
+            record("2026-05-31", "123.45", "Custom Fixed Expense")
+        ])
+
+        self.assertIn(["Custom Fixed Expense", "123.45"], table)
+        self.assertEqual(table[-1], ["Total", "123.45"])
+
 
 if __name__ == "__main__":
     unittest.main()

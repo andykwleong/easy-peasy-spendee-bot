@@ -84,7 +84,15 @@ def build_monthly_summary_table(records: list[ExpenseRecord], include_month: str
     header = ["Category", *months]
     rows = [header]
     month_totals = {month: Decimal("0") for month in months}
-    category_months: dict[str, dict[str, Decimal]] = {category: {} for category in ALL_CATEGORIES}
+    extra_categories = sorted(
+        {
+            record.category
+            for record in records
+            if record.status.lower() == "confirmed" and record.category not in ALL_CATEGORIES
+        }
+    )
+    categories = [*ALL_CATEGORIES, *extra_categories]
+    category_months: dict[str, dict[str, Decimal]] = {category: {} for category in categories}
 
     for record in records:
         record_month = _month_from_record_date(record)
@@ -94,7 +102,7 @@ def build_monthly_summary_table(records: list[ExpenseRecord], include_month: str
         category_months[record.category][record_month] = category_total
         month_totals[record_month] += record.amount
 
-    for category in ALL_CATEGORIES:
+    for category in categories:
         rows.append([category, *[_format_optional_amount(category_months[category].get(month)) for month in months]])
     rows.append(["Total", *[f"{month_totals[month]:.2f}" for month in months]])
     return rows

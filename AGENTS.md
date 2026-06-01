@@ -39,6 +39,9 @@ This file contains project-specific instructions for coding agents working on Ge
 - Avoid duplicate fixed expense inserts for the same category and month.
 - Fixed expense confirmation is a review flow: show all fixed expenses first, allow amount edits by category name, then add rows to `Raw Expenses` only after `confirm fixed`.
 - `confirm fixed <month> <year>` and `confirm fixed last month` should review that target month, with rows dated on that month's last day.
+- The fixed review list is the source for confirmation: if an active fixed expense row is shown, it should be inserted unless the same fixed category already exists for that month in `Raw Expenses`.
+- Never silently skip fixed expenses from the review list. If a fixed row is skipped as an existing duplicate, tell the user exactly which category was skipped.
+- Plain `confirm`, `confirmed`, `confirm fixed`, and `confirmed fixed` should all confirm an active fixed expense review.
 - Delete operations must be confirmation-based. Show the matched expense and wait for explicit confirmation before deleting from Google Sheets.
 - Existing logged expense edits must be confirmation-based. Show the before/after row and wait for explicit confirmation before updating Google Sheets.
 - User-specific categories should live in the Google Sheet `Categories` and `Category Keywords` tabs; do not hardcode personal category lists in public source.

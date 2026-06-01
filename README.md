@@ -299,10 +299,11 @@ Duplicate checks use Google Sheets as the source of truth, plus a one-minute in-
 If Railway is running and `TELEGRAM_CHAT_ID` is set:
 
 - On the last day of the month at 9am Singapore time, the bot sends a fixed expenses review list.
-- Reply `confirm fixed` to add the reviewed fixed expenses to `Raw Expenses`.
+- Reply `confirm fixed`, `confirmed fixed`, or `confirm` to add the reviewed fixed expenses to `Raw Expenses`.
 - Fixed expenses are dated on the last day of that month.
 - On the 1st of each month at 9am Singapore time, the bot refreshes `Monthly Summary` and sends the previous month's final summary.
-- The bot avoids adding the same fixed category twice for the same month.
+- The bot logs every active row shown in the fixed expenses review, unless that fixed category already exists for the same month in `Raw Expenses`.
+- If a fixed expense is skipped because it already exists, the bot lists the skipped category instead of hiding it.
 
 You can manually start a fixed expense review for a specific month:
 
@@ -317,7 +318,7 @@ Before confirming, you can edit amounts using the category names shown in the li
 income tax andy change to 30 and property tax hillview change to 10
 ```
 
-The bot shows the full fixed expense list again after edits. Once you reply `confirm fixed`, the rows are added to `Raw Expenses`, then `Monthly Summary` is recalculated from `Raw Expenses`.
+The bot shows the full fixed expense list again after edits. Once you reply `confirm fixed`, `confirmed fixed`, or `confirm`, the rows are added to `Raw Expenses`, then `Monthly Summary` is recalculated from `Raw Expenses`.
 
 ## Notes
 

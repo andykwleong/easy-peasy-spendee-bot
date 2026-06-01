@@ -118,6 +118,12 @@ class FixedReview:
     created_at: datetime
 
 
+@dataclass
+class FixedAddResult:
+    added_count: int = 0
+    skipped_existing: list[str] | None = None
+
+
 class FinanceBot:
     def __init__(self, settings: Settings, sheets: SheetsClient):
         self.settings = settings
@@ -742,7 +748,21 @@ class FinanceBot:
             await update.message.reply_text("Fixed expenses confirmation cancelled.")
             return True
 
-        if lowered in {"confirm fixed", "confirm fixed expenses", "yes confirm fixed"}:
+        if lowered in {
+            "confirm",
+            "confirmed",
+            "confirm fixed",
+            "confirmed fixed",
+            "confirm fixed expenses",
+            "confirmed fixed expenses",
+            "yes",
+            "y",
+            "ok",
+            "okay",
+            "looks good",
+            "correct",
+            "yes confirm fixed",
+        }:
             await self._confirm_fixed_review(update, review)
             return True
 
@@ -768,7 +788,7 @@ class FinanceBot:
         if logged_by is None:
             await update.message.reply_text("I do not recognize this Telegram user ID yet.")
             return
-        added_count = self._add_fixed_expenses_for_month(
+        result = self._add_fixed_expenses_for_month(
             month_date=review.month_date,
             logged_by=logged_by,
             chat_id=update.effective_chat.id,
@@ -777,11 +797,11 @@ class FinanceBot:
         )
         self.pending_fixed_reviews.pop(update.effective_chat.id, None)
         target_month = _month_label(review.month_date)
-        if added_count:
+        if result.added_count:
             self._refresh_monthly_summary(review.month_date.strftime("%Y-%m"))
-            await update.message.reply_text(f"Added {added_count} fixed expenses for {target_month}.")
+            await update.message.reply_text(self._fixed_add_result_message(result, target_month))
         else:
-            await update.message.reply_text(f"Fixed expenses for {target_month} were already added, or none are active.")
+            await update.message.reply_text(self._fixed_add_result_message(result, target_month))
 
     def _fixed_review_message(self, review: FixedReview) -> str:
         lines = [f"Confirm fixed expenses for {_month_label(review.month_date)}:"]
@@ -840,18 +860,31 @@ class FinanceBot:
             await update.message.reply_text("I do not recognize this Telegram user ID yet.")
             return
 
-        added_count = self._add_fixed_expenses_for_month(
+        result = self._add_fixed_expenses_for_month(
             month_date=month_date,
             logged_by=logged_by,
             chat_id=update.effective_chat.id,
             message_id=update.message.message_id,
         )
         target_month = _month_label(month_date)
-        if added_count:
+        if result.added_count:
             self._refresh_monthly_summary(month_date.strftime("%Y-%m"))
-            await update.message.reply_text(f"Added {added_count} fixed expenses for {target_month}.")
+            await update.message.reply_text(self._fixed_add_result_message(result, target_month))
         else:
-            await update.message.reply_text(f"Fixed expenses for {target_month} were already added, or none are active.")
+            await update.message.reply_text(self._fixed_add_result_message(result, target_month))
+
+    def _fixed_add_result_message(self, result: FixedAddResult, target_month: str) -> str:
+        skipped_existing = result.skipped_existing or []
+        if result.added_count:
+            lines = [f"Added {result.added_count} fixed expenses for {target_month}."]
+        else:
+            lines = [f"No new fixed expenses added for {target_month}."]
+        if skipped_existing:
+            lines.append("Skipped already-existing fixed expenses:")
+            lines.extend(f"- {category}" for category in skipped_existing)
+        elif not result.added_count:
+            lines.append("No active fixed expenses were found.")
+        return "\n\n".join(lines)
 
     async def handle_multiline_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
         if update.message is None or update.effective_user is None:
@@ -1227,10 +1260,10 @@ class FinanceBot:
         chat_id: int | str,
         message_id: int | str,
         fixed_items: list[dict[str, str | Decimal]] | None = None,
-    ) -> int:
+    ) -> FixedAddResult:
         fixed = fixed_items if fixed_items is not None else self.sheets.get_fixed_expenses(self.settings.fixed_expenses_sheet)
         if not fixed:
-            return 0
+            return FixedAddResult(0, [])
 
         records = self.sheets.get_expense_records(self.settings.raw_expenses_sheet)
         target_month = month_date.strftime("%Y-%m")
@@ -1242,9 +1275,11 @@ class FinanceBot:
 
         expense_date = _last_day_of_month(month_date)
         added_count = 0
+        skipped_existing: list[str] = []
         for item in fixed:
             category = str(item["category"])
-            if category not in FIXED_CATEGORIES or category in existing_fixed_categories:
+            if category in existing_fixed_categories:
+                skipped_existing.append(category)
                 continue
             row = ExpenseRow(
                 entry_id=uuid.uuid4().hex[:6],
@@ -1260,8 +1295,9 @@ class FinanceBot:
                 telegram_message_id=message_id,
             )
             self.sheets.append_expense(self.settings.raw_expenses_sheet, row)
+            existing_fixed_categories.add(category)
             added_count += 1
-        return added_count
+        return FixedAddResult(added_count, skipped_existing)
 
     def _append_expense(self, row: ExpenseRow) -> None:
         self.sheets.append_expense(self.settings.raw_expenses_sheet, row)

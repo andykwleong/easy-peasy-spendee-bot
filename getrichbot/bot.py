@@ -44,7 +44,7 @@ Useful commands:
 /categories or /category - show categories
 /summary - show this month's checkpoint
 /fixed - preview fixed expenses
-/confirmfixed - add fixed expenses
+/confirmfixed - review fixed expenses
 /undo - delete your latest logged expense
 
 Plain replies also work:
@@ -110,6 +110,14 @@ class PendingEdit:
     created_at: datetime
 
 
+@dataclass
+class FixedReview:
+    month_date: object
+    items: list[dict[str, str | Decimal]]
+    chat_id: int | str
+    created_at: datetime
+
+
 class FinanceBot:
     def __init__(self, settings: Settings, sheets: SheetsClient):
         self.settings = settings
@@ -118,6 +126,7 @@ class FinanceBot:
         self.pending_deletes: dict[tuple[int, int], PendingDelete] = {}
         self.pending_duplicates: dict[tuple[int, int], PendingDuplicate] = {}
         self.pending_edits: dict[tuple[int, int], PendingEdit] = {}
+        self.pending_fixed_reviews: dict[int | str, FixedReview] = {}
         self.latest_pending_batch: dict[tuple[int, int], str] = {}
         self.recent_logged: list[RecentLoggedExpense] = []
         self.ai = None
@@ -361,8 +370,11 @@ class FinanceBot:
             await self._reply_with_summary(update, text)
             return True
 
-        if lowered in {"confirm fixed", "confirm fixed expenses", "log fixed", "log fixed expenses"}:
-            await self._confirm_fixed_for_month(update, datetime.now(SINGAPORE_TZ).date())
+        if await self._handle_pending_fixed_review(update, text):
+            return True
+
+        if lowered.startswith(("confirm fixed", "confirmfixed", "fixed expenses")) or lowered in {"log fixed", "log fixed expenses"}:
+            await self._start_fixed_review(update, text)
             return True
 
         if any(phrase in lowered for phrase in ["change spend date", "change spending date", "change logged date", "change expense date"]):
@@ -682,7 +694,134 @@ class FinanceBot:
         if update.message is None or update.effective_user is None:
             return
 
-        await self._confirm_fixed_for_month(update, datetime.now(SINGAPORE_TZ).date())
+        text = "confirm fixed " + " ".join(context.args)
+        if await self._handle_pending_fixed_review(update, text.strip()):
+            return
+        await self._start_fixed_review(update, text.strip())
+
+    async def _start_fixed_review(self, update: Update, text: str) -> None:
+        if update.message is None or update.effective_user is None:
+            return
+        if self.settings.label_for_user(update.effective_user.id) is None:
+            await update.message.reply_text("I do not recognize this Telegram user ID yet.")
+            return
+
+        month_date = _parse_fixed_month(text, datetime.now(SINGAPORE_TZ).date())
+        fixed = self.sheets.get_fixed_expenses(self.settings.fixed_expenses_sheet)
+        if not fixed:
+            await update.message.reply_text(f"No active fixed expenses found for {_month_label(month_date)}.")
+            return
+
+        review = FixedReview(
+            month_date=month_date,
+            items=[dict(item) for item in fixed],
+            chat_id=update.effective_chat.id,
+            created_at=datetime.now(SINGAPORE_TZ),
+        )
+        self.pending_fixed_reviews[update.effective_chat.id] = review
+        await update.message.reply_text(self._fixed_review_message(review))
+
+    async def _handle_pending_fixed_review(self, update: Update, text: str) -> bool:
+        if update.message is None or update.effective_user is None:
+            return False
+        review = self.pending_fixed_reviews.get(update.effective_chat.id)
+        if review is None:
+            return False
+        lowered = text.strip().lower()
+
+        if lowered in {"cancel", "cancel fixed", "no", "stop", "never mind", "nevermind"}:
+            self.pending_fixed_reviews.pop(update.effective_chat.id, None)
+            await update.message.reply_text("Fixed expenses confirmation cancelled.")
+            return True
+
+        if lowered in {"confirm fixed", "confirm fixed expenses", "yes confirm fixed"}:
+            await self._confirm_fixed_review(update, review)
+            return True
+
+        updates, unknown = self._parse_fixed_review_updates(text, review)
+        if updates:
+            for index, amount in updates.items():
+                review.items[index]["amount"] = amount
+            await update.message.reply_text(self._fixed_review_message(review))
+            return True
+        if unknown:
+            await update.message.reply_text(
+                "I could not match these fixed expense names:\n"
+                + "\n".join(f"- {item}" for item in unknown)
+                + "\n\nPlease use the category name shown in the fixed expenses list."
+            )
+            return True
+        return False
+
+    async def _confirm_fixed_review(self, update: Update, review: FixedReview) -> None:
+        if update.message is None or update.effective_user is None:
+            return
+        logged_by = self.settings.label_for_user(update.effective_user.id)
+        if logged_by is None:
+            await update.message.reply_text("I do not recognize this Telegram user ID yet.")
+            return
+        added_count = self._add_fixed_expenses_for_month(
+            month_date=review.month_date,
+            logged_by=logged_by,
+            chat_id=update.effective_chat.id,
+            message_id=update.message.message_id,
+            fixed_items=review.items,
+        )
+        self.pending_fixed_reviews.pop(update.effective_chat.id, None)
+        target_month = _month_label(review.month_date)
+        if added_count:
+            self._refresh_monthly_summary(review.month_date.strftime("%Y-%m"))
+            await update.message.reply_text(f"Added {added_count} fixed expenses for {target_month}.")
+        else:
+            await update.message.reply_text(f"Fixed expenses for {target_month} were already added, or none are active.")
+
+    def _fixed_review_message(self, review: FixedReview) -> str:
+        lines = [f"Confirm fixed expenses for {_month_label(review.month_date)}:"]
+        lines.extend(f"{item['category']}: {_format_money(item['amount'])}" for item in review.items)
+        lines.append("Reply: confirm fixed")
+        lines.append("Or say: Income Tax Andy change to 30")
+        return "\n\n".join(lines)
+
+    def _parse_fixed_review_updates(self, text: str, review: FixedReview) -> tuple[dict[int, Decimal], list[str]]:
+        updates: dict[int, Decimal] = {}
+        unknown: list[str] = []
+        parts = re.split(r"\s+(?:and|,)\s+", text, flags=re.IGNORECASE)
+        for part in parts:
+            match = re.match(
+                r"^\s*(?P<name>.+?)\s+(?:change|changed|update|set|make)\s+(?:(?:to|as)\s+)?\$?(?P<amount>\d+(?:,\d{3})*(?:\.\d{1,2})?)\s*$",
+                part,
+                flags=re.IGNORECASE,
+            )
+            if match is None:
+                continue
+            amount = Decimal(match.group("amount").replace(",", ""))
+            name = match.group("name").strip()
+            index = self._match_fixed_review_item(name, review)
+            if index is None:
+                unknown.append(name)
+                continue
+            updates[index] = amount
+        return updates, unknown
+
+    def _match_fixed_review_item(self, raw_name: str, review: FixedReview) -> int | None:
+        wanted = _normalize_lookup_text(raw_name)
+        if not wanted:
+            return None
+        matches = [
+            index
+            for index, item in enumerate(review.items)
+            if wanted == _normalize_lookup_text(str(item["category"]))
+        ]
+        if len(matches) == 1:
+            return matches[0]
+        matches = [
+            index
+            for index, item in enumerate(review.items)
+            if wanted in _normalize_lookup_text(str(item["category"]))
+        ]
+        if len(matches) == 1:
+            return matches[0]
+        return None
 
     async def _confirm_fixed_for_month(self, update: Update, month_date) -> None:
         if update.message is None or update.effective_user is None:
@@ -1073,8 +1212,15 @@ class FinanceBot:
             'Reply: "confirm" to log anyway or "cancel" to delete'
         )
 
-    def _add_fixed_expenses_for_month(self, month_date, logged_by: str, chat_id: int | str, message_id: int | str) -> int:
-        fixed = self.sheets.get_fixed_expenses(self.settings.fixed_expenses_sheet)
+    def _add_fixed_expenses_for_month(
+        self,
+        month_date,
+        logged_by: str,
+        chat_id: int | str,
+        message_id: int | str,
+        fixed_items: list[dict[str, str | Decimal]] | None = None,
+    ) -> int:
+        fixed = fixed_items if fixed_items is not None else self.sheets.get_fixed_expenses(self.settings.fixed_expenses_sheet)
         if not fixed:
             return 0
 
@@ -1148,10 +1294,14 @@ class FinanceBot:
         if not fixed:
             message = f"No active fixed expenses found for {_month_label(today)}."
         else:
-            lines = [f"Month-end fixed expenses check for {_month_label(today)}:"]
-            lines.extend(f"{item['category']}: ${item['amount']:.2f}" for item in fixed)
-            lines.append("Reply: confirm fixed")
-            message = "\n\n".join(lines)
+            review = FixedReview(
+                month_date=today,
+                items=[dict(item) for item in fixed],
+                chat_id=self.settings.telegram_chat_id,
+                created_at=datetime.now(SINGAPORE_TZ),
+            )
+            self.pending_fixed_reviews[self.settings.telegram_chat_id] = review
+            message = self._fixed_review_message(review)
 
         await bot.send_message(chat_id=self.settings.telegram_chat_id, text=message)
         self.sheets.set_state_value(self.settings.bot_state_sheet, state_key, "yes")
@@ -1635,6 +1785,66 @@ def _last_day_of_month(value) -> object:
 
 def _month_label(value) -> str:
     return value.strftime("%B %Y")
+
+
+def _parse_fixed_month(text: str, today) -> object:
+    lowered = text.lower()
+    if "last month" in lowered or "previous month" in lowered:
+        return today.replace(day=1) - timedelta(days=1)
+
+    iso_match = re.search(r"\b(\d{4})-(\d{1,2})\b", lowered)
+    if iso_match is not None:
+        year = int(iso_match.group(1))
+        month = int(iso_match.group(2))
+        if 1 <= month <= 12:
+            return today.replace(year=year, month=month, day=1)
+
+    months = {
+        "jan": 1,
+        "january": 1,
+        "feb": 2,
+        "february": 2,
+        "mar": 3,
+        "march": 3,
+        "apr": 4,
+        "april": 4,
+        "may": 5,
+        "jun": 6,
+        "june": 6,
+        "jul": 7,
+        "july": 7,
+        "aug": 8,
+        "august": 8,
+        "sep": 9,
+        "sept": 9,
+        "september": 9,
+        "oct": 10,
+        "october": 10,
+        "nov": 11,
+        "november": 11,
+        "dec": 12,
+        "december": 12,
+    }
+    month_match = re.search(
+        r"\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|"
+        r"sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+(\d{4})\b",
+        lowered,
+    )
+    if month_match is not None:
+        month = months[month_match.group(1)]
+        year = int(month_match.group(2))
+        return today.replace(year=year, month=month, day=1)
+
+    return today
+
+
+def _format_money(value) -> str:
+    amount = Decimal(str(value))
+    return f"${amount:,.2f}"
+
+
+def _normalize_lookup_text(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", value.lower()).strip()
 
 
 def main() -> None:

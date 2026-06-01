@@ -248,7 +248,7 @@ Commands:
 - `/confirm <pending_id> <category>` - confirm a pending entry
 - `/undo` - delete your latest logged row from Google Sheets
 - `/fixed` - preview active fixed expenses
-- `/confirmfixed` - append active fixed expenses for the current month
+- `/confirmfixed` - review active fixed expenses before adding them
 - `/categories` - show available categories
 
 Plain-language shortcuts:
@@ -269,6 +269,8 @@ Plain-language shortcuts:
 - `summary this month`
 - `summary last month`
 - `confirm fixed`
+- `confirm fixed last month`
+- `confirm fixed May 2026`
 
 With `OPENAI_API_KEY` configured, natural language actions also work:
 
@@ -296,11 +298,26 @@ Duplicate checks use Google Sheets as the source of truth, plus a one-minute in-
 
 If Railway is running and `TELEGRAM_CHAT_ID` is set:
 
-- On the last day of the month at 9am Singapore time, the bot sends a fixed expenses reminder.
-- Reply `confirm fixed` to add active fixed expenses to `Raw Expenses`.
+- On the last day of the month at 9am Singapore time, the bot sends a fixed expenses review list.
+- Reply `confirm fixed` to add the reviewed fixed expenses to `Raw Expenses`.
 - Fixed expenses are dated on the last day of that month.
 - On the 1st of each month at 9am Singapore time, the bot refreshes `Monthly Summary` and sends the previous month's final summary.
 - The bot avoids adding the same fixed category twice for the same month.
+
+You can manually start a fixed expense review for a specific month:
+
+```text
+confirm fixed May 2026
+confirm fixed last month
+```
+
+Before confirming, you can edit amounts using the category names shown in the list:
+
+```text
+income tax andy change to 30 and property tax hillview change to 10
+```
+
+The bot shows the full fixed expense list again after edits. Once you reply `confirm fixed`, the rows are added to `Raw Expenses`, then `Monthly Summary` is recalculated from `Raw Expenses`.
 
 ## Notes
 

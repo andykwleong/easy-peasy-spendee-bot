@@ -37,6 +37,8 @@ This file contains project-specific instructions for coding agents working on Ge
 - Fixed expenses should be dated on the last day of the relevant month.
 - Scheduled monthly reminders/summaries run at 9am Singapore time when `TELEGRAM_CHAT_ID` is configured.
 - Avoid duplicate fixed expense inserts for the same category and month.
+- Fixed expense confirmation is a review flow: show all fixed expenses first, allow amount edits by category name, then add rows to `Raw Expenses` only after `confirm fixed`.
+- `confirm fixed <month> <year>` and `confirm fixed last month` should review that target month, with rows dated on that month's last day.
 - Delete operations must be confirmation-based. Show the matched expense and wait for explicit confirmation before deleting from Google Sheets.
 - Existing logged expense edits must be confirmation-based. Show the before/after row and wait for explicit confirmation before updating Google Sheets.
 - User-specific categories should live in the Google Sheet `Categories` and `Category Keywords` tabs; do not hardcode personal category lists in public source.

@@ -179,9 +179,8 @@ class SheetsClient:
             entry_id = _cell(row, 0)
             if not entry_id:
                 continue
-            try:
-                amount = Decimal(_cell(row, 6).replace(",", ""))
-            except Exception:
+            amount = _parse_sheet_amount(_cell(row, 6))
+            if amount is None:
                 continue
             records.append(
                 ExpenseRecord(

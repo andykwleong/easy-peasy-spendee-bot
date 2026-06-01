@@ -7,9 +7,9 @@ from getrichbot.models import ExpenseRecord
 from getrichbot.summary import build_monthly_summary_table, build_spending_summary, format_spending_summary, parse_summary_period
 
 
-def record(expense_date: str, amount: str, category: str, status: str = "Confirmed") -> ExpenseRecord:
+def record(expense_date: str, amount: str, category: str, status: str = "Confirmed", input_type: str = "Text", row_number: int = 2) -> ExpenseRecord:
     return ExpenseRecord(
-        row_number=2,
+        row_number=row_number,
         entry_id="abc123",
         timestamp="12:00:00",
         expense_date=expense_date,
@@ -19,7 +19,7 @@ def record(expense_date: str, amount: str, category: str, status: str = "Confirm
         amount=Decimal(amount),
         category=category,
         description="test",
-        input_type="Text",
+        input_type=input_type,
         status=status,
     )
 
@@ -120,6 +120,24 @@ class TestSummary(unittest.TestCase):
 
         self.assertIn(["Custom Fixed Expense", "123.45"], table)
         self.assertEqual(table[-1], ["Total", "123.45"])
+
+    def test_monthly_summary_uses_latest_fixed_value_without_summing_duplicates(self):
+        table = build_monthly_summary_table([
+            record("2026-05-31", "920", "Mortgage", input_type="Fixed", row_number=2),
+            record("2026-05-31", "930", "Mortgage", input_type="Fixed", row_number=3),
+        ])
+
+        self.assertIn(["Mortgage", "930.00"], table)
+        self.assertEqual(table[-1], ["Total", "930.00"])
+
+    def test_monthly_summary_fixed_override_replaces_raw_fixed_value(self):
+        table = build_monthly_summary_table(
+            [record("2026-05-31", "920", "Mortgage", input_type="Fixed")],
+            fixed_overrides={"2026-05": {"Mortgage": Decimal("950")}},
+        )
+
+        self.assertIn(["Mortgage", "950.00"], table)
+        self.assertEqual(table[-1], ["Total", "950.00"])
 
 
 if __name__ == "__main__":

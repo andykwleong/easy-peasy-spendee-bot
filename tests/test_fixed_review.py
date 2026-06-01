@@ -33,6 +33,7 @@ class FakeSheets:
         self.rows = []
         self.state = {}
         self.summary_updates = []
+        self.hide_appended_records = False
 
     def get_fixed_expenses(self, sheet_name):
         return [dict(item) for item in self.fixed]
@@ -57,6 +58,8 @@ class FakeSheets:
         )
 
     def get_expense_records(self, sheet_name):
+        if self.hide_appended_records:
+            return []
         return self.records
 
     def update_monthly_summary(self, sheet_name, rows):
@@ -167,7 +170,7 @@ class TestFixedReview(unittest.IsolatedAsyncioTestCase):
         self.assertEqual({row.category for row in sheets.rows}, {f"Custom Fixed {index}" for index in range(1, 11)})
         self.assertIn("Added 10 fixed expenses for May 2026.", update.message.replies[0])
 
-    async def test_fixed_review_reports_duplicate_skips(self):
+    async def test_fixed_review_does_not_skip_existing_fixed_categories(self):
         sheets = FakeSheets()
         existing_category = sheets.fixed[0]["category"]
         sheets.records.append(
@@ -194,11 +197,28 @@ class TestFixedReview(unittest.IsolatedAsyncioTestCase):
         handled = await bot.handle_plain_language_command(update)
 
         self.assertTrue(handled)
-        self.assertEqual(len(sheets.rows), 2)
-        self.assertNotIn(existing_category, {row.category for row in sheets.rows})
-        self.assertIn("Added 2 fixed expenses for May 2026.", update.message.replies[0])
-        self.assertIn("Skipped already-existing fixed expenses:", update.message.replies[0])
-        self.assertIn(f"- {existing_category}", update.message.replies[0])
+        self.assertEqual(len(sheets.rows), 3)
+        self.assertIn(existing_category, {row.category for row in sheets.rows})
+        self.assertIn("Added 3 fixed expenses for May 2026.", update.message.replies[0])
+        self.assertIn("Monthly Summary updated.", update.message.replies[0])
+
+    async def test_fixed_review_writes_reviewed_values_to_monthly_summary_directly(self):
+        sheets = FakeSheets()
+        sheets.hide_appended_records = True
+        bot = FinanceBot(FakeSettings(), sheets)
+        update = FakeUpdate("confirm fixed May 2026")
+
+        await bot.handle_plain_language_command(update)
+        update.message = FakeMessage("confirm")
+        handled = await bot.handle_plain_language_command(update)
+
+        self.assertTrue(handled)
+        self.assertEqual(len(sheets.rows), 3)
+        self.assertTrue(sheets.summary_updates)
+        latest_summary = sheets.summary_updates[-1]
+        self.assertIn([sheets.fixed[0]["category"], "920.00"], latest_summary)
+        self.assertIn([sheets.fixed[1]["category"], "1000.00"], latest_summary)
+        self.assertIn([sheets.fixed[2]["category"], "96.83"], latest_summary)
 
     async def test_month_end_reminder_creates_review_and_state(self):
         sheets = FakeSheets()

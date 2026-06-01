@@ -74,21 +74,32 @@ def build_spending_summary(records: list[ExpenseRecord], period: SummaryPeriod) 
     return SpendingSummary(period=period, categories=categories, total=total)
 
 
-def build_monthly_summary_table(records: list[ExpenseRecord], include_month: str | None = None) -> list[list[str]]:
+def build_monthly_summary_table(
+    records: list[ExpenseRecord],
+    include_month: str | None = None,
+    fixed_overrides: dict[str, dict[str, Decimal]] | None = None,
+) -> list[list[str]]:
+    fixed_overrides = fixed_overrides or {}
     record_months = [_month_from_record_date(record) for record in records if record.status.lower() == "confirmed"]
     months = sorted({month for month in record_months if month is not None})
+    months = sorted({*months, *fixed_overrides.keys()})
     if include_month and include_month not in months:
         months.append(include_month)
         months.sort()
 
     header = ["Category", *months]
     rows = [header]
-    month_totals = {month: Decimal("0") for month in months}
     extra_categories = sorted(
         {
             record.category
             for record in records
             if record.status.lower() == "confirmed" and record.category not in ALL_CATEGORIES
+        }
+        | {
+            category
+            for month_values in fixed_overrides.values()
+            for category in month_values
+            if category not in ALL_CATEGORIES
         }
     )
     categories = [*ALL_CATEGORIES, *extra_categories]
@@ -98,12 +109,27 @@ def build_monthly_summary_table(records: list[ExpenseRecord], include_month: str
         record_month = _month_from_record_date(record)
         if record.status.lower() != "confirmed" or record.category not in category_months or record_month not in months:
             continue
+        if record.input_type.lower() == "fixed":
+            category_months[record.category][record_month] = record.amount
+            continue
         category_total = category_months[record.category].get(record_month, Decimal("0")) + record.amount
         category_months[record.category][record_month] = category_total
-        month_totals[record_month] += record.amount
+
+    for month, month_values in fixed_overrides.items():
+        if month not in months:
+            continue
+        for category, amount in month_values.items():
+            if category not in category_months:
+                category_months[category] = {}
+                categories.append(category)
+            category_months[category][month] = amount
 
     for category in categories:
         rows.append([category, *[_format_optional_amount(category_months[category].get(month)) for month in months]])
+    month_totals = {
+        month: sum((category_months[category].get(month, Decimal("0")) for category in categories), Decimal("0"))
+        for month in months
+    }
     rows.append(["Total", *[f"{month_totals[month]:.2f}" for month in months]])
     return rows
 

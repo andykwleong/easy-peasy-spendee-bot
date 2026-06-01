@@ -36,11 +36,11 @@ This file contains project-specific instructions for coding agents working on Ge
 - `Bot State` stores small idempotency markers so Railway restarts do not duplicate scheduled reminders or final summaries.
 - Fixed expenses should be dated on the last day of the relevant month.
 - Scheduled monthly reminders/summaries run at 9am Singapore time when `TELEGRAM_CHAT_ID` is configured.
-- Avoid duplicate fixed expense inserts for the same category and month.
 - Fixed expense confirmation is a review flow: show all fixed expenses first, allow amount edits by category name, then add rows to `Raw Expenses` only after `confirm fixed`.
 - `confirm fixed <month> <year>` and `confirm fixed last month` should review that target month, with rows dated on that month's last day.
-- The fixed review list is the source for confirmation: if an active fixed expense row is shown, it should be inserted unless the same fixed category already exists for that month in `Raw Expenses`.
-- Never silently skip fixed expenses from the review list. If a fixed row is skipped as an existing duplicate, tell the user exactly which category was skipped.
+- The fixed review list is the source for confirmation: if an active fixed expense row is shown, it should be inserted into `Raw Expenses` and written directly into `Monthly Summary`.
+- Do not use duplicate prompts or duplicate skips for fixed expenses. Fixed expenses are monthly setup values with unique fixed categories.
+- In `Monthly Summary`, fixed category/month values should be replaced by the latest confirmed fixed review amount, not summed as duplicate fixed rows.
 - Plain `confirm`, `confirmed`, `confirm fixed`, and `confirmed fixed` should all confirm an active fixed expense review.
 - Delete operations must be confirmation-based. Show the matched expense and wait for explicit confirmation before deleting from Google Sheets.
 - Existing logged expense edits must be confirmation-based. Show the before/after row and wait for explicit confirmation before updating Google Sheets.

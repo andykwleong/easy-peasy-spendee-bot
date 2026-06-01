@@ -302,8 +302,10 @@ If Railway is running and `TELEGRAM_CHAT_ID` is set:
 - Reply `confirm fixed`, `confirmed fixed`, or `confirm` to add the reviewed fixed expenses to `Raw Expenses`.
 - Fixed expenses are dated on the last day of that month.
 - On the 1st of each month at 9am Singapore time, the bot refreshes `Monthly Summary` and sends the previous month's final summary.
-- The bot logs every active row shown in the fixed expenses review, unless that fixed category already exists for the same month in `Raw Expenses`.
-- If a fixed expense is skipped because it already exists, the bot lists the skipped category instead of hiding it.
+- The bot logs every active row shown in the fixed expenses review.
+- Fixed expense confirmation writes the reviewed fixed amounts directly into the matching month column in `Monthly Summary`.
+- If the month column already exists, the reviewed fixed category values are replaced for that month.
+- Fixed expenses are not handled with duplicate prompts. In `Monthly Summary`, the latest confirmed fixed value for a category/month is used instead of summing repeated fixed rows.
 
 You can manually start a fixed expense review for a specific month:
 
@@ -318,7 +320,7 @@ Before confirming, you can edit amounts using the category names shown in the li
 income tax andy change to 30 and property tax hillview change to 10
 ```
 
-The bot shows the full fixed expense list again after edits. Once you reply `confirm fixed`, `confirmed fixed`, or `confirm`, the rows are added to `Raw Expenses`, then `Monthly Summary` is recalculated from `Raw Expenses`.
+The bot shows the full fixed expense list again after edits. Once you reply `confirm fixed`, `confirmed fixed`, or `confirm`, the rows are added to `Raw Expenses` for audit trail and the reviewed fixed values are written directly into `Monthly Summary`.
 
 ## Notes
 

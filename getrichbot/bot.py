@@ -121,7 +121,6 @@ class FixedReview:
 @dataclass
 class FixedAddResult:
     added_count: int = 0
-    skipped_existing: list[str] | None = None
 
 
 class FinanceBot:
@@ -797,11 +796,12 @@ class FinanceBot:
         )
         self.pending_fixed_reviews.pop(update.effective_chat.id, None)
         target_month = _month_label(review.month_date)
-        if result.added_count:
-            self._refresh_monthly_summary(review.month_date.strftime("%Y-%m"))
-            await update.message.reply_text(self._fixed_add_result_message(result, target_month))
-        else:
-            await update.message.reply_text(self._fixed_add_result_message(result, target_month))
+        self._refresh_monthly_summary(
+            review.month_date.strftime("%Y-%m"),
+            fixed_month_date=review.month_date,
+            fixed_items=review.items,
+        )
+        await update.message.reply_text(self._fixed_add_result_message(result, target_month))
 
     def _fixed_review_message(self, review: FixedReview) -> str:
         lines = [f"Confirm fixed expenses for {_month_label(review.month_date)}:"]
@@ -867,23 +867,20 @@ class FinanceBot:
             message_id=update.message.message_id,
         )
         target_month = _month_label(month_date)
-        if result.added_count:
-            self._refresh_monthly_summary(month_date.strftime("%Y-%m"))
-            await update.message.reply_text(self._fixed_add_result_message(result, target_month))
-        else:
-            await update.message.reply_text(self._fixed_add_result_message(result, target_month))
+        fixed_items = self.sheets.get_fixed_expenses(self.settings.fixed_expenses_sheet)
+        self._refresh_monthly_summary(
+            month_date.strftime("%Y-%m"),
+            fixed_month_date=month_date,
+            fixed_items=fixed_items,
+        )
+        await update.message.reply_text(self._fixed_add_result_message(result, target_month))
 
     def _fixed_add_result_message(self, result: FixedAddResult, target_month: str) -> str:
-        skipped_existing = result.skipped_existing or []
         if result.added_count:
             lines = [f"Added {result.added_count} fixed expenses for {target_month}."]
         else:
-            lines = [f"No new fixed expenses added for {target_month}."]
-        if skipped_existing:
-            lines.append("Skipped already-existing fixed expenses:")
-            lines.extend(f"- {category}" for category in skipped_existing)
-        elif not result.added_count:
-            lines.append("No active fixed expenses were found.")
+            lines = [f"No active fixed expenses found for {target_month}."]
+        lines.append("Monthly Summary updated.")
         return "\n\n".join(lines)
 
     async def handle_multiline_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
@@ -1263,24 +1260,12 @@ class FinanceBot:
     ) -> FixedAddResult:
         fixed = fixed_items if fixed_items is not None else self.sheets.get_fixed_expenses(self.settings.fixed_expenses_sheet)
         if not fixed:
-            return FixedAddResult(0, [])
-
-        records = self.sheets.get_expense_records(self.settings.raw_expenses_sheet)
-        target_month = month_date.strftime("%Y-%m")
-        existing_fixed_categories = {
-            record.category
-            for record in records
-            if record.month == target_month and record.input_type.lower() == "fixed" and record.status.lower() == "confirmed"
-        }
+            return FixedAddResult(0)
 
         expense_date = _last_day_of_month(month_date)
         added_count = 0
-        skipped_existing: list[str] = []
         for item in fixed:
             category = str(item["category"])
-            if category in existing_fixed_categories:
-                skipped_existing.append(category)
-                continue
             row = ExpenseRow(
                 entry_id=uuid.uuid4().hex[:6],
                 timestamp=datetime.combine(expense_date, time(hour=9), SINGAPORE_TZ),
@@ -1295,18 +1280,38 @@ class FinanceBot:
                 telegram_message_id=message_id,
             )
             self.sheets.append_expense(self.settings.raw_expenses_sheet, row)
-            existing_fixed_categories.add(category)
             added_count += 1
-        return FixedAddResult(added_count, skipped_existing)
+        return FixedAddResult(added_count)
 
     def _append_expense(self, row: ExpenseRow) -> None:
         self.sheets.append_expense(self.settings.raw_expenses_sheet, row)
         self._refresh_monthly_summary(row.timestamp.strftime("%Y-%m"))
 
-    def _refresh_monthly_summary(self, include_month: str | None = None) -> None:
+    def _refresh_monthly_summary(
+        self,
+        include_month: str | None = None,
+        fixed_month_date=None,
+        fixed_items: list[dict[str, str | Decimal]] | None = None,
+    ) -> None:
         records = self.sheets.get_expense_records(self.settings.raw_expenses_sheet)
-        table = build_monthly_summary_table(records, include_month=include_month)
+        fixed_overrides = self._fixed_summary_overrides(fixed_month_date, fixed_items)
+        table = build_monthly_summary_table(records, include_month=include_month, fixed_overrides=fixed_overrides)
         self.sheets.update_monthly_summary(self.settings.monthly_summary_sheet, table)
+
+    def _fixed_summary_overrides(
+        self,
+        month_date,
+        fixed_items: list[dict[str, str | Decimal]] | None,
+    ) -> dict[str, dict[str, Decimal]]:
+        if month_date is None or not fixed_items:
+            return {}
+        month = month_date.strftime("%Y-%m")
+        return {
+            month: {
+                str(item["category"]): Decimal(str(item["amount"]))
+                for item in fixed_items
+            }
+        }
 
     async def run_monthly_scheduler(self, bot) -> None:
         while True:

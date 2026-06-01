@@ -682,7 +682,11 @@ class FinanceBot:
     async def fixed_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if update.message is None:
             return
-        fixed = self.sheets.get_fixed_expenses(self.settings.fixed_expenses_sheet)
+        try:
+            fixed = self.sheets.get_fixed_expenses(self.settings.fixed_expenses_sheet)
+        except ValueError as exc:
+            await update.message.reply_text(str(exc))
+            return
         if not fixed:
             await update.message.reply_text("No active fixed expenses found in Google Sheets.")
             return
@@ -707,7 +711,11 @@ class FinanceBot:
             return
 
         month_date = _parse_fixed_month(text, datetime.now(SINGAPORE_TZ).date())
-        fixed = self.sheets.get_fixed_expenses(self.settings.fixed_expenses_sheet)
+        try:
+            fixed = self.sheets.get_fixed_expenses(self.settings.fixed_expenses_sheet)
+        except ValueError as exc:
+            await update.message.reply_text(str(exc))
+            return
         if not fixed:
             await update.message.reply_text(f"No active fixed expenses found for {_month_label(month_date)}.")
             return
@@ -1290,7 +1298,12 @@ class FinanceBot:
         if self.sheets.get_state_value(self.settings.bot_state_sheet, state_key) == "yes":
             return
 
-        fixed = self.sheets.get_fixed_expenses(self.settings.fixed_expenses_sheet)
+        try:
+            fixed = self.sheets.get_fixed_expenses(self.settings.fixed_expenses_sheet)
+        except ValueError as exc:
+            await bot.send_message(chat_id=self.settings.telegram_chat_id, text=str(exc))
+            self.sheets.set_state_value(self.settings.bot_state_sheet, state_key, "yes")
+            return
         if not fixed:
             message = f"No active fixed expenses found for {_month_label(today)}."
         else:

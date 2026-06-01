@@ -5,6 +5,7 @@ from decimal import Decimal
 from getrichbot.categories import FIXED_CATEGORIES
 from getrichbot.bot import FinanceBot
 from getrichbot.models import ExpenseRecord
+from getrichbot.sheets import _parse_sheet_amount
 
 
 class FakeSettings:
@@ -102,6 +103,18 @@ class FakeTelegramBot:
 
 
 class TestFixedReview(unittest.IsolatedAsyncioTestCase):
+    def test_fixed_amount_parser_accepts_currency_formatting(self):
+        examples = {
+            "$56.92": Decimal("56.92"),
+            "S$1,227.84": Decimal("1227.84"),
+            "1,139.00": Decimal("1139.00"),
+            "96.83": Decimal("96.83"),
+        }
+
+        for raw, expected in examples.items():
+            with self.subTest(raw=raw):
+                self.assertEqual(_parse_sheet_amount(raw), expected)
+
     async def test_confirm_fixed_month_starts_review_then_edits_and_confirms(self):
         sheets = FakeSheets()
         bot = FinanceBot(FakeSettings(), sheets)

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from typing import Any
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from getrichbot.models import ExpenseRecord, ExpenseRow
@@ -56,10 +56,13 @@ class SheetsClient:
             notes = _cell(row, 3)
             if not category or active not in {"true", "yes", "y", "1"}:
                 continue
+            parsed_amount = _parse_sheet_amount(amount)
+            if parsed_amount is None:
+                raise ValueError(f"Could not read fixed expense amount for {category}: {amount}")
             expenses.append(
                 {
                     "category": category,
-                    "amount": Decimal(amount.replace(",", "")),
+                    "amount": parsed_amount,
                     "notes": notes,
                 }
             )
@@ -338,3 +341,14 @@ def _cell(row: list[str], index: int) -> str:
     if index >= len(row):
         return ""
     return str(row[index]).strip()
+
+
+def _parse_sheet_amount(raw: str) -> Decimal | None:
+    cleaned = raw.strip().replace(",", "").replace("S$", "").replace("$", "")
+    cleaned = cleaned.strip()
+    if not cleaned:
+        return None
+    try:
+        return Decimal(cleaned)
+    except InvalidOperation:
+        return None

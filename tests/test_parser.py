@@ -2,11 +2,62 @@ import unittest
 from datetime import date
 from decimal import Decimal
 
-from getrichbot.categories import CATEGORY_ALIASES, SHOPPING_CATEGORIES
+from getrichbot import categories
+from getrichbot.categories import CATEGORY_ALIASES, SHOPPING_CATEGORIES, configure_category_config
 from getrichbot.parser import extract_standalone_date, parse_expense, parse_expenses
 
 
 class TestParser(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.original_config = {
+            "variable_categories": list(categories.VARIABLE_CATEGORIES),
+            "fixed_categories": list(categories.FIXED_CATEGORIES),
+            "category_keywords": {key: list(value) for key, value in categories.CATEGORY_KEYWORDS.items()},
+            "priority_keywords": [
+                {"category": category, "keywords": list(keywords)}
+                for category, keywords in categories.BILL_PRIORITY_KEYWORDS
+            ],
+            "shopping_keywords": list(categories.SHOPPING_KEYWORDS),
+            "shopping_categories": dict(categories.SHOPPING_CATEGORIES),
+            "category_aliases": dict(categories.CATEGORY_ALIASES),
+        }
+        test_config = {
+            **cls.original_config,
+            "variable_categories": [
+                *cls.original_config["variable_categories"],
+                *[
+                    category
+                    for category in ["Income - A", "Income - FX", "Income - Misc"]
+                    if category not in cls.original_config["variable_categories"]
+                ],
+            ],
+            "category_keywords": {
+                **cls.original_config["category_keywords"],
+                "Income - A": ["income a", "salary a"],
+                "Income - FX": ["income fx", "salary fx"],
+                "Income - Misc": ["dividend", "dividends", "sale proceed", "sales proceeds", "interest", "bonus"],
+            },
+            "category_aliases": {
+                **cls.original_config["category_aliases"],
+                "income a": "Income - A",
+                "salary a": "Income - A",
+                "income fx": "Income - FX",
+                "salary fx": "Income - FX",
+                "dividend": "Income - Misc",
+                "dividends": "Income - Misc",
+                "sale proceed": "Income - Misc",
+                "sales proceeds": "Income - Misc",
+                "interest": "Income - Misc",
+                "bonus": "Income - Misc",
+            },
+        }
+        configure_category_config(test_config)
+
+    @classmethod
+    def tearDownClass(cls):
+        configure_category_config(cls.original_config)
+
     def test_parse_food_expense(self):
         draft = parse_expense("dinner 60", "Me", "Me", "My wife")
 
@@ -35,6 +86,23 @@ class TestParser(unittest.TestCase):
         self.assertIsNotNone(draft)
         self.assertEqual(draft.amount, Decimal("82.30"))
         self.assertEqual(draft.category, "Groceries")
+
+    def test_parse_income_categories(self):
+        examples = {
+            "income a 5000": "Income - A",
+            "salary fx 7000": "Income - FX",
+            "dividend 120": "Income - Misc",
+            "dividends 120": "Income - Misc",
+            "sales proceeds 800": "Income - Misc",
+            "interest 30": "Income - Misc",
+            "bonus 1000": "Income - Misc",
+        }
+
+        for text, expected_category in examples.items():
+            with self.subTest(text=text):
+                draft = parse_expense(text, "Me", "Me", "My wife", today=date(2026, 6, 2))
+                self.assertIsNotNone(draft)
+                self.assertEqual(draft.category, expected_category)
 
     def test_parse_same_category_multiple_amounts(self):
         drafts = parse_expenses("Groceries 63 and 15.2", "Me", "Me", "My wife", today=date(2026, 5, 24))

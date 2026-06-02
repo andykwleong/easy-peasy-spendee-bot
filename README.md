@@ -1,8 +1,8 @@
 # GetRichBot
 
-GetRichBot is a private Telegram household expense bot that captures spending from a shared chat and appends confirmed raw expense rows to Google Sheets.
+GetRichBot is a private Telegram household finance bot that captures spending and income from a shared chat and appends confirmed raw transaction rows to Google Sheets.
 
-The bot keeps Telegram focused on quick capture, confirmation, edits, and deletion. Google Sheets remains the source of truth for raw data, category totals, monthly totals, charts, and reporting.
+The bot keeps Telegram focused on quick capture, confirmation, edits, and deletion. Google Sheets remains the source of truth for raw data, category totals, monthly P&L, charts, and reporting.
 
 ## How It Works
 
@@ -10,23 +10,23 @@ The bot keeps Telegram focused on quick capture, confirmation, edits, and deleti
 Telegram group chat
   -> Railway-hosted Python bot
   -> optional OpenAI extraction for screenshots, voice notes, and natural-language actions
-  -> Google Sheets raw expense log
-  -> Google Sheets monthly summary
+  -> Google Sheets raw transaction log
+  -> Google Sheets monthly P&L summary
 ```
 
 ## Features
 
-- Logs expenses from Telegram text messages.
+- Logs expenses and income from Telegram text messages.
 - Maps each Telegram sender to either `Me` or `My wife`.
 - Categorizes expenses using your private household category config.
-- Appends every confirmed entry as raw data to Google Sheets.
+- Appends every confirmed entry as raw transaction data to Google Sheets.
 - Supports pending review when category or amount is unclear.
 - Supports duplicate detection before logging repeated expenses.
 - Supports natural-language delete, edit, and question handling when OpenAI is configured.
 - Supports screenshot and voice-note extraction with confirmation before logging.
 - Supports monthly fixed expenses confirmation.
 - Sends 9am Singapore month-end fixed expense reminders when `TELEGRAM_CHAT_ID` is set.
-- Updates `Monthly Summary` with categories as rows and months as columns.
+- Updates `Monthly Summary` as a month-by-month P&L with total income, total expenses, and net P&L.
 - Supports undo for the last expense sent by a user.
 - Keeps the bot private to configured Telegram user IDs.
 
@@ -48,10 +48,18 @@ Create a Google Sheet with these tabs:
 Header row:
 
 ```text
-Entry ID,Timestamp,Date,Month,Logged By,Raw Input,Amount,Category,Description,Input Type,Status,Telegram Chat ID,Telegram Message ID
+Entry ID,Timestamp,Date,Month,Logged By,Raw Input,Amount,Category,Description,Transaction Type,Input Type,Status,Telegram Chat ID,Telegram Message ID
 ```
 
-`Timestamp` is time only, for example `21:34:12`. `Date` stores the expense date.
+`Timestamp` is time only, for example `21:34:12`. `Date` stores the transaction date.
+
+`Transaction Type` is one of:
+
+- `Expense`
+- `Income`
+- `Fixed`
+
+Existing old rows with a blank `Transaction Type` are still supported. The bot treats blank old rows as expenses unless the category starts with `Income -`.
 
 ### Fixed Expenses
 
@@ -65,7 +73,18 @@ Add your fixed expense categories here with default amounts. `Active` should be 
 
 ### Monthly Summary
 
-The bot can maintain this tab automatically. Rows are all fixed and non-fixed categories. Columns are months, for example `2026-05`, `2026-06`, and each cell is the total for that category and month. A `Total` row is added at the bottom.
+The bot can maintain this tab automatically. Rows are categories and P&L totals. Columns are months, for example `2026-05`, `2026-06`, and each cell is the total for that category and month.
+
+The generated format is:
+
+```text
+Income categories
+Total Income
+
+Expense and fixed expense categories
+Total Expenses
+Net P&L
+```
 
 If an unexpected month appears, for example `2023-05`, check `Raw Expenses` for a row with the wrong `Date` or `Month`. Fix the source row in `Raw Expenses`; do not only delete the column from `Monthly Summary`, because the bot rebuilds the summary from raw rows.
 
@@ -85,6 +104,9 @@ Food,Variable,TRUE,
 Groceries,Variable,TRUE,
 Shopping - Person A,Variable,TRUE,me
 Shopping - Person B,Variable,TRUE,wife
+Income - A,Income,TRUE,
+Income - FX,Income,TRUE,
+Income - Misc,Income,TRUE,
 Rent or mortgage,Fixed,TRUE,
 ```
 
@@ -97,6 +119,14 @@ lunch,Food,Normal,TRUE
 grocery,Groceries,Normal,TRUE
 electricity,Utilities,Priority,TRUE
 shopping,Shopping - Sender,Normal,TRUE
+income a,Income - A,Normal,TRUE
+salary fx,Income - FX,Normal,TRUE
+dividend,Income - Misc,Normal,TRUE
+dividends,Income - Misc,Normal,TRUE
+sale proceed,Income - Misc,Normal,TRUE
+sales proceeds,Income - Misc,Normal,TRUE
+interest,Income - Misc,Normal,TRUE
+bonus,Income - Misc,Normal,TRUE
 ```
 
 `Shopping - Sender` is special. It means the bot should use the category marked `me` or `wife` in the `Shopping Owner` column.
@@ -104,6 +134,8 @@ shopping,Shopping - Sender,Normal,TRUE
 `Priority` keywords are checked before normal shopping/generic matching. Use them for important overrides, such as baby-related items or specific utility bills.
 
 The category names in `Raw Expenses`, `Fixed Expenses`, `Categories`, and `Category Keywords` should match exactly.
+
+Income category names should start with `Income -`. The bot uses that prefix to separate income from expenses in `Monthly Summary`.
 
 Category loading order:
 
@@ -303,6 +335,7 @@ If Railway is running and `TELEGRAM_CHAT_ID` is set:
 - Fixed expenses are dated on the last day of that month.
 - On the 1st of each month at 9am Singapore time, the bot refreshes `Monthly Summary` and sends the previous month's final summary.
 - The bot logs every active row shown in the fixed expenses review.
+- Before writing fixed expenses for a month, the bot removes existing confirmed fixed rows for that same month, then writes the reviewed fixed rows again. This keeps the fixed audit trail clean.
 - Fixed expense confirmation writes the reviewed fixed amounts directly into the matching month column in `Monthly Summary`.
 - If the month column already exists, the reviewed fixed category values are replaced for that month.
 - Fixed expenses are not handled with duplicate prompts. In `Monthly Summary`, the latest confirmed fixed value for a category/month is used instead of summing repeated fixed rows.

@@ -39,6 +39,7 @@ class FakeSheets:
                 description=row.description,
                 input_type=row.input_type,
                 status=row.status,
+                transaction_type=row.transaction_type,
             )
         )
 

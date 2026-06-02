@@ -30,6 +30,7 @@ class ExpenseRow:
     status: str
     telegram_chat_id: int | str
     telegram_message_id: int | str
+    transaction_type: str = "Expense"
 
     def to_sheet_row(self) -> list[str]:
         expense_date = self.timestamp.strftime("%Y-%m-%d")
@@ -44,6 +45,7 @@ class ExpenseRow:
             f"{self.amount:.2f}",
             self.category,
             self.description,
+            self.transaction_type,
             self.input_type,
             self.status,
             str(self.telegram_chat_id),
@@ -65,6 +67,7 @@ class ExpenseRecord:
     description: str
     input_type: str
     status: str
+    transaction_type: str = "Expense"
 
     def compact(self) -> str:
         return (

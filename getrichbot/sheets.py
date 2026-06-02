@@ -35,7 +35,7 @@ class SheetsClient:
     def append_expense(self, sheet_name: str, row: ExpenseRow) -> None:
         self._service().spreadsheets().values().append(
             spreadsheetId=self.sheet_id,
-            range=f"{sheet_name}!A:M",
+            range=f"{sheet_name}!A:N",
             valueInputOption="USER_ENTERED",
             insertDataOption="INSERT_ROWS",
             body={"values": [row.to_sheet_row()]},
@@ -153,7 +153,7 @@ class SheetsClient:
     def delete_entry_by_id(self, sheet_name: str, entry_id: str, logged_by: str | None = None) -> bool:
         result = self._service().spreadsheets().values().get(
             spreadsheetId=self.sheet_id,
-            range=f"{sheet_name}!A2:M",
+            range=f"{sheet_name}!A2:N",
         ).execute()
         rows = result.get("values", [])
 
@@ -167,10 +167,31 @@ class SheetsClient:
             return True
         return False
 
+    def delete_fixed_expenses_for_month(self, sheet_name: str, month: str) -> int:
+        result = self._service().spreadsheets().values().get(
+            spreadsheetId=self.sheet_id,
+            range=f"{sheet_name}!A2:N",
+        ).execute()
+        rows = result.get("values", [])
+        deleted_count = 0
+
+        for index in range(len(rows) - 1, -1, -1):
+            row = rows[index]
+            transaction_type, input_type, status = _record_type_fields(row)
+            if _cell(row, 3) != month:
+                continue
+            if status.lower() != "confirmed":
+                continue
+            if transaction_type.lower() != "fixed" and input_type.lower() != "fixed":
+                continue
+            self._delete_sheet_row(sheet_name, index + 2)
+            deleted_count += 1
+        return deleted_count
+
     def get_expense_records(self, sheet_name: str) -> list[ExpenseRecord]:
         result = self._service().spreadsheets().values().get(
             spreadsheetId=self.sheet_id,
-            range=f"{sheet_name}!A2:M",
+            range=f"{sheet_name}!A2:N",
         ).execute()
         rows = result.get("values", [])
         records: list[ExpenseRecord] = []
@@ -182,6 +203,7 @@ class SheetsClient:
             amount = _parse_sheet_amount(_cell(row, 6))
             if amount is None:
                 continue
+            transaction_type, input_type, status = _record_type_fields(row)
             records.append(
                 ExpenseRecord(
                     row_number=index,
@@ -194,8 +216,9 @@ class SheetsClient:
                     amount=amount,
                     category=_cell(row, 7),
                     description=_cell(row, 8),
-                    input_type=_cell(row, 9),
-                    status=_cell(row, 10),
+                    input_type=input_type,
+                    status=status,
+                    transaction_type=transaction_type,
                 )
             )
         return records
@@ -257,6 +280,7 @@ class SheetsClient:
         category: str | None = None,
         description: str | None = None,
         expense_date: str | None = None,
+        transaction_type: str | None = None,
     ) -> None:
         updates = []
         if expense_date is not None:
@@ -272,6 +296,8 @@ class SheetsClient:
             updates.append({"range": f"{sheet_name}!H{row_number}", "values": [[category]]})
         if description is not None:
             updates.append({"range": f"{sheet_name}!I{row_number}", "values": [[description]]})
+        if transaction_type is not None:
+            updates.append({"range": f"{sheet_name}!J{row_number}", "values": [[transaction_type]]})
         if not updates:
             return
 
@@ -340,6 +366,29 @@ def _cell(row: list[str], index: int) -> str:
     if index >= len(row):
         return ""
     return str(row[index]).strip()
+
+
+def _record_type_fields(row: list[str]) -> tuple[str, str, str]:
+    new_status = _cell(row, 11)
+    if new_status:
+        transaction_type = _cell(row, 9)
+        input_type = _cell(row, 10)
+        status = new_status
+    else:
+        transaction_type = ""
+        input_type = _cell(row, 9)
+        status = _cell(row, 10)
+    if not transaction_type:
+        transaction_type = _infer_transaction_type(_cell(row, 7), input_type)
+    return transaction_type, input_type, status
+
+
+def _infer_transaction_type(category: str, input_type: str) -> str:
+    if input_type.lower() == "fixed":
+        return "Fixed"
+    if category.lower().startswith("income -"):
+        return "Income"
+    return "Expense"
 
 
 def _parse_sheet_amount(raw: str) -> Decimal | None:

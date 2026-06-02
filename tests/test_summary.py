@@ -7,7 +7,15 @@ from getrichbot.models import ExpenseRecord
 from getrichbot.summary import build_monthly_summary_table, build_spending_summary, format_spending_summary, parse_summary_period
 
 
-def record(expense_date: str, amount: str, category: str, status: str = "Confirmed", input_type: str = "Text", row_number: int = 2) -> ExpenseRecord:
+def record(
+    expense_date: str,
+    amount: str,
+    category: str,
+    status: str = "Confirmed",
+    input_type: str = "Text",
+    row_number: int = 2,
+    transaction_type: str = "Expense",
+) -> ExpenseRecord:
     return ExpenseRecord(
         row_number=row_number,
         entry_id="abc123",
@@ -21,6 +29,7 @@ def record(expense_date: str, amount: str, category: str, status: str = "Confirm
         description="test",
         input_type=input_type,
         status=status,
+        transaction_type=transaction_type,
     )
 
 
@@ -39,6 +48,7 @@ def record_with_month(expense_date: str, month: str, amount: str, category: str)
         description=item.description,
         input_type=item.input_type,
         status=item.status,
+        transaction_type=item.transaction_type,
     )
 
 
@@ -72,7 +82,9 @@ class TestSummary(unittest.TestCase):
             period,
         )
 
-        self.assertEqual(summary.total, Decimal("35.75"))
+        self.assertEqual(summary.total_expenses, Decimal("35.75"))
+        self.assertEqual(summary.total_income, Decimal("0"))
+        self.assertEqual(summary.net, Decimal("-35.75"))
         self.assertEqual([(item.category, item.total) for item in summary.categories], [
             ("Groceries", Decimal("20")),
             ("Food", Decimal("15.75")),
@@ -85,8 +97,10 @@ class TestSummary(unittest.TestCase):
         message = format_spending_summary(summary)
 
         self.assertIn("May 2026 summary (1 May to 22 May 2026):", message)
+        self.assertIn("Expenses:", message)
         self.assertIn("Food: $15.00", message)
-        self.assertIn("Total: $15.00", message)
+        self.assertIn("Total Expenses: $15.00", message)
+        self.assertIn("Net P&L: $-15.00", message)
         self.assertNotIn("Entries", message)
 
     def test_monthly_summary_table_uses_categories_as_rows_and_months_as_columns(self):
@@ -102,7 +116,8 @@ class TestSummary(unittest.TestCase):
         self.assertEqual(table[0], ["Category", "2026-05", "2026-06", "2026-07"])
         self.assertIn(["Groceries", "20.00", "", ""], table)
         self.assertIn(["Food", "15.00", "30.00", ""], table)
-        self.assertEqual(table[-1], ["Total", "35.00", "30.00", "0.00"])
+        self.assertIn(["Total Expenses", "35.00", "30.00", "0.00"], table)
+        self.assertEqual(table[-1], ["Net P&L", "-35.00", "-30.00", "0.00"])
 
     def test_monthly_summary_uses_date_when_month_column_is_wrong(self):
         shopping_category = SHOPPING_CATEGORIES["me"]
@@ -119,7 +134,8 @@ class TestSummary(unittest.TestCase):
         ])
 
         self.assertIn(["Custom Fixed Expense", "123.45"], table)
-        self.assertEqual(table[-1], ["Total", "123.45"])
+        self.assertIn(["Total Expenses", "123.45"], table)
+        self.assertEqual(table[-1], ["Net P&L", "-123.45"])
 
     def test_monthly_summary_uses_latest_fixed_value_without_summing_duplicates(self):
         table = build_monthly_summary_table([
@@ -128,7 +144,8 @@ class TestSummary(unittest.TestCase):
         ])
 
         self.assertIn(["Mortgage", "930.00"], table)
-        self.assertEqual(table[-1], ["Total", "930.00"])
+        self.assertIn(["Total Expenses", "930.00"], table)
+        self.assertEqual(table[-1], ["Net P&L", "-930.00"])
 
     def test_monthly_summary_fixed_override_replaces_raw_fixed_value(self):
         table = build_monthly_summary_table(
@@ -137,7 +154,40 @@ class TestSummary(unittest.TestCase):
         )
 
         self.assertIn(["Mortgage", "950.00"], table)
-        self.assertEqual(table[-1], ["Total", "950.00"])
+        self.assertIn(["Total Expenses", "950.00"], table)
+        self.assertEqual(table[-1], ["Net P&L", "-950.00"])
+
+    def test_monthly_summary_has_income_expense_and_net_rows(self):
+        table = build_monthly_summary_table([
+            record("2026-05-01", "5000", "Income - A", transaction_type="Income"),
+            record("2026-05-02", "120", "Income - Misc", transaction_type="Income"),
+            record("2026-05-03", "100", "Food"),
+        ])
+
+        self.assertIn(["Income - A", "5000.00"], table)
+        self.assertIn(["Income - Misc", "120.00"], table)
+        self.assertIn(["Total Income", "5120.00"], table)
+        self.assertIn(["Total Expenses", "100.00"], table)
+        self.assertEqual(table[-1], ["Net P&L", "5020.00"])
+
+    def test_format_summary_shows_income_p_and_l(self):
+        period = parse_summary_period("summary", date(2026, 5, 22))
+        summary = build_spending_summary(
+            [
+                record("2026-05-01", "5000", "Income - A", transaction_type="Income"),
+                record("2026-05-03", "100", "Food"),
+            ],
+            period,
+        )
+
+        message = format_spending_summary(summary)
+
+        self.assertIn("Income:", message)
+        self.assertIn("Income - A: $5000.00", message)
+        self.assertIn("Total Income: $5000.00", message)
+        self.assertIn("Expenses:", message)
+        self.assertIn("Total Expenses: $100.00", message)
+        self.assertIn("Net P&L: $4900.00", message)
 
 
 if __name__ == "__main__":

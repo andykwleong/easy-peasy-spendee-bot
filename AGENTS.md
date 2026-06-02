@@ -28,9 +28,11 @@ This file contains project-specific instructions for coding agents working on Ge
 ## Bot Behavior
 
 - Google Sheets is the source of truth for logged expenses.
-- `Raw Expenses` contains all confirmed expense rows.
+- `Raw Expenses` contains all confirmed transaction rows.
 - `Fixed Expenses` contains active fixed expense setup.
-- `Monthly Summary` is generated from `Raw Expenses`; rows are categories and columns are months.
+- `Monthly Summary` is generated as a P&L summary; rows include income categories, expense categories, total income, total expenses, and net P&L.
+- `Raw Expenses` includes a `Transaction Type` column after `Description`; valid values are `Expense`, `Income`, and `Fixed`.
+- Old rows with blank `Transaction Type` are backward compatible: infer `Income` when the category starts with `Income -`, infer `Fixed` when input type is fixed, otherwise treat as `Expense`.
 - If `Monthly Summary` shows an unexpected month, investigate and fix the source row in `Raw Expenses` instead of manually deleting the summary column.
 - Date parsing must not treat decimal amounts as years. For example, `shopping 20th may 23.20` should resolve to the current/default year for `20 May`, not year 2023.
 - `Bot State` stores small idempotency markers so Railway restarts do not duplicate scheduled reminders or final summaries.
@@ -40,7 +42,10 @@ This file contains project-specific instructions for coding agents working on Ge
 - `confirm fixed <month> <year>` and `confirm fixed last month` should review that target month, with rows dated on that month's last day.
 - The fixed review list is the source for confirmation: if an active fixed expense row is shown, it should be inserted into `Raw Expenses` and written directly into `Monthly Summary`.
 - Do not use duplicate prompts or duplicate skips for fixed expenses. Fixed expenses are monthly setup values with unique fixed categories.
+- Before writing fixed rows for a confirmed month, delete existing confirmed fixed rows for that same month so the fixed audit trail stays clean.
 - In `Monthly Summary`, fixed category/month values should be replaced by the latest confirmed fixed review amount, not summed as duplicate fixed rows.
+- Income categories should start with `Income -`; this prefix is used to separate income from expenses in summaries.
+- Income is not person-specific. The sender may still be recorded in `Logged By`, but P&L totals do not split income by sender.
 - Plain `confirm`, `confirmed`, `confirm fixed`, and `confirmed fixed` should all confirm an active fixed expense review.
 - Delete operations must be confirmation-based. Show the matched expense and wait for explicit confirmation before deleting from Google Sheets.
 - Existing logged expense edits must be confirmation-based. Show the before/after row and wait for explicit confirmation before updating Google Sheets.

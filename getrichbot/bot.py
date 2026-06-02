@@ -1076,6 +1076,7 @@ class FinanceBot:
                 category=change.category,
                 description=change.description,
                 expense_date=change.expense_date,
+                transaction_type=_transaction_type_for_category(change.category, change.record.input_type) if change.category else None,
             )
             updated_lines.append(f"Updated {self._edit_after_line(change)}")
         self._refresh_monthly_summary()
@@ -1192,7 +1193,7 @@ class FinanceBot:
         return True
 
     def _find_duplicate(self, row: ExpenseRow) -> ExpenseRecord | None:
-        if row.input_type.lower() == "fixed":
+        if row.transaction_type.lower() == "fixed" or row.input_type.lower() == "fixed":
             return None
         recent_duplicate = self._find_recent_duplicate(row)
         if recent_duplicate is not None:
@@ -1200,7 +1201,11 @@ class FinanceBot:
         records = self.sheets.get_expense_records(self.settings.raw_expenses_sheet)
         row_date = row.timestamp.strftime("%Y-%m-%d")
         for record in reversed(records):
-            if record.status.lower() != "confirmed" or record.input_type.lower() == "fixed":
+            if (
+                record.status.lower() != "confirmed"
+                or record.transaction_type.lower() == "fixed"
+                or record.input_type.lower() == "fixed"
+            ):
                 continue
             if record.expense_date == row_date and record.amount == row.amount and record.category == row.category:
                 return record
@@ -1221,6 +1226,7 @@ class FinanceBot:
             existing = item.row
             if (
                 existing.status.lower() == "confirmed"
+                and existing.transaction_type.lower() != "fixed"
                 and existing.input_type.lower() != "fixed"
                 and existing.timestamp.strftime("%Y-%m-%d") == row_date
                 and existing.amount == row.amount
@@ -1239,6 +1245,7 @@ class FinanceBot:
                     description=existing.description,
                     input_type=existing.input_type,
                     status=existing.status,
+                    transaction_type=existing.transaction_type,
                 )
         return None
 
@@ -1263,6 +1270,7 @@ class FinanceBot:
             return FixedAddResult(0)
 
         expense_date = _last_day_of_month(month_date)
+        self.sheets.delete_fixed_expenses_for_month(self.settings.raw_expenses_sheet, month_date.strftime("%Y-%m"))
         added_count = 0
         for item in fixed:
             category = str(item["category"])
@@ -1278,6 +1286,7 @@ class FinanceBot:
                 status="Confirmed",
                 telegram_chat_id=chat_id,
                 telegram_message_id=message_id,
+                transaction_type="Fixed",
             )
             self.sheets.append_expense(self.settings.raw_expenses_sheet, row)
             added_count += 1
@@ -1733,6 +1742,7 @@ class FinanceBot:
             status=status,
             telegram_chat_id=update.effective_chat.id,
             telegram_message_id=update.message.message_id,
+            transaction_type=_transaction_type_for_category(category, input_type),
         )
 
     def _row_timestamp(self, draft: ExpenseDraft) -> datetime:
@@ -1772,9 +1782,12 @@ class FinanceBot:
             status=status,
             telegram_chat_id=pending.chat_id,
             telegram_message_id=pending.message_id,
+            transaction_type=_transaction_type_for_category(category, input_type),
         )
 
     def _logged_line(self, row: ExpenseRow) -> str:
+        if row.transaction_type.lower() == "income":
+            return f"Logged income ${row.amount:.2f} to {row.category} - {self._human_date(row.timestamp.date())} [{row.entry_id}]"
         return f"Logged ${row.amount:.2f} to {row.category} - {self._human_date(row.timestamp.date())} [{row.entry_id}]"
 
     def _human_date(self, value) -> str:
@@ -1792,6 +1805,14 @@ def _normalize_category(raw: str) -> str:
         if category.lower().startswith(lowered):
             return category
     return raw
+
+
+def _transaction_type_for_category(category: str, input_type: str) -> str:
+    if input_type.lower() == "fixed":
+        return "Fixed"
+    if category.lower().startswith("income -"):
+        return "Income"
+    return "Expense"
 
 
 def _position_from_text(raw: str, pending_count: int = 0) -> int:

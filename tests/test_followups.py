@@ -36,7 +36,7 @@ class FakeSheets:
                 return record
         return None
 
-    def update_expense_record(self, sheet_name, row_number, amount=None, category=None, description=None, expense_date=None):
+    def update_expense_record(self, sheet_name, row_number, amount=None, category=None, description=None, expense_date=None, transaction_type=None):
         self.updated.append(
             {
                 "row_number": row_number,
@@ -44,6 +44,7 @@ class FakeSheets:
                 "category": category,
                 "description": description,
                 "expense_date": expense_date,
+                "transaction_type": transaction_type,
             }
         )
 

@@ -54,6 +54,7 @@ class FakeSheets:
                 description=row.description,
                 input_type=row.input_type,
                 status=row.status,
+                transaction_type=row.transaction_type,
             )
         )
 
@@ -61,6 +62,19 @@ class FakeSheets:
         if self.hide_appended_records:
             return []
         return self.records
+
+    def delete_fixed_expenses_for_month(self, sheet_name, month):
+        before = len(self.records)
+        self.records = [
+            record
+            for record in self.records
+            if not (
+                record.month == month
+                and record.status.lower() == "confirmed"
+                and (record.transaction_type.lower() == "fixed" or record.input_type.lower() == "fixed")
+            )
+        ]
+        return before - len(self.records)
 
     def update_monthly_summary(self, sheet_name, rows):
         self.summary_updates.append(rows)

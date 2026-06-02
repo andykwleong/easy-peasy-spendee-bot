@@ -20,6 +20,9 @@ DEFAULT_CATEGORY_CONFIG: dict[str, Any] = {
         "Personal care",
         "Entertainment",
         "Gifts",
+        "Income - A",
+        "Income - FX",
+        "Income - Misc",
     ],
     "fixed_categories": [
         "Rent or mortgage",
@@ -36,6 +39,9 @@ DEFAULT_CATEGORY_CONFIG: dict[str, Any] = {
         "Personal care": ["haircut", "salon", "skincare", "facial", "personal care"],
         "Entertainment": ["movie", "cinema", "concert", "game", "games"],
         "Gifts": ["gift", "gifts", "present", "birthday"],
+        "Income - A": ["income a", "salary a"],
+        "Income - FX": ["income fx", "salary fx"],
+        "Income - Misc": ["dividend", "dividends", "sale proceed", "sales proceeds", "interest", "bonus"],
     },
     "priority_keywords": [
         {"category": "Childcare", "keywords": ["baby", "childcare", "diaper", "diapers", "formula"]},
@@ -58,6 +64,16 @@ DEFAULT_CATEGORY_CONFIG: dict[str, Any] = {
         "insurance": "Insurance",
         "gift": "Gifts",
         "gifts": "Gifts",
+        "income a": "Income - A",
+        "salary a": "Income - A",
+        "income fx": "Income - FX",
+        "salary fx": "Income - FX",
+        "dividend": "Income - Misc",
+        "dividends": "Income - Misc",
+        "sale proceed": "Income - Misc",
+        "sales proceeds": "Income - Misc",
+        "interest": "Income - Misc",
+        "bonus": "Income - Misc",
     },
 }
 

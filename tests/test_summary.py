@@ -2,7 +2,8 @@ import unittest
 from datetime import date
 from decimal import Decimal
 
-from getrichbot.categories import SHOPPING_CATEGORIES
+from getrichbot import categories
+from getrichbot.categories import SHOPPING_CATEGORIES, configure_category_config
 from getrichbot.models import ExpenseRecord
 from getrichbot.summary import build_monthly_summary_table, build_spending_summary, format_spending_summary, parse_summary_period
 
@@ -53,6 +54,44 @@ def record_with_month(expense_date: str, month: str, amount: str, category: str)
 
 
 class TestSummary(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.original_config = {
+            "variable_categories": list(categories.VARIABLE_CATEGORIES),
+            "fixed_categories": list(categories.FIXED_CATEGORIES),
+            "category_keywords": {key: list(value) for key, value in categories.CATEGORY_KEYWORDS.items()},
+            "priority_keywords": [
+                {"category": category, "keywords": list(keywords)}
+                for category, keywords in categories.BILL_PRIORITY_KEYWORDS
+            ],
+            "shopping_keywords": list(categories.SHOPPING_KEYWORDS),
+            "shopping_categories": dict(categories.SHOPPING_CATEGORIES),
+            "category_aliases": dict(categories.CATEGORY_ALIASES),
+            "source": "test",
+        }
+        configure_category_config(
+            {
+                "variable_categories": [
+                    "Groceries",
+                    "Food",
+                    "Shopping - Me",
+                    "Income - A",
+                    "Income - Misc",
+                ],
+                "fixed_categories": ["Loan repayment"],
+                "category_keywords": {},
+                "priority_keywords": [],
+                "shopping_keywords": [],
+                "shopping_categories": {"me": "Shopping - Me"},
+                "category_aliases": {},
+                "source": "test",
+            }
+        )
+
+    @classmethod
+    def tearDownClass(cls):
+        configure_category_config(cls.original_config)
+
     def test_summary_defaults_to_current_month_checkpoint(self):
         period = parse_summary_period("summary", date(2026, 5, 22))
 
@@ -128,14 +167,14 @@ class TestSummary(unittest.TestCase):
         self.assertEqual(table[0], ["Category", "2026-05"])
         self.assertIn([shopping_category, "23.20"], table)
 
-    def test_monthly_summary_includes_confirmed_categories_not_in_config(self):
+    def test_monthly_summary_excludes_confirmed_categories_not_in_config(self):
         table = build_monthly_summary_table([
             record("2026-05-31", "123.45", "Custom Fixed Expense")
         ])
 
-        self.assertIn(["Custom Fixed Expense", "123.45"], table)
-        self.assertIn(["Total Expenses", "123.45"], table)
-        self.assertEqual(table[-1], ["Net P&L", "-123.45"])
+        self.assertNotIn(["Custom Fixed Expense", "123.45"], table)
+        self.assertIn(["Total Expenses", "0.00"], table)
+        self.assertEqual(table[-1], ["Net P&L", "0.00"])
 
     def test_monthly_summary_uses_latest_fixed_value_without_summing_duplicates(self):
         table = build_monthly_summary_table([
@@ -143,9 +182,9 @@ class TestSummary(unittest.TestCase):
             record("2026-05-31", "930", "Mortgage", input_type="Fixed", row_number=3),
         ])
 
-        self.assertIn(["Mortgage", "930.00"], table)
-        self.assertIn(["Total Expenses", "930.00"], table)
-        self.assertEqual(table[-1], ["Net P&L", "-930.00"])
+        self.assertNotIn(["Mortgage", "930.00"], table)
+        self.assertIn(["Total Expenses", "0.00"], table)
+        self.assertEqual(table[-1], ["Net P&L", "0.00"])
 
     def test_monthly_summary_fixed_override_replaces_raw_fixed_value(self):
         table = build_monthly_summary_table(
@@ -153,7 +192,27 @@ class TestSummary(unittest.TestCase):
             fixed_overrides={"2026-05": {"Mortgage": Decimal("950")}},
         )
 
-        self.assertIn(["Mortgage", "950.00"], table)
+        self.assertNotIn(["Mortgage", "950.00"], table)
+        self.assertIn(["Total Expenses", "0.00"], table)
+        self.assertEqual(table[-1], ["Net P&L", "0.00"])
+
+    def test_monthly_summary_uses_latest_configured_fixed_value_without_summing_duplicates(self):
+        table = build_monthly_summary_table([
+            record("2026-05-31", "1000", "Loan repayment", input_type="Fixed", row_number=2),
+            record("2026-05-31", "1100", "Loan repayment", input_type="Fixed", row_number=3),
+        ])
+
+        self.assertIn(["Loan repayment", "1100.00"], table)
+        self.assertIn(["Total Expenses", "1100.00"], table)
+        self.assertEqual(table[-1], ["Net P&L", "-1100.00"])
+
+    def test_monthly_summary_fixed_override_replaces_configured_raw_fixed_value(self):
+        table = build_monthly_summary_table(
+            [record("2026-05-31", "1000", "Loan repayment", input_type="Fixed")],
+            fixed_overrides={"2026-05": {"Loan repayment": Decimal("950")}},
+        )
+
+        self.assertIn(["Loan repayment", "950.00"], table)
         self.assertIn(["Total Expenses", "950.00"], table)
         self.assertEqual(table[-1], ["Net P&L", "-950.00"])
 

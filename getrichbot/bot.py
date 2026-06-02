@@ -14,7 +14,7 @@ from datetime import timedelta
 from time import perf_counter
 from zoneinfo import ZoneInfo
 
-from getrichbot.categories import ALL_CATEGORIES, CATEGORY_ALIASES, FIXED_CATEGORIES, VARIABLE_CATEGORIES, configure_category_config
+from getrichbot.categories import ALL_CATEGORIES, CATEGORY_ALIASES, FIXED_CATEGORIES, VARIABLE_CATEGORIES, category_config_status, configure_category_config
 from getrichbot.config import Settings
 from getrichbot.image_utils import prepare_image_for_vision
 from getrichbot.models import ExpenseDraft, ExpenseRecord, ExpenseRow
@@ -165,6 +165,23 @@ class FinanceBot:
 
     async def categories(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text("Categories:\n" + "\n".join(f"- {category}" for category in ALL_CATEGORIES))
+
+    async def category_debug(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if update.message is None or update.effective_user is None:
+            return
+        if self.settings.label_for_user(update.effective_user.id) is None:
+            await update.message.reply_text("I do not recognize this Telegram user ID yet.")
+            return
+        status = category_config_status()
+        preview = "\n".join(f"- {category}" for category in status["categories"][:15])
+        await update.message.reply_text(
+            "Category config debug:\n\n"
+            f"Source: {status['source']}\n"
+            f"Variable categories: {status['variable_count']}\n"
+            f"Fixed categories: {status['fixed_count']}\n\n"
+            "First categories:\n"
+            f"{preview}"
+        )
 
     async def summary_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if update.message is None:
@@ -1933,15 +1950,19 @@ def main() -> None:
         service_account_json=settings.service_account_json,
     )
     sheet_category_config = sheets.get_category_config(settings.categories_sheet, settings.category_keywords_sheet)
-    if sheet_category_config.get("variable_categories"):
-        configure_category_config(sheet_category_config)
-        LOGGER.info(
-            "Loaded %d variable and %d fixed categories from Google Sheets.",
-            len(VARIABLE_CATEGORIES),
-            len(FIXED_CATEGORIES),
+    if not sheet_category_config.get("variable_categories"):
+        raise RuntimeError(
+            "No active categories found in Google Sheets. "
+            f"Check sheet tabs '{settings.categories_sheet}' and '{settings.category_keywords_sheet}'."
         )
-    else:
-        LOGGER.warning("No categories found in Google Sheets. Falling back to JSON/default category config.")
+    configure_category_config(sheet_category_config)
+    LOGGER.info(
+        "Loaded %d variable and %d fixed categories from Google Sheets tab %s. Keywords tab: %s.",
+        len(VARIABLE_CATEGORIES),
+        len(FIXED_CATEGORIES),
+        sheet_category_config.get("categories_sheet_loaded"),
+        sheet_category_config.get("keywords_sheet_loaded"),
+    )
     finance_bot = FinanceBot(settings, sheets)
 
     print("Loading Telegram library...", flush=True)
@@ -1967,6 +1988,7 @@ def main() -> None:
     application.add_handler(CommandHandler("help", finance_bot.help_command))
     application.add_handler(CommandHandler("whoami", finance_bot.whoami))
     application.add_handler(CommandHandler(["categories", "category"], finance_bot.categories))
+    application.add_handler(CommandHandler("categorydebug", finance_bot.category_debug))
     application.add_handler(CommandHandler("pending", finance_bot.pending_command))
     application.add_handler(CommandHandler("summary", finance_bot.summary_command))
     application.add_handler(CommandHandler("confirm", finance_bot.confirm_command))

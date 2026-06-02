@@ -98,21 +98,8 @@ def build_monthly_summary_table(
 
     header = ["Category", *months]
     rows = [header]
-    extra_categories = sorted(
-        {
-            record.category
-            for record in records
-            if record.status.lower() == "confirmed" and record.category not in ALL_CATEGORIES
-        }
-        | {
-            category
-            for month_values in fixed_overrides.values()
-            for category in month_values
-            if category not in ALL_CATEGORIES
-        }
-    )
-    income_categories = [category for category in [*ALL_CATEGORIES, *extra_categories] if _is_income_category(category)]
-    expense_categories = [category for category in [*ALL_CATEGORIES, *extra_categories] if not _is_income_category(category)]
+    income_categories = [category for category in ALL_CATEGORIES if _is_income_category(category)]
+    expense_categories = [category for category in ALL_CATEGORIES if not _is_income_category(category)]
     categories = [*income_categories, *expense_categories]
     category_months: dict[str, dict[str, Decimal]] = {category: {} for category in categories}
 

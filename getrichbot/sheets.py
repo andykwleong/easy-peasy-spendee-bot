@@ -69,11 +69,11 @@ class SheetsClient:
         return expenses
 
     def get_category_config(self, categories_sheet: str, keywords_sheet: str) -> dict[str, Any]:
-        category_rows = self._get_values_first_available(
+        category_source, category_rows = self._get_values_first_available(
             [categories_sheet, "Categories", "categories"],
             "A2:D",
         )
-        keyword_rows = self._get_values_first_available(
+        keyword_source, keyword_rows = self._get_values_first_available(
             [keywords_sheet, "Category Keywords", "Category Keyword", "Categories Keyword", "categories keyword"],
             "A2:D",
         )
@@ -117,6 +117,9 @@ class SheetsClient:
                 priority_keywords.append({"category": category, "keywords": [keyword]})
 
         return {
+            "source": "google_sheets" if category_rows else "empty",
+            "categories_sheet_loaded": category_source,
+            "keywords_sheet_loaded": keyword_source,
             "variable_categories": variable_categories,
             "fixed_categories": fixed_categories,
             "category_keywords": category_keywords,
@@ -345,7 +348,7 @@ class SheetsClient:
                 return properties["sheetId"]
         return None
 
-    def _get_values_first_available(self, sheet_names: list[str], cell_range: str) -> list[list[str]]:
+    def _get_values_first_available(self, sheet_names: list[str], cell_range: str) -> tuple[str | None, list[list[str]]]:
         seen = []
         for sheet_name in sheet_names:
             if not sheet_name or sheet_name in seen:
@@ -358,8 +361,8 @@ class SheetsClient:
                 ).execute()
             except Exception:
                 continue
-            return result.get("values", [])
-        return []
+            return sheet_name, result.get("values", [])
+        return None, []
 
 
 def _cell(row: list[str], index: int) -> str:

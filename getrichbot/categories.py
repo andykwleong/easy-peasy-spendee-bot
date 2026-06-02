@@ -77,6 +77,8 @@ DEFAULT_CATEGORY_CONFIG: dict[str, Any] = {
     },
 }
 
+CONFIG_SOURCE = "fallback"
+
 
 def _load_category_config() -> dict[str, Any]:
     load_dotenv()
@@ -146,6 +148,7 @@ def _validate_config(config: dict[str, Any]) -> None:
 
 
 def configure_category_config(config: dict[str, Any]) -> None:
+    global CONFIG_SOURCE
     variable_categories = _string_list(config.get("variable_categories", []))
     fixed_categories = _string_list(config.get("fixed_categories", []))
     all_categories = variable_categories + fixed_categories
@@ -179,6 +182,16 @@ def configure_category_config(config: dict[str, Any]) -> None:
     SHOPPING_CATEGORIES.update(shopping_categories)
     CATEGORY_ALIASES.clear()
     CATEGORY_ALIASES.update(category_aliases)
+    CONFIG_SOURCE = str(config.get("source") or "custom")
+
+
+def category_config_status() -> dict[str, Any]:
+    return {
+        "source": CONFIG_SOURCE,
+        "variable_count": len(VARIABLE_CATEGORIES),
+        "fixed_count": len(FIXED_CATEGORIES),
+        "categories": list(ALL_CATEGORIES),
+    }
 
 
 def category_guidance_text() -> str:

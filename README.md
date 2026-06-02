@@ -137,13 +137,13 @@ The category names in `Raw Expenses`, `Fixed Expenses`, `Categories`, and `Categ
 
 Income category names should start with `Income -`. The bot uses that prefix to separate income from expenses in `Monthly Summary`.
 
-Category loading order:
+Production category loading:
 
-1. The bot first tries the Google Sheet tabs named by `CATEGORIES_SHEET` and `CATEGORY_KEYWORDS_SHEET`.
-2. If those tabs are missing or empty, it can fall back to `CATEGORIES_JSON`.
-3. If `CATEGORIES_JSON` is also empty, it can fall back to a local categories file or the public example defaults.
+1. The bot loads categories from the Google Sheet tabs named by `CATEGORIES_SHEET` and `CATEGORY_KEYWORDS_SHEET`.
+2. If no active Google Sheet categories are found, the bot stops at startup instead of silently using public fallback categories.
+3. Use `/categorydebug` in Telegram to confirm the loaded source and category counts.
 
-Leaving `CATEGORIES_JSON` in Railway is fine as a backup, but the Google Sheet tabs are the main setup. If `/categories` shows old categories, check that the Sheet tabs are named correctly and that any old Railway fallback value is not hiding a Sheet setup problem.
+Do not use `CATEGORIES_JSON` in Railway for the normal setup. Keeping categories in Google Sheets avoids stale fallback categories appearing in `Monthly Summary`.
 
 The public repo still includes [categories.example.json](categories.example.json) as a fallback/template for open-source users who do not want to use Google Sheet category tabs.
 
@@ -191,8 +191,6 @@ GOOGLE_SERVICE_ACCOUNT_FILE=
 GOOGLE_SERVICE_ACCOUNT_JSON=
 CATEGORIES_SHEET=Categories
 CATEGORY_KEYWORDS_SHEET=Category Keywords
-CATEGORIES_FILE=categories.json
-CATEGORIES_JSON=
 ME_TELEGRAM_IDS=
 WIFE_TELEGRAM_IDS=
 ME_LABEL=Me
@@ -208,7 +206,7 @@ OPENAI_MODEL=gpt-5.4-mini
 
 Never commit real secrets. Keep them in Railway variables or your local `.env`.
 
-For categories, most users should only set `CATEGORIES_SHEET` and `CATEGORY_KEYWORDS_SHEET`. `CATEGORIES_FILE` and `CATEGORIES_JSON` are optional fallback options for people who do not want to manage categories in Google Sheets.
+For categories, set `CATEGORIES_SHEET` and `CATEGORY_KEYWORDS_SHEET`. The running bot expects active category rows in Google Sheets.
 
 ## Telegram Usage
 

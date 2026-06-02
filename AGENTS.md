@@ -50,7 +50,10 @@ This file contains project-specific instructions for coding agents working on Ge
 - Delete operations must be confirmation-based. Show the matched expense and wait for explicit confirmation before deleting from Google Sheets.
 - Existing logged expense edits must be confirmation-based. Show the before/after row and wait for explicit confirmation before updating Google Sheets.
 - User-specific categories should live in the Google Sheet `Categories` and `Category Keywords` tabs; do not hardcode personal category lists in public source.
-- Category loading order is Google Sheet tabs first, then `CATEGORIES_JSON`, then local/example fallback. A stale Railway `CATEGORIES_JSON` value can hide a Sheet tab setup issue, so mention this when debugging category surprises.
+- Production category loading must use the Google Sheet `Categories` and `Category Keywords` tabs. Do not silently fall back to JSON/default categories in production.
+- If Google Sheet categories are missing or empty at startup, fail loudly so public fallback categories cannot leak into `Monthly Summary`.
+- `Monthly Summary` must only show categories from the current configured category list plus total rows. Do not add extra rows from unknown/raw categories.
+- Use `/categorydebug` to show category source/counts when debugging category surprises.
 - Category priority keywords and aliases should come from the Google Sheet category tabs and should beat generic category matching.
 - A message with one clear category and multiple listed amounts, for example `groceries 63 and 15.20`, should log separate rows for each amount. This is not split-bill behavior.
 - Multiple undated expense lines should log as separate rows dated today.

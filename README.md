@@ -280,6 +280,7 @@ Commands:
 - `/fixed` - preview active fixed expenses
 - `/confirmfixed` - review active fixed expenses before adding them
 - `/categories` - show available categories
+- `/refreshcategories` - reload `Categories` and `Category Keywords` from Google Sheets after you edit them
 
 Plain-language shortcuts:
 
@@ -315,6 +316,8 @@ The bot still validates actions against real `Entry ID` rows in Google Sheets be
 Delete requests ask for confirmation before removing a row. Reply `yes` to delete, or `cancel`.
 
 Edit requests for already logged Google Sheet rows also ask for confirmation before changing the row. Reply `yes` to update, or `cancel`.
+
+If the bot asks for a missing category on a normal typed expense, reply with the category name. For example, if the bot asks about `durian 12`, replying `Food` logs it immediately.
 
 When a new expense has the same date, amount, and category as an existing confirmed expense, the bot flags it as a possible duplicate. Reply `confirm` to log it anyway, or `cancel` to discard the new duplicate attempt.
 
@@ -359,7 +362,7 @@ The bot shows the full fixed expense list again after edits. Once you reply `con
 - Priority keywords and aliases come from your category config.
 - A clear list of amounts under one category, such as `groceries 63 and 15.20`, logs as separate expense rows.
 - Multiple undated expense lines default to today's date.
-- Category changes should be made in the `Categories` and `Category Keywords` Google Sheet tabs.
+- Category changes should be made in the `Categories` and `Category Keywords` Google Sheet tabs. After editing those tabs, send `/refreshcategories` in Telegram so the running Railway bot reloads the latest sheet values.
 - Follow-up replies can update pending entries, for example `gift` or `confirm 2 as Gifts`.
 - `change spend date to 21 May` updates the latest logged expense for that sender.
 - A bare entry ID like `1d9c9a` opens the delete confirmation for that expense, so it will not be mistaken for a $9 expense.

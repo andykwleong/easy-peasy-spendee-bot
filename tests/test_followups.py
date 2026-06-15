@@ -3,12 +3,16 @@ from decimal import Decimal
 
 from getrichbot.bot import FinanceBot
 from getrichbot.ai import EntryUpdate, ExpenseIntent
+from getrichbot import categories
+from getrichbot.categories import configure_category_config
 from getrichbot.models import ExpenseDraft, ExpenseRecord
 
 
 class FakeSettings:
     raw_expenses_sheet = "Raw Expenses"
     monthly_summary_sheet = "Monthly Summary"
+    categories_sheet = "Categories"
+    category_keywords_sheet = "Category Keywords"
     me_label = "Me"
     wife_label = "My wife"
     openai_api_key = None
@@ -51,6 +55,20 @@ class FakeSheets:
     def update_monthly_summary(self, sheet_name, rows):
         pass
 
+    def get_category_config(self, categories_sheet, keywords_sheet):
+        return {
+            "source": "google_sheets",
+            "categories_sheet_loaded": categories_sheet,
+            "keywords_sheet_loaded": keywords_sheet,
+            "variable_categories": ["Food", "Gifts", "Shopping - My wife"],
+            "fixed_categories": [],
+            "category_keywords": {"Food": ["durian"], "Gifts": ["gift", "gifts"], "Shopping - My wife": ["shoes"]},
+            "priority_keywords": [],
+            "shopping_keywords": [],
+            "shopping_categories": {"wife": "Shopping - My wife"},
+            "category_aliases": {"food": "Food", "gift": "Gifts", "gifts": "Gifts", "durian": "Food"},
+        }
+
 
 class FakeUser:
     id = 456
@@ -77,6 +95,11 @@ class FakeUpdate:
         self.effective_chat = FakeChat()
 
 
+class FakeContext:
+    def __init__(self, args=None):
+        self.args = args or []
+
+
 def record() -> ExpenseRecord:
     return ExpenseRecord(
         row_number=5,
@@ -95,6 +118,24 @@ def record() -> ExpenseRecord:
 
 
 class TestFollowups(unittest.IsolatedAsyncioTestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.original_config = {
+            "variable_categories": list(categories.VARIABLE_CATEGORIES),
+            "fixed_categories": list(categories.FIXED_CATEGORIES),
+            "category_keywords": {key: list(value) for key, value in categories.CATEGORY_KEYWORDS.items()},
+            "priority_keywords": [
+                {"category": category, "keywords": list(keywords)}
+                for category, keywords in categories.BILL_PRIORITY_KEYWORDS
+            ],
+            "shopping_keywords": list(categories.SHOPPING_KEYWORDS),
+            "shopping_categories": dict(categories.SHOPPING_CATEGORIES),
+            "category_aliases": dict(categories.CATEGORY_ALIASES),
+        }
+
+    async def asyncTearDown(self):
+        configure_category_config(self.original_config)
+
     async def test_change_multiple_pending_categories_keeps_items_pending(self):
         sheets = FakeSheets()
         bot = FinanceBot(FakeSettings(), sheets)
@@ -186,10 +227,11 @@ class TestFollowups(unittest.IsolatedAsyncioTestCase):
         handled = await bot.handle_pending_update(update)
 
         self.assertTrue(handled)
-        self.assertEqual(bot.pending["abc123"].draft.category, "Gifts")
-        self.assertIn("Updated pending category to Gifts:", update.message.replies[0])
+        self.assertEqual(len(sheets.rows), 1)
+        self.assertEqual(sheets.rows[0].category, "Gifts")
+        self.assertNotIn("abc123", bot.pending)
 
-    async def test_confirm_after_single_text_pending_category_update_logs_item(self):
+    async def test_category_reply_logs_single_text_pending_item_immediately(self):
         sheets = FakeSheets()
         bot = FinanceBot(FakeSettings(), sheets)
         update = FakeUpdate("Food")
@@ -198,18 +240,32 @@ class TestFollowups(unittest.IsolatedAsyncioTestCase):
         handled = await bot.handle_pending_update(update)
 
         self.assertTrue(handled)
-        self.assertEqual(bot.pending["abc123"].draft.category, "Food")
-        self.assertIn("Reply: confirm all", update.message.replies[0])
-        self.assertNotIn("confirm 2 as Food", update.message.replies[0])
-
-        update.message = FakeMessage("Confirm")
-        handled = await bot.handle_pending_update(update)
-
-        self.assertTrue(handled)
         self.assertEqual(len(sheets.rows), 1)
         self.assertEqual(sheets.rows[0].amount, Decimal("31.90"))
         self.assertEqual(sheets.rows[0].category, "Food")
         self.assertNotIn("abc123", bot.pending)
+
+    async def test_confirm_command_without_args_confirms_single_pending_item(self):
+        sheets = FakeSheets()
+        bot = FinanceBot(FakeSettings(), sheets)
+        update = FakeUpdate("/confirm")
+        bot.pending = {"abc123": bot_pending("31.90", "Pizza", "Food")}
+
+        await bot.confirm_command(update, FakeContext())
+
+        self.assertEqual(len(sheets.rows), 1)
+        self.assertEqual(sheets.rows[0].category, "Food")
+        self.assertNotIn("abc123", bot.pending)
+
+    async def test_refresh_categories_loads_sheet_keywords(self):
+        sheets = FakeSheets()
+        bot = FinanceBot(FakeSettings(), sheets)
+        update = FakeUpdate("/refreshcategories")
+
+        await bot.refresh_categories(update, FakeContext())
+
+        self.assertIn("Categories refreshed from Google Sheets.", update.message.replies[0])
+        self.assertEqual(categories.CATEGORY_ALIASES["durian"], "Food")
 
     async def test_change_spend_date_updates_latest_logged_expense(self):
         sheets = FakeSheets(records=[record()])

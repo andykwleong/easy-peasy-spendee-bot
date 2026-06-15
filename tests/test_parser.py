@@ -34,6 +34,7 @@ class TestParser(unittest.TestCase):
             ],
             "category_keywords": {
                 **cls.original_config["category_keywords"],
+                "Food": [*cls.original_config["category_keywords"].get("Food", []), "durian"],
                 "Income - A": ["income a", "salary a"],
                 "Income - FX": ["income fx", "salary fx"],
                 "Income - Misc": ["dividend", "dividends", "sale proceed", "sales proceeds", "interest", "bonus"],
@@ -78,6 +79,13 @@ class TestParser(unittest.TestCase):
         draft = parse_expense("tea 3.5", "Me", "Me", "My wife", today=date(2026, 5, 22))
 
         self.assertIsNotNone(draft)
+        self.assertEqual(draft.category, "Food")
+
+    def test_sheet_keyword_maps_durian_to_food(self):
+        draft = parse_expense("durian 12", "Me", "Me", "My wife", today=date(2026, 6, 15))
+
+        self.assertIsNotNone(draft)
+        self.assertEqual(draft.amount, Decimal("12"))
         self.assertEqual(draft.category, "Food")
 
     def test_parse_groceries_expense(self):

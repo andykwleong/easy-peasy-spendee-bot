@@ -54,14 +54,16 @@ This file contains project-specific instructions for coding agents working on Ge
 - If Google Sheet categories are missing or empty at startup, fail loudly so public fallback categories cannot leak into `Monthly Summary`.
 - `Monthly Summary` must only show categories from the current configured category list plus total rows. Do not add extra rows from unknown/raw categories.
 - Use `/categorydebug` to show category source/counts when debugging category surprises.
+- Use `/refreshcategories` after Google Sheet category edits to reload `Categories` and `Category Keywords` without redeploying Railway.
 - Category priority keywords and aliases should come from the Google Sheet category tabs and should beat generic category matching.
 - A message with one clear category and multiple listed amounts, for example `groceries 63 and 15.20`, should log separate rows for each amount. This is not split-bill behavior.
 - Multiple undated expense lines should log as separate rows dated today.
 - In multiline messages, a standalone first-line date should apply to all following expense lines before checking for individually dated lines.
 - Date-like text such as `21 May` should be removed before amount selection, so `30 gifts spent on 21 May` logs `$30`, not `$21`.
 - Follow-up replies should handle normal wording such as `confirm 2`, `gift`, and `change spend date to 21 May`.
+- If a normal typed expense is pending only because the category is missing, replying with a valid category should log it immediately.
 - Screenshot and voice-note pending entries must remain pending after category/date changes until the user explicitly confirms logging.
-- Plain pending replies like `confirm` and `confirm all` should target the latest pending batch for that chat/user when one exists; otherwise they should fall back to normal text pending entries.
+- Plain pending replies like `confirm`, `yes`, and `confirm all` should target the latest pending batch for that chat/user when one exists; otherwise they should fall back to normal text pending entries.
 - Duplicate checks should include a one-minute recently logged in-memory window so immediately repeated confirmations are caught even before Google Sheets read-back reflects the append.
 - A bare 6-character entry ID should be treated as a delete lookup, not parsed as an expense amount.
 

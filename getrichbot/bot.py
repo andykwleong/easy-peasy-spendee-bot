@@ -42,6 +42,7 @@ Useful commands:
 /whoami - show your Telegram ID
 /pending - show items needing review
 /categories or /category - show categories
+/refreshcategories - reload categories from Google Sheets
 /summary - show this month's checkpoint
 /fixed - preview fixed expenses
 /confirmfixed - review fixed expenses
@@ -145,6 +146,9 @@ class FinanceBot:
             self.ai = AIInterpreter(self.settings.openai_api_key, self.settings.openai_model)
         return self.ai
 
+    def _load_category_config_from_sheets(self) -> dict:
+        return load_category_config_from_sheets(self.settings, self.sheets)
+
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(HELP_TEXT)
 
@@ -181,6 +185,28 @@ class FinanceBot:
             f"Fixed categories: {status['fixed_count']}\n\n"
             "First categories:\n"
             f"{preview}"
+        )
+
+    async def refresh_categories(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if update.message is None or update.effective_user is None:
+            return
+        if self.settings.label_for_user(update.effective_user.id) is None:
+            await update.message.reply_text("I do not recognize this Telegram user ID yet.")
+            return
+
+        config = self._load_category_config_from_sheets()
+        configure_category_config(config)
+        LOGGER.info(
+            "Refreshed %d variable and %d fixed categories from Google Sheets tab %s. Keywords tab: %s.",
+            len(VARIABLE_CATEGORIES),
+            len(FIXED_CATEGORIES),
+            config.get("categories_sheet_loaded"),
+            config.get("keywords_sheet_loaded"),
+        )
+        await update.message.reply_text(
+            "Categories refreshed from Google Sheets.\n\n"
+            f"Variable categories: {len(VARIABLE_CATEGORIES)}\n"
+            f"Fixed categories: {len(FIXED_CATEGORIES)}"
         )
 
     async def summary_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -239,7 +265,7 @@ class FinanceBot:
             await update.message.reply_text(
                 f"I found ${draft.amount:.2f}, but need a category.\n"
                 f"Pending ID: {pending_id}\n"
-                f"Reply: /confirm {pending_id} Food"
+                "Reply with the category, for example: Food"
             )
             return
 
@@ -266,7 +292,11 @@ class FinanceBot:
         if update.message is None:
             return
         if len(context.args) < 1:
-            await update.message.reply_text("Usage: /confirm <pending_id> [category] [YYYY-MM-DD]")
+            latest_matching = self._matching_pending(update, latest_batch_only=True)
+            if latest_matching or self._matching_pending(update):
+                await self._confirm_all_pending(update, latest_batch_only=bool(latest_matching))
+                return
+            await update.message.reply_text("No pending expenses to confirm.")
             return
 
         if context.args[0].lower() == "all":
@@ -498,7 +528,7 @@ class FinanceBot:
         today = datetime.now(SINGAPORE_TZ).date()
 
         if lowered in {"yes", "ok", "okay", "looks good", "correct", "log it", "confirm", "confirm them", "log them"}:
-            await self._confirm_all_pending(update, latest_batch_only=bool(self._latest_pending_batch_id(update)))
+            await self._confirm_all_pending(update, latest_batch_only=bool(self._matching_pending(update, latest_batch_only=True)))
             return True
 
         category_updates, invalid_categories = self._parse_pending_category_changes(lowered, len(matching))
@@ -532,7 +562,10 @@ class FinanceBot:
 
         category_reply = _normalize_category(lowered)
         if category_reply in VARIABLE_CATEGORIES:
-            changed = self._update_unclear_pending_categories(update, category_reply)
+            logged_lines, changed = await self._apply_category_reply(update, category_reply)
+            if logged_lines:
+                await update.message.reply_text("\n\n".join(logged_lines))
+                return True
             if changed:
                 await update.message.reply_text(self._pending_summary(update, f"Updated pending category to {category_reply}:"))
                 return True
@@ -1637,6 +1670,48 @@ class FinanceBot:
                 batch_id=pending.batch_id,
             )
 
+    async def _apply_category_reply(self, update: Update, category: str) -> tuple[list[str], bool]:
+        matching = self._matching_pending(update, latest_batch_only=True) or self._matching_pending(update)
+        logged_lines: list[str] = []
+        changed = False
+
+        for pending_id, pending in matching:
+            if pending.draft.category in VARIABLE_CATEGORIES:
+                continue
+
+            draft = pending.draft
+            updated_pending = PendingExpense(
+                draft=ExpenseDraft(
+                    raw_input=draft.raw_input,
+                    amount=draft.amount,
+                    category=category,
+                    description=draft.description,
+                    confidence=max(draft.confidence, 0.95),
+                    expense_date=draft.expense_date,
+                    needs_date_confirmation=draft.needs_date_confirmation,
+                ),
+                logged_by=pending.logged_by,
+                chat_id=pending.chat_id,
+                message_id=pending.message_id,
+                created_at=pending.created_at,
+                reason=pending.reason,
+                batch_id=pending.batch_id,
+            )
+
+            if pending.reason == "category":
+                self.pending.pop(pending_id, None)
+                row = self._expense_row_from_pending(updated_pending, category, "Confirmed", "Text", None)
+                logged_line = await self._append_or_hold_duplicate(update, row)
+                if logged_line:
+                    logged_lines.append(logged_line)
+                changed = True
+                continue
+
+            self.pending[pending_id] = updated_pending
+            changed = True
+
+        return logged_lines, changed
+
     def _update_unclear_pending_categories(self, update: Update, category: str) -> bool:
         changed = False
         for pending_id, pending in self._matching_pending(update):
@@ -1712,10 +1787,11 @@ class FinanceBot:
 
         logged_lines = []
         for pending_id, pending in matching:
-            if pending.draft.category not in VARIABLE_CATEGORIES:
+            category = pending.draft.category or self._infer_pending_category(pending)
+            if category not in VARIABLE_CATEGORIES:
                 continue
             self.pending.pop(pending_id, None)
-            row = self._expense_row_from_pending(pending, pending.draft.category, "Confirmed", pending.reason.title(), None)
+            row = self._expense_row_from_pending(pending, category, "Confirmed", pending.reason.title(), None)
             logged_line = await self._append_or_hold_duplicate(update, row)
             if logged_line:
                 logged_lines.append(logged_line)
@@ -1939,6 +2015,16 @@ def _normalize_lookup_text(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", value.lower()).strip()
 
 
+def load_category_config_from_sheets(settings: Settings, sheets: SheetsClient) -> dict:
+    sheet_category_config = sheets.get_category_config(settings.categories_sheet, settings.category_keywords_sheet)
+    if not sheet_category_config.get("variable_categories"):
+        raise RuntimeError(
+            "No active categories found in Google Sheets. "
+            f"Check sheet tabs '{settings.categories_sheet}' and '{settings.category_keywords_sheet}'."
+        )
+    return sheet_category_config
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, force=True)
     print("GetRichBot startup reached.", flush=True)
@@ -1949,12 +2035,7 @@ def main() -> None:
         service_account_file=settings.service_account_file,
         service_account_json=settings.service_account_json,
     )
-    sheet_category_config = sheets.get_category_config(settings.categories_sheet, settings.category_keywords_sheet)
-    if not sheet_category_config.get("variable_categories"):
-        raise RuntimeError(
-            "No active categories found in Google Sheets. "
-            f"Check sheet tabs '{settings.categories_sheet}' and '{settings.category_keywords_sheet}'."
-        )
+    sheet_category_config = load_category_config_from_sheets(settings, sheets)
     configure_category_config(sheet_category_config)
     LOGGER.info(
         "Loaded %d variable and %d fixed categories from Google Sheets tab %s. Keywords tab: %s.",
@@ -1989,6 +2070,7 @@ def main() -> None:
     application.add_handler(CommandHandler("whoami", finance_bot.whoami))
     application.add_handler(CommandHandler(["categories", "category"], finance_bot.categories))
     application.add_handler(CommandHandler("categorydebug", finance_bot.category_debug))
+    application.add_handler(CommandHandler("refreshcategories", finance_bot.refresh_categories))
     application.add_handler(CommandHandler("pending", finance_bot.pending_command))
     application.add_handler(CommandHandler("summary", finance_bot.summary_command))
     application.add_handler(CommandHandler("confirm", finance_bot.confirm_command))

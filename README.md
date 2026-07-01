@@ -351,8 +351,10 @@ confirm fixed last month
 Before confirming, you can edit amounts using the category names shown in the list:
 
 ```text
-income tax andy change to 30 and property tax hillview change to 10
+change income tax andy to 30 and change property tax hillview to 10
 ```
+
+Unique shortened names also work. For example, `change example provider to 64.02` can match `Bills (Example Provider)`. If a shortened name matches more than one fixed category, the bot asks you to use a more specific name instead of guessing.
 
 The bot shows the full fixed expense list again after edits. Once you reply `confirm fixed`, `confirmed fixed`, or `confirm`, the rows are added to `Raw Expenses` for audit trail and the reviewed fixed values are written directly into `Monthly Summary`.
 

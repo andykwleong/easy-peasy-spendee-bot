@@ -162,6 +162,42 @@ class TestFixedReview(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(sheets.summary_updates)
         self.assertIn("Added 3 fixed expenses for May 2026.", update.message.replies[0])
 
+    async def test_fixed_review_accepts_change_first_and_unique_short_name(self):
+        sheets = FakeSheets()
+        sheets.fixed = [
+            {"category": "Bills (Example Provider)", "amount": Decimal("56.92"), "notes": ""},
+            {"category": "Loan repayment", "amount": Decimal("1000"), "notes": ""},
+        ]
+        bot = FinanceBot(FakeSettings(), sheets)
+        update = FakeUpdate("confirm fixed June 2026")
+
+        await bot.handle_plain_language_command(update)
+        update.message = FakeMessage("change example provider to 64.02")
+        handled = await bot.handle_plain_language_command(update)
+
+        self.assertTrue(handled)
+        self.assertIn("Bills (Example Provider): $64.02", update.message.replies[0])
+        self.assertIn("Loan repayment: $1,000.00", update.message.replies[0])
+
+    async def test_fixed_review_rejects_ambiguous_short_name(self):
+        sheets = FakeSheets()
+        sheets.fixed = [
+            {"category": "Mortgage - Home A", "amount": Decimal("900"), "notes": ""},
+            {"category": "Mortgage - Home B", "amount": Decimal("1200"), "notes": ""},
+        ]
+        bot = FinanceBot(FakeSettings(), sheets)
+        update = FakeUpdate("confirm fixed June 2026")
+
+        await bot.handle_plain_language_command(update)
+        update.message = FakeMessage("change mortgage to 1000")
+        handled = await bot.handle_plain_language_command(update)
+
+        self.assertTrue(handled)
+        self.assertIn("I could not match these fixed expense names:", update.message.replies[0])
+        self.assertIn("- mortgage", update.message.replies[0])
+        self.assertEqual(bot.pending_fixed_reviews[-100].items[0]["amount"], Decimal("900"))
+        self.assertEqual(bot.pending_fixed_reviews[-100].items[1]["amount"], Decimal("1200"))
+
     async def test_fixed_review_logs_every_reviewed_item_even_if_not_in_category_config(self):
         sheets = FakeSheets()
         sheets.fixed = [

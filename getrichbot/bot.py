@@ -857,19 +857,31 @@ class FinanceBot:
         lines = [f"Confirm fixed expenses for {_month_label(review.month_date)}:"]
         lines.extend(f"{item['category']}: {_format_money(item['amount'])}" for item in review.items)
         lines.append("Reply: confirm fixed")
-        lines.append("Or say: Income Tax Andy change to 30")
+        lines.append("Or say: change Income Tax Andy to 30")
         return "\n\n".join(lines)
 
     def _parse_fixed_review_updates(self, text: str, review: FixedReview) -> tuple[dict[int, Decimal], list[str]]:
         updates: dict[int, Decimal] = {}
         unknown: list[str] = []
         parts = re.split(r"\s+(?:and|,)\s+", text, flags=re.IGNORECASE)
-        for part in parts:
-            match = re.match(
-                r"^\s*(?P<name>.+?)\s+(?:change|changed|update|set|make)\s+(?:(?:to|as)\s+)?\$?(?P<amount>\d+(?:,\d{3})*(?:\.\d{1,2})?)\s*$",
-                part,
+        patterns = [
+            re.compile(
+                r"^\s*(?P<name>.+?)\s+(?:change|changed|update|set|make)\s+(?:(?:to|as)\s+)?"
+                r"\$?(?P<amount>\d+(?:,\d{3})*(?:\.\d{1,2})?)\s*$",
                 flags=re.IGNORECASE,
-            )
+            ),
+            re.compile(
+                r"^\s*(?:change|changed|update|set|make)\s+(?P<name>.+?)\s+(?:to|as)\s+"
+                r"\$?(?P<amount>\d+(?:,\d{3})*(?:\.\d{1,2})?)\s*$",
+                flags=re.IGNORECASE,
+            ),
+        ]
+        for part in parts:
+            match = None
+            for pattern in patterns:
+                match = pattern.match(part)
+                if match is not None:
+                    break
             if match is None:
                 continue
             amount = Decimal(match.group("amount").replace(",", ""))

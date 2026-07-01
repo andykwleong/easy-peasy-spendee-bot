@@ -39,6 +39,7 @@ This file contains project-specific instructions for coding agents working on Ge
 - Fixed expenses should be dated on the last day of the relevant month.
 - Scheduled monthly reminders/summaries run at 9am Singapore time when `TELEGRAM_CHAT_ID` is configured.
 - Fixed expense confirmation is a review flow: show all fixed expenses first, allow amount edits by category name, then add rows to `Raw Expenses` only after `confirm fixed`.
+- Fixed review amount edits should accept both `Category change to 30` and `change Category to 30`. A unique shortened category name may match, but ambiguous shortened names must not be guessed.
 - `confirm fixed <month> <year>` and `confirm fixed last month` should review that target month, with rows dated on that month's last day.
 - The fixed review list is the source for confirmation: if an active fixed expense row is shown, it should be inserted into `Raw Expenses` and written directly into `Monthly Summary`.
 - Do not use duplicate prompts or duplicate skips for fixed expenses. Fixed expenses are monthly setup values with unique fixed categories.

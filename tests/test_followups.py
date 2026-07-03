@@ -19,7 +19,11 @@ class FakeSettings:
     openai_model = "test-model"
 
     def label_for_user(self, telegram_user_id):
-        return "My wife" if telegram_user_id == 456 else None
+        if telegram_user_id == 456:
+            return "My wife"
+        if telegram_user_id == 123:
+            return "Me"
+        return None
 
 
 class FakeSheets:
@@ -83,9 +87,11 @@ class FakeMessage:
         self.text = text
         self.message_id = 789
         self.replies = []
+        self.reply_markups = []
 
-    async def reply_text(self, text):
+    async def reply_text(self, text, **kwargs):
         self.replies.append(text)
+        self.reply_markups.append(kwargs.get("reply_markup"))
 
 
 class FakeUpdate:
@@ -98,6 +104,55 @@ class FakeUpdate:
 class FakeContext:
     def __init__(self, args=None):
         self.args = args or []
+
+
+class FakeCallbackMessage(FakeMessage):
+    chat_id = -100
+
+
+class FakeCallbackQuery:
+    def __init__(self, data):
+        self.data = data
+        self.message = FakeCallbackMessage("")
+        self.answers = []
+        self.edited_text = None
+        self.reply_markup_removed = False
+
+    async def answer(self, text=None, show_alert=False):
+        self.answers.append((text, show_alert))
+
+    async def edit_message_reply_markup(self, reply_markup=None):
+        self.reply_markup_removed = reply_markup is None
+
+    async def edit_message_text(self, text):
+        self.edited_text = text
+
+
+class FakeCallbackUpdate:
+    def __init__(self, data, user_id=456):
+        self.message = None
+        self.callback_query = FakeCallbackQuery(data)
+        self.effective_user = type("CallbackUser", (), {"id": user_id})()
+        self.effective_chat = FakeChat()
+
+
+class FakeInlineButton:
+    def __init__(self, text, callback_data):
+        self.text = text
+        self.callback_data = callback_data
+
+
+class FakeInlineMarkup:
+    def __init__(self, rows):
+        self.inline_keyboard = rows
+
+
+def fake_income_keyboard(pending_id, income_categories):
+    buttons = [
+        FakeInlineButton(category, f"income_category|{pending_id}|{index}")
+        for index, category in enumerate(income_categories)
+    ]
+    return FakeInlineMarkup([buttons[index:index + 2] for index in range(0, len(buttons), 2)])
 
 
 def record() -> ExpenseRecord:
@@ -132,6 +187,22 @@ class TestFollowups(unittest.IsolatedAsyncioTestCase):
             "shopping_categories": dict(categories.SHOPPING_CATEGORIES),
             "category_aliases": dict(categories.CATEGORY_ALIASES),
         }
+
+    async def asyncSetUp(self):
+        income_categories = ["Income - A", "Income - FX", "Income - Misc"]
+        configure_category_config(
+            {
+                **self.original_config,
+                "variable_categories": [
+                    *self.original_config["variable_categories"],
+                    *[
+                        category
+                        for category in income_categories
+                        if category not in self.original_config["variable_categories"]
+                    ],
+                ],
+            }
+        )
 
     async def asyncTearDown(self):
         configure_category_config(self.original_config)
@@ -266,6 +337,58 @@ class TestFollowups(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("Categories refreshed from Google Sheets.", update.message.replies[0])
         self.assertEqual(categories.CATEGORY_ALIASES["durian"], "Food")
+
+    async def test_generic_income_shows_buttons_and_selection_logs_immediately(self):
+        sheets = FakeSheets()
+        bot = FinanceBot(FakeSettings(), sheets)
+        bot._income_category_keyboard = fake_income_keyboard
+        update = FakeUpdate("income june 15th 2026 15020.33")
+
+        await bot.handle_text(update, FakeContext())
+
+        self.assertEqual(len(bot.pending), 1)
+        pending_id, pending = next(iter(bot.pending.items()))
+        self.assertEqual(pending.reason, "income_category")
+        self.assertEqual(
+            pending.category_options,
+            ("Income - A", "Income - FX", "Income - Misc"),
+        )
+        self.assertIn("Which income category?", update.message.replies[0])
+        keyboard = update.message.reply_markups[0]
+        self.assertEqual(
+            [button.text for row in keyboard.inline_keyboard for button in row],
+            ["Income - A", "Income - FX", "Income - Misc"],
+        )
+
+        callback_update = FakeCallbackUpdate(f"income_category|{pending_id}|0")
+        await bot.handle_income_category_callback(callback_update, FakeContext())
+
+        self.assertEqual(len(sheets.rows), 1)
+        self.assertEqual(sheets.rows[0].amount, Decimal("15020.33"))
+        self.assertEqual(sheets.rows[0].category, "Income - A")
+        self.assertEqual(sheets.rows[0].timestamp.date().isoformat(), "2026-06-15")
+        self.assertEqual(sheets.rows[0].transaction_type, "Income")
+        self.assertNotIn(pending_id, bot.pending)
+        self.assertTrue(callback_update.callback_query.reply_markup_removed)
+        self.assertIn("Logged income $15020.33 to Income - A", callback_update.callback_query.edited_text)
+
+    async def test_other_user_cannot_choose_pending_income_category(self):
+        sheets = FakeSheets()
+        bot = FinanceBot(FakeSettings(), sheets)
+        bot._income_category_keyboard = fake_income_keyboard
+        update = FakeUpdate("income june 15th 2026 15020.33")
+        await bot.handle_text(update, FakeContext())
+        pending_id = next(iter(bot.pending))
+
+        callback_update = FakeCallbackUpdate(f"income_category|{pending_id}|0", user_id=123)
+        await bot.handle_income_category_callback(callback_update, FakeContext())
+
+        self.assertEqual(sheets.rows, [])
+        self.assertIn(pending_id, bot.pending)
+        self.assertEqual(
+            callback_update.callback_query.answers[-1],
+            ("Only the person who submitted this income can choose its category.", True),
+        )
 
     async def test_change_spend_date_updates_latest_logged_expense(self):
         sheets = FakeSheets(records=[record()])

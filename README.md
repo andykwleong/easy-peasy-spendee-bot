@@ -137,6 +137,8 @@ The category names in `Raw Expenses`, `Fixed Expenses`, `Categories`, and `Categ
 
 Income category names should start with `Income -`. The bot uses that prefix to separate income from expenses in `Monthly Summary`.
 
+If a typed entry says only `income` and does not identify a specific income category, the bot shows buttons for the active `Income -` categories. Tapping a button logs the pending income immediately. Only the person who submitted the entry can choose its category.
+
 Production category loading:
 
 1. The bot loads categories from the Google Sheet tabs named by `CATEGORIES_SHEET` and `CATEGORY_KEYWORDS_SHEET`.
@@ -318,6 +320,8 @@ Delete requests ask for confirmation before removing a row. Reply `yes` to delet
 Edit requests for already logged Google Sheet rows also ask for confirmation before changing the row. Reply `yes` to update, or `cancel`.
 
 If the bot asks for a missing category on a normal typed expense, reply with the category name. For example, if the bot asks about `durian 12`, replying `Food` logs it immediately.
+
+For a generic entry such as `income 15 June 2026 15020.33`, the bot shows the active income categories as buttons. The amount and date are preserved, and selecting a button logs the income immediately. These pending buttons use temporary process memory and stop working if Railway restarts before a selection is made.
 
 When a new expense has the same date, amount, and category as an existing confirmed expense, the bot flags it as a possible duplicate. Reply `confirm` to log it anyway, or `cancel` to discard the new duplicate attempt.
 

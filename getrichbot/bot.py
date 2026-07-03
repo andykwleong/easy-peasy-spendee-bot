@@ -26,10 +26,12 @@ from getrichbot.summary import build_monthly_summary_table
 LOGGER = logging.getLogger(__name__)
 SINGAPORE_TZ = ZoneInfo("Asia/Singapore")
 RECENT_DUPLICATE_WINDOW = timedelta(minutes=1)
+INCOME_CATEGORY_CALLBACK = "income_category"
 HELP_TEXT = """Send expenses naturally:
 dinner 60
 ntuc 82.30
 food 60 yesterday
+income 15 June 2026 15020.33
 
 Multiple entries:
 19th May
@@ -68,6 +70,7 @@ class PendingExpense:
     created_at: datetime
     reason: str
     batch_id: str | None = None
+    category_options: tuple[str, ...] = ()
 
 
 @dataclass
@@ -261,6 +264,23 @@ class FinanceBot:
             return
 
         if draft.category is None or draft.confidence < 0.7:
+            income_categories = self._income_category_options(draft)
+            if income_categories:
+                pending_id = self._add_pending(
+                    draft,
+                    logged_by,
+                    update,
+                    "income_category",
+                    category_options=income_categories,
+                )
+                expense_date = draft.expense_date or datetime.now(SINGAPORE_TZ).date()
+                await update.message.reply_text(
+                    f"I found income of {_format_money(draft.amount)} for {self._human_date(expense_date)}.\n\n"
+                    "Which income category?",
+                    reply_markup=self._income_category_keyboard(pending_id, income_categories),
+                )
+                return
+
             pending_id = self._add_pending(draft, logged_by, update, "category")
             await update.message.reply_text(
                 f"I found ${draft.amount:.2f}, but need a category.\n"
@@ -273,6 +293,69 @@ class FinanceBot:
         logged_line = await self._append_or_hold_duplicate(update, row)
         if logged_line:
             await update.message.reply_text(logged_line)
+
+    def _income_category_options(self, draft: ExpenseDraft) -> tuple[str, ...]:
+        if re.search(r"\bincome\b", draft.raw_input, flags=re.IGNORECASE) is None:
+            return ()
+        return tuple(category for category in VARIABLE_CATEGORIES if category.lower().startswith("income -"))
+
+    def _income_category_keyboard(self, pending_id: str, categories: tuple[str, ...]):
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+        buttons = [
+            InlineKeyboardButton(
+                category,
+                callback_data=f"{INCOME_CATEGORY_CALLBACK}|{pending_id}|{index}",
+            )
+            for index, category in enumerate(categories)
+        ]
+        rows = [buttons[index:index + 2] for index in range(0, len(buttons), 2)]
+        return InlineKeyboardMarkup(rows)
+
+    async def handle_income_category_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        query = update.callback_query
+        if query is None or update.effective_user is None:
+            return
+
+        parts = (query.data or "").split("|")
+        if len(parts) != 3 or parts[0] != INCOME_CATEGORY_CALLBACK:
+            return
+
+        pending_id = parts[1]
+        try:
+            option_index = int(parts[2])
+        except ValueError:
+            await query.answer("That income option is invalid.", show_alert=True)
+            return
+
+        pending = self.pending.get(pending_id)
+        if pending is None:
+            await query.edit_message_reply_markup(reply_markup=None)
+            await query.answer("This pending income is no longer available.", show_alert=True)
+            return
+
+        logged_by = self.settings.label_for_user(update.effective_user.id)
+        message_chat_id = query.message.chat_id if query.message is not None else None
+        if logged_by is None or logged_by != pending.logged_by or message_chat_id != pending.chat_id:
+            await query.answer("Only the person who submitted this income can choose its category.", show_alert=True)
+            return
+
+        if option_index < 0 or option_index >= len(pending.category_options):
+            await query.answer("That income option is no longer valid.", show_alert=True)
+            return
+
+        category = pending.category_options[option_index]
+        if category not in VARIABLE_CATEGORIES or not category.lower().startswith("income -"):
+            await query.answer("That income category is no longer active.", show_alert=True)
+            return
+
+        await query.answer()
+        self.pending.pop(pending_id, None)
+        await query.edit_message_reply_markup(reply_markup=None)
+        row = self._expense_row_from_pending(pending, category, "Confirmed", "Text", None)
+        logged_line = await self._append_or_hold_duplicate(update, row)
+        if logged_line:
+            await query.edit_message_text(logged_line)
 
     async def pending_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if update.message is None:
@@ -1213,7 +1296,10 @@ class FinanceBot:
         return f"${record.amount:.2f} logged as {record.category} - {date_text} [{record.entry_id}]"
 
     async def _append_or_hold_duplicate(self, update: Update, row: ExpenseRow) -> str | None:
-        if update.message is None or update.effective_user is None:
+        message = update.message
+        if message is None and update.callback_query is not None:
+            message = update.callback_query.message
+        if message is None or update.effective_user is None:
             return None
         duplicate = self._find_duplicate(row)
         if duplicate is None:
@@ -1229,7 +1315,7 @@ class FinanceBot:
             requested_by_user_id=update.effective_user.id,
             created_at=datetime.now(SINGAPORE_TZ),
         )
-        await update.message.reply_text(self._duplicate_prompt(row, duplicate))
+        await message.reply_text(self._duplicate_prompt(row, duplicate))
         return None
 
     async def _handle_pending_duplicate_reply(self, update: Update, lowered: str) -> bool:
@@ -1533,6 +1619,7 @@ class FinanceBot:
                 created_at=pending.created_at,
                 reason=pending.reason,
                 batch_id=pending.batch_id,
+                category_options=pending.category_options,
             )
             changed = True
         return changed
@@ -1627,6 +1714,7 @@ class FinanceBot:
                 created_at=pending.created_at,
                 reason=pending.reason,
                 batch_id=pending.batch_id,
+                category_options=pending.category_options,
             )
 
     def _parse_pending_category_changes(self, text: str, pending_count: int) -> tuple[dict[int, str], list[str]]:
@@ -1680,6 +1768,7 @@ class FinanceBot:
                 created_at=pending.created_at,
                 reason=pending.reason,
                 batch_id=pending.batch_id,
+                category_options=pending.category_options,
             )
 
     async def _apply_category_reply(self, update: Update, category: str) -> tuple[list[str], bool]:
@@ -1708,6 +1797,7 @@ class FinanceBot:
                 created_at=pending.created_at,
                 reason=pending.reason,
                 batch_id=pending.batch_id,
+                category_options=pending.category_options,
             )
 
             if pending.reason == "category":
@@ -1746,6 +1836,7 @@ class FinanceBot:
                 created_at=pending.created_at,
                 reason=pending.reason,
                 batch_id=pending.batch_id,
+                category_options=pending.category_options,
             )
             changed = True
         return changed
@@ -1813,7 +1904,15 @@ class FinanceBot:
         else:
             await update.message.reply_text("Pending expenses still need categories. Use: confirm abc123 Food")
 
-    def _add_pending(self, draft: ExpenseDraft, logged_by: str, update: Update, reason: str, batch_id: str | None = None) -> str:
+    def _add_pending(
+        self,
+        draft: ExpenseDraft,
+        logged_by: str,
+        update: Update,
+        reason: str,
+        batch_id: str | None = None,
+        category_options: tuple[str, ...] = (),
+    ) -> str:
         pending_id = uuid.uuid4().hex[:6]
         self.pending[pending_id] = PendingExpense(
             draft=draft,
@@ -1823,6 +1922,7 @@ class FinanceBot:
             created_at=datetime.now(SINGAPORE_TZ),
             reason=reason,
             batch_id=batch_id,
+            category_options=category_options,
         )
         return pending_id
 
@@ -2061,7 +2161,7 @@ def main() -> None:
     print("Loading Telegram library...", flush=True)
     from telegram import Update
     from telegram.error import TelegramError
-    from telegram.ext import Application, CommandHandler, MessageHandler, filters
+    from telegram.ext import Application, CallbackQueryHandler, CommandHandler, MessageHandler, filters
     print("Telegram library loaded.", flush=True)
 
     async def post_init(application: Application) -> None:
@@ -2089,6 +2189,12 @@ def main() -> None:
     application.add_handler(CommandHandler("undo", finance_bot.undo_command))
     application.add_handler(CommandHandler("fixed", finance_bot.fixed_command))
     application.add_handler(CommandHandler("confirmfixed", finance_bot.confirm_fixed_command))
+    application.add_handler(
+        CallbackQueryHandler(
+            finance_bot.handle_income_category_callback,
+            pattern=rf"^{INCOME_CATEGORY_CALLBACK}\|",
+        )
+    )
     application.add_handler(MessageHandler(filters.PHOTO, finance_bot.handle_photo))
     application.add_handler(MessageHandler(filters.Document.IMAGE, finance_bot.handle_image_document))
     application.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, finance_bot.handle_voice))

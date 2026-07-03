@@ -47,6 +47,8 @@ This file contains project-specific instructions for coding agents working on Ge
 - In `Monthly Summary`, fixed category/month values should be replaced by the latest confirmed fixed review amount, not summed as duplicate fixed rows.
 - Income categories should start with `Income -`; this prefix is used to separate income from expenses in summaries.
 - Income is not person-specific. The sender may still be recorded in `Logged By`, but P&L totals do not split income by sender.
+- A typed generic income entry with a clear amount/date but no specific income category should show buttons for active `Income -` categories. The submitting user can tap one to log immediately; other users must not be allowed to choose it.
+- Income-category buttons use the existing temporary pending-entry memory and are lost if Railway restarts before selection. Do not add hidden persistence or expiry without calling it out in the implementation plan.
 - Plain `confirm`, `confirmed`, `confirm fixed`, and `confirmed fixed` should all confirm an active fixed expense review.
 - Delete operations must be confirmation-based. Show the matched expense and wait for explicit confirmation before deleting from Google Sheets.
 - Existing logged expense edits must be confirmation-based. Show the before/after row and wait for explicit confirmation before updating Google Sheets.

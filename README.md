@@ -312,6 +312,7 @@ With `OPENAI_API_KEY` configured, natural language actions also work:
 - `change the 13th May shopping amount from 200 to 180`
 - `change date to yesterday` for pending screenshot/voice items
 - `confirm all` for pending screenshot/voice items
+- `confirm 1 and 3` to log only selected pending screenshot/voice items and discard the rest
 
 The bot still validates actions against real `Entry ID` rows in Google Sheets before deleting or editing.
 
@@ -327,9 +328,15 @@ When a new expense has the same date, amount, and category as an existing confir
 
 Screenshot and voice-note entries stay pending until you confirm them. If you change a pending screenshot or voice-note item, for example `change 3 to Groceries and change 5 to Food`, the bot updates the pending list and asks you to confirm again.
 
+When pending screenshot or voice-note expenses exist, the bot blocks new expense logging and asks you to decide on the visible pending list first. Use `confirm all` to log all visible pending items, `confirm 1 and 3` to log only selected items and discard the rest, or `cancel` to discard the visible pending list.
+
+Plain `yes` does not confirm a pending screenshot or voice-note batch. It is reserved for delete/edit confirmation prompts.
+
 When a new screenshot or voice note creates a pending list, plain replies like `confirm` and `confirm all` apply to the latest pending list only. Older pending items can still be handled by their specific pending IDs.
 
 Duplicate checks use Google Sheets as the source of truth, plus a one-minute in-memory safety window for entries that were just logged but may not be visible in a read-back yet.
+
+If a duplicate is found while confirming a pending list, the bot stops at the first duplicate instead of continuing through the batch. Reply `confirm` to log that duplicate anyway, or `cancel` to skip it and continue deciding on the remaining pending items.
 
 ## Monthly Automation
 

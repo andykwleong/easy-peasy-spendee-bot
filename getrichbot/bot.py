@@ -89,6 +89,7 @@ class PendingDuplicate:
     chat_id: int
     requested_by_user_id: int
     created_at: datetime
+    pending_id: str | None = None
 
 
 @dataclass
@@ -563,7 +564,7 @@ class FinanceBot:
             return True
 
         if lowered in {"confirm all", "log all", "extract all"}:
-            await self._confirm_all_pending(update)
+            await self._confirm_all_pending(update, latest_batch_only=bool(self._matching_pending(update, latest_batch_only=True)))
             return True
 
         match = re.match(r"^confirm\s+([a-f0-9]{6})(?:\s+(?:as\s+)?(.+?))?(?:\s+on\s+(\d{4}-\d{1,2}-\d{1,2}))?$", lowered, re.IGNORECASE)
@@ -610,8 +611,36 @@ class FinanceBot:
         lowered = text.lower()
         today = datetime.now(SINGAPORE_TZ).date()
 
-        if lowered in {"yes", "ok", "okay", "looks good", "correct", "log it", "confirm", "confirm them", "log them"}:
+        if lowered in {"cancel", "no", "stop", "never mind", "nevermind"}:
+            cancelled = self._cancel_visible_pending(update)
+            if cancelled:
+                await update.message.reply_text("Pending expenses cancelled.")
+            else:
+                await update.message.reply_text("No pending expenses to cancel.")
+            return True
+
+        if lowered in {"confirm all", "confirmed all", "log all", "extract all"}:
             await self._confirm_all_pending(update, latest_batch_only=bool(self._matching_pending(update, latest_batch_only=True)))
+            return True
+
+        if lowered in {"confirm", "confirmed", "confirm them", "confirmed them", "log it", "log them"}:
+            await self._confirm_all_pending(update, latest_batch_only=bool(self._matching_pending(update, latest_batch_only=True)))
+            return True
+
+        if lowered in {"yes", "ok", "okay", "looks good", "correct"}:
+            await update.message.reply_text(self._pending_summary(update, "You still have pending expenses. Please reply with confirm all or cancel:"))
+            return True
+
+        selected_positions = _parse_confirm_positions(lowered, len(matching))
+        if selected_positions:
+            logged_lines = await self._confirm_pending_positions(
+                update,
+                selected_positions,
+                latest_batch_only=bool(self._latest_pending_batch_id(update)),
+                cancel_unselected=True,
+            )
+            if logged_lines:
+                await update.message.reply_text("\n\n".join(logged_lines))
             return True
 
         category_updates, invalid_categories = self._parse_pending_category_changes(lowered, len(matching))
@@ -675,7 +704,8 @@ class FinanceBot:
             )
             return True
 
-        return False
+        await update.message.reply_text(self._pending_summary(update, "You still have pending expenses. Please confirm or cancel them first:"))
+        return True
 
     async def handle_photo(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if update.message is None or update.effective_user is None:
@@ -699,6 +729,9 @@ class FinanceBot:
             logged_by = self.settings.label_for_user(update.effective_user.id)
             if logged_by is None:
                 await update.message.reply_text("I do not recognize this Telegram user ID yet.")
+                return
+            if self._matching_pending(update):
+                await update.message.reply_text(self._pending_summary(update, "You still have pending expenses. Please confirm or cancel them first:"))
                 return
 
             await update.message.reply_text("Reading screenshot...")
@@ -724,8 +757,6 @@ class FinanceBot:
                 prepared_image.mime_type,
                 f" ({prepared_image.note})" if prepared_image.note else "",
             )
-            await update.message.reply_text("Extracting expenses from the screenshot...")
-
             ai = self._ai()
             if ai is None:
                 await update.message.reply_text("Screenshot parsing needs OPENAI_API_KEY in .env first.")
@@ -765,6 +796,9 @@ class FinanceBot:
         logged_by = self.settings.label_for_user(update.effective_user.id)
         if logged_by is None:
             await update.message.reply_text("I do not recognize this Telegram user ID yet.")
+            return
+        if self._matching_pending(update):
+            await update.message.reply_text(self._pending_summary(update, "You still have pending expenses. Please confirm or cancel them first:"))
             return
 
         media = update.message.voice or update.message.audio
@@ -1295,7 +1329,7 @@ class FinanceBot:
             date_text = record.expense_date
         return f"${record.amount:.2f} logged as {record.category} - {date_text} [{record.entry_id}]"
 
-    async def _append_or_hold_duplicate(self, update: Update, row: ExpenseRow) -> str | None:
+    async def _append_or_hold_duplicate(self, update: Update, row: ExpenseRow, pending_id: str | None = None) -> str | None:
         message = update.message
         if message is None and update.callback_query is not None:
             message = update.callback_query.message
@@ -1314,6 +1348,7 @@ class FinanceBot:
             chat_id=update.effective_chat.id,
             requested_by_user_id=update.effective_user.id,
             created_at=datetime.now(SINGAPORE_TZ),
+            pending_id=pending_id,
         )
         await message.reply_text(self._duplicate_prompt(row, duplicate))
         return None
@@ -1328,16 +1363,36 @@ class FinanceBot:
 
         if lowered in {"cancel", "no", "discard", "delete", "delete duplicate"}:
             self.pending_duplicates.pop(key, None)
-            await update.message.reply_text("Duplicate not logged.")
+            if pending.pending_id is not None:
+                self.pending.pop(pending.pending_id, None)
+            remaining = self._matching_pending(update, latest_batch_only=True) or self._matching_pending(update)
+            if remaining:
+                await update.message.reply_text(
+                    "Duplicate not logged.\n\n"
+                    + self._pending_summary(update, "Pending expenses still need your decision:")
+                )
+            else:
+                await update.message.reply_text("Duplicate not logged.")
             return True
 
         if lowered != "confirm":
-            return False
+            await update.message.reply_text(self._duplicate_prompt(pending.row, pending.existing_record))
+            return True
 
         self.pending_duplicates.pop(key, None)
         self._append_expense(pending.row)
         self._remember_logged(pending.row)
-        await update.message.reply_text(self._logged_line(pending.row))
+        if pending.pending_id is not None:
+            self.pending.pop(pending.pending_id, None)
+        remaining = self._matching_pending(update, latest_batch_only=True) or self._matching_pending(update)
+        if remaining:
+            await update.message.reply_text(
+                self._logged_line(pending.row)
+                + "\n\n"
+                + self._pending_summary(update, "Pending expenses still need your decision:")
+            )
+        else:
+            await update.message.reply_text(self._logged_line(pending.row))
         return True
 
     def _find_duplicate(self, row: ExpenseRow) -> ExpenseRecord | None:
@@ -1637,8 +1692,26 @@ class FinanceBot:
         lines.append("Reply: confirm all")
         matching_count = len(self._matching_pending(update, latest_batch_only=True) or self._matching_pending(update))
         if matching_count > 1:
-            lines.append("Or: confirm 2 as Food")
+            lines.append("Or: confirm 1 and 3")
+        lines.append("Or: cancel")
         return "\n\n".join(lines)
+
+    def _cancel_visible_pending(self, update: Update) -> int:
+        matching = self._matching_pending(update, latest_batch_only=True) or self._matching_pending(update)
+        for pending_id, _pending in matching:
+            self.pending.pop(pending_id, None)
+        if update.effective_user is not None:
+            latest_key = (update.effective_chat.id, update.effective_user.id)
+            latest_batch_id = self.latest_pending_batch.get(latest_key)
+            logged_by = self.settings.label_for_user(update.effective_user.id)
+            if latest_batch_id is not None and not any(
+                pending.batch_id == latest_batch_id
+                and pending.chat_id == update.effective_chat.id
+                and pending.logged_by == logged_by
+                for pending in self.pending.values()
+            ):
+                self.latest_pending_batch.pop(latest_key, None)
+        return len(matching)
 
     async def _handle_ai_pending_instruction(self, update: Update, text: str) -> bool:
         ai = self._ai()
@@ -1847,22 +1920,37 @@ class FinanceBot:
         positions: list[int],
         category_override: str | None = None,
         latest_batch_only: bool = False,
+        cancel_unselected: bool = False,
     ) -> list[str]:
         matching = self._matching_pending(update, latest_batch_only=latest_batch_only)
-        logged_lines = []
-        for position in sorted(set(positions), reverse=True):
-            if position < 1 or position > len(matching):
-                continue
+        selected_positions = {position for position in positions if 1 <= position <= len(matching)}
+        selected_rows = []
+        for position in sorted(selected_positions):
             pending_id, pending = matching[position - 1]
             category = category_override or pending.draft.category or self._infer_pending_category(pending)
             if category not in VARIABLE_CATEGORIES:
                 continue
-            self.pending.pop(pending_id, None)
+            selected_rows.append((position, pending_id, pending, category))
+        if not selected_rows:
+            return []
+
+        await update.message.reply_text("Logging expenses...")
+        logged_lines = []
+        duplicate_seen = False
+        for _position, pending_id, pending, category in selected_rows:
             row = self._expense_row_from_pending(pending, category, "Confirmed", pending.reason.title(), None)
-            logged_line = await self._append_or_hold_duplicate(update, row)
+            logged_line = await self._append_or_hold_duplicate(update, row, pending_id=pending_id)
             if logged_line:
+                self.pending.pop(pending_id, None)
                 logged_lines.append(logged_line)
-        return list(reversed(logged_lines))
+            else:
+                duplicate_seen = True
+                break
+        if cancel_unselected and not duplicate_seen:
+            for position, (pending_id, _pending) in enumerate(matching, start=1):
+                if position not in selected_positions:
+                    self.pending.pop(pending_id, None)
+        return logged_lines
 
     def _infer_pending_category(self, pending: PendingExpense) -> str | None:
         category, confidence = categorize_description(
@@ -1888,20 +1976,30 @@ class FinanceBot:
             await update.message.reply_text("No pending expenses to confirm.")
             return
 
-        logged_lines = []
+        prepared_rows = []
         for pending_id, pending in matching:
             category = pending.draft.category or self._infer_pending_category(pending)
             if category not in VARIABLE_CATEGORIES:
-                continue
-            self.pending.pop(pending_id, None)
+                await update.message.reply_text("Pending expenses still need categories. Use: confirm abc123 Food")
+                return
             row = self._expense_row_from_pending(pending, category, "Confirmed", pending.reason.title(), None)
-            logged_line = await self._append_or_hold_duplicate(update, row)
+            prepared_rows.append((pending_id, row))
+
+        await update.message.reply_text("Logging expenses...")
+        logged_lines = []
+        duplicate_seen = False
+        for pending_id, row in prepared_rows:
+            logged_line = await self._append_or_hold_duplicate(update, row, pending_id=pending_id)
             if logged_line:
+                self.pending.pop(pending_id, None)
                 logged_lines.append(logged_line)
+            else:
+                duplicate_seen = True
+                break
 
         if logged_lines:
             await update.message.reply_text("\n\n".join(logged_lines))
-        else:
+        elif not duplicate_seen:
             await update.message.reply_text("Pending expenses still need categories. Use: confirm abc123 Food")
 
     def _add_pending(
@@ -2034,6 +2132,30 @@ def _position_from_text(raw: str, pending_count: int = 0) -> int:
     if lowered in positions:
         return positions[lowered]
     return int(lowered)
+
+
+def _parse_confirm_positions(text: str, pending_count: int) -> list[int]:
+    match = re.fullmatch(r"confirm(?:ed)?\s+(.+)", text.strip().lower())
+    if match is None:
+        return []
+    raw_positions = match.group(1).strip()
+    if raw_positions in {"all", "them", "everything"} or " as " in raw_positions:
+        return []
+    tokens = re.findall(r"\b(\d+|first|second|third|fourth|fifth|last)\b", raw_positions)
+    if not tokens:
+        return []
+    remaining = re.sub(r"\b(\d+|first|second|third|fourth|fifth|last|and|the|entry|entries)\b|[,/&+]", " ", raw_positions)
+    if remaining.strip():
+        return []
+    positions = []
+    for token in tokens:
+        try:
+            position = _position_from_text(token, pending_count)
+        except ValueError:
+            return []
+        if 1 <= position <= pending_count:
+            positions.append(position)
+    return positions
 
 
 def _looks_like_pending_position_request(text: str) -> bool:

@@ -269,9 +269,10 @@ class TestFollowups(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(handled)
         self.assertEqual(len(sheets.rows), 1)
-        self.assertIn("Possible duplicate found:", update.message.replies[0])
+        self.assertEqual(update.message.replies[0], "Logging expenses...")
+        self.assertIn("Possible duplicate found:", update.message.replies[1])
 
-    async def test_confirm_number_confirms_pending_position(self):
+    async def test_confirm_number_confirms_position_and_cancels_the_rest(self):
         sheets = FakeSheets()
         bot = FinanceBot(FakeSettings(), sheets)
         update = FakeUpdate("confirm 2")
@@ -287,7 +288,93 @@ class TestFollowups(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sheets.rows[0].amount, Decimal("30"))
         self.assertEqual(sheets.rows[0].category, "Gifts")
         self.assertNotIn("second", bot.pending)
-        self.assertIn("first1", bot.pending)
+        self.assertNotIn("first1", bot.pending)
+        self.assertEqual(update.message.replies[0], "Logging expenses...")
+
+    async def test_yes_does_not_confirm_pending_batch(self):
+        sheets = FakeSheets()
+        bot = FinanceBot(FakeSettings(), sheets)
+        update = FakeUpdate("yes")
+        bot.latest_pending_batch[(-100, 456)] = "screenshot"
+        bot.pending = {
+            "one111": bot_pending("21.01", "Food Panda", "Food", batch_id="screenshot"),
+        }
+
+        handled = await bot.handle_pending_update(update)
+
+        self.assertTrue(handled)
+        self.assertEqual(sheets.rows, [])
+        self.assertIn("one111", bot.pending)
+        self.assertIn("Please reply with confirm all or cancel", update.message.replies[0])
+
+    async def test_cancel_clears_visible_pending_batch(self):
+        sheets = FakeSheets()
+        bot = FinanceBot(FakeSettings(), sheets)
+        update = FakeUpdate("cancel")
+        bot.latest_pending_batch[(-100, 456)] = "screenshot"
+        bot.pending = {
+            "one111": bot_pending("21.01", "Food Panda", "Food", batch_id="screenshot"),
+            "two222": bot_pending("43.15", "Cut Butchery", "Groceries", batch_id="screenshot"),
+        }
+
+        handled = await bot.handle_pending_update(update)
+
+        self.assertTrue(handled)
+        self.assertEqual(sheets.rows, [])
+        self.assertEqual(bot.pending, {})
+        self.assertEqual(update.message.replies[0], "Pending expenses cancelled.")
+
+    async def test_confirm_all_stops_at_first_duplicate_and_keeps_pending_items(self):
+        duplicate_record = ExpenseRecord(
+            row_number=2,
+            entry_id="old123",
+            timestamp="16:46:00",
+            expense_date="2026-07-07",
+            month="2026-07",
+            logged_by="My wife",
+            raw_input="screenshot: Food Panda",
+            amount=Decimal("21.01"),
+            category="Food",
+            description="Food Panda",
+            input_type="Screenshot",
+            status="Confirmed",
+        )
+        sheets = FakeSheets(records=[duplicate_record])
+        bot = FinanceBot(FakeSettings(), sheets)
+        update = FakeUpdate("confirm all")
+        bot.latest_pending_batch[(-100, 456)] = "screenshot"
+        bot.pending = {
+            "one111": bot_pending("21.01", "Food Panda", "Food", batch_id="screenshot"),
+            "two222": bot_pending("43.15", "Cut Butchery", "Groceries", batch_id="screenshot"),
+        }
+
+        handled = await bot.handle_pending_update(update)
+
+        self.assertTrue(handled)
+        self.assertEqual(sheets.rows, [])
+        self.assertIn("one111", bot.pending)
+        self.assertIn("two222", bot.pending)
+        self.assertEqual(update.message.replies[0], "Logging expenses...")
+        self.assertIn("Possible duplicate found:", update.message.replies[1])
+
+    async def test_mixed_confirm_and_change_text_does_not_confirm_selected_items(self):
+        sheets = FakeSheets()
+        bot = FinanceBot(FakeSettings(), sheets)
+        update = FakeUpdate("confirm the first entry, change the second one to groceries")
+        bot.latest_pending_batch[(-100, 456)] = "screenshot"
+        bot.pending = {
+            "one111": bot_pending("21.01", "Food Panda", "Food", batch_id="screenshot"),
+            "two222": bot_pending("43.15", "Cut Butchery", "Food", batch_id="screenshot"),
+        }
+
+        handled = await bot.handle_pending_update(update)
+
+        self.assertTrue(handled)
+        self.assertEqual(sheets.rows, [])
+        self.assertIn("one111", bot.pending)
+        self.assertIn("two222", bot.pending)
+        self.assertEqual(bot.pending["two222"].draft.category, "Groceries")
+        self.assertIn("Updated pending entries:", update.message.replies[0])
 
     async def test_category_reply_updates_unclear_pending_entries(self):
         sheets = FakeSheets()

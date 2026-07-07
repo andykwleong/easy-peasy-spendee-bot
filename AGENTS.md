@@ -66,7 +66,14 @@ This file contains project-specific instructions for coding agents working on Ge
 - Follow-up replies should handle normal wording such as `confirm 2`, `gift`, and `change spend date to 21 May`.
 - If a normal typed expense is pending only because the category is missing, replying with a valid category should log it immediately.
 - Screenshot and voice-note pending entries must remain pending after category/date changes until the user explicitly confirms logging.
-- Plain pending replies like `confirm`, `yes`, and `confirm all` should target the latest pending batch for that chat/user when one exists; otherwise they should fall back to normal text pending entries.
+- Plain pending replies like `confirm`, `confirmed`, and `confirm all` should target the latest pending batch for that chat/user when one exists; otherwise they should fall back to normal text pending entries.
+- Plain `yes` should not confirm screenshot or voice-note pending batches. Reserve `yes` for delete/edit confirmations and similar explicit yes/no prompts.
+- `cancel` should discard the visible pending screenshot/voice batch.
+- `confirm 1 and 3` should log only the selected visible pending entries and discard the other visible pending entries.
+- When pending screenshot or voice-note entries exist, new text/photo/voice expenses should not be logged until the pending batch is confirmed or cancelled.
+- Pending confirmation should show `Logging expenses...` before Google Sheets writes begin.
+- Screenshot handling should show only one progress message before extraction results: `Reading screenshot...`.
+- If a duplicate is found during pending batch confirmation, stop at the first duplicate and wait for `confirm` or `cancel`. Do not continue through the batch and do not remove the pending item until it is actually logged or cancelled.
 - Duplicate checks should include a one-minute recently logged in-memory window so immediately repeated confirmations are caught even before Google Sheets read-back reflects the append.
 - A bare 6-character entry ID should be treated as a delete lookup, not parsed as an expense amount.
 

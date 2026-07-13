@@ -6,7 +6,7 @@ import logging
 import traceback
 import re
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal, InvalidOperation
 from datetime import time
 from datetime import datetime
@@ -16,17 +16,27 @@ from zoneinfo import ZoneInfo
 
 from getrichbot.categories import ALL_CATEGORIES, CATEGORY_ALIASES, FIXED_CATEGORIES, VARIABLE_CATEGORIES, category_config_status, configure_category_config
 from getrichbot.config import Settings
+from getrichbot.cards import PaymentConfig, build_card_summary, format_card_summary
 from getrichbot.image_utils import prepare_image_for_vision
 from getrichbot.models import ExpenseDraft, ExpenseRecord, ExpenseRow
 from getrichbot.parser import categorize_description, extract_date_phrase, extract_standalone_date, parse_expense, parse_expenses
 from getrichbot.sheets import SheetsClient
-from getrichbot.summary import build_spending_summary, format_spending_summary, parse_summary_period
+from getrichbot.summary import (
+    build_personal_expense_history,
+    build_spending_summary,
+    format_personal_expense_history,
+    format_spending_summary,
+    parse_expense_history_period,
+    parse_summary_period,
+)
 from getrichbot.summary import build_monthly_summary_table
 
 LOGGER = logging.getLogger(__name__)
 SINGAPORE_TZ = ZoneInfo("Asia/Singapore")
 RECENT_DUPLICATE_WINDOW = timedelta(minutes=1)
 INCOME_CATEGORY_CALLBACK = "income_category"
+PAYMENT_METHOD_CALLBACK = "payment_method"
+PAYMENT_CONFIG_CACHE_WINDOW = timedelta(minutes=1)
 HELP_TEXT = """Send expenses naturally:
 dinner 60
 ntuc 82.30
@@ -45,7 +55,9 @@ Useful commands:
 /pending - show items needing review
 /categories or /category - show categories
 /refreshcategories - reload categories from Google Sheets
+/refreshpayments - reload payment methods and card limits from Google Sheets
 /summary - show this month's checkpoint
+/cards - show your card spending against current limits
 /fixed - preview fixed expenses
 /confirmfixed - review fixed expenses
 /undo - delete your latest logged expense
@@ -71,6 +83,8 @@ class PendingExpense:
     reason: str
     batch_id: str | None = None
     category_options: tuple[str, ...] = ()
+    input_type: str = "Text"
+    payment_options: tuple[str, ...] = ()
 
 
 @dataclass
@@ -128,6 +142,19 @@ class FixedAddResult:
     added_count: int = 0
 
 
+@dataclass
+class PendingPaymentBatch:
+    pending_ids: list[str]
+    chat_id: int
+    requested_by_user_id: int
+
+
+@dataclass
+class CachedPaymentConfig:
+    config: PaymentConfig
+    loaded_at: datetime
+
+
 class FinanceBot:
     def __init__(self, settings: Settings, sheets: SheetsClient):
         self.settings = settings
@@ -138,6 +165,8 @@ class FinanceBot:
         self.pending_edits: dict[tuple[int, int], PendingEdit] = {}
         self.pending_fixed_reviews: dict[int | str, FixedReview] = {}
         self.latest_pending_batch: dict[tuple[int, int], str] = {}
+        self.pending_payment_batches: dict[tuple[int, int], PendingPaymentBatch] = {}
+        self.payment_config_cache: CachedPaymentConfig | None = None
         self.recent_logged: list[RecentLoggedExpense] = []
         self.ai = None
 
@@ -152,6 +181,26 @@ class FinanceBot:
 
     def _load_category_config_from_sheets(self) -> dict:
         return load_category_config_from_sheets(self.settings, self.sheets)
+
+    def _payment_tracking_enabled(self) -> bool:
+        return hasattr(self.settings, "payment_methods_sheet") and hasattr(self.sheets, "get_payment_config")
+
+    def _load_payment_config(self, force: bool = False) -> PaymentConfig:
+        if not self._payment_tracking_enabled():
+            raise RuntimeError("Payment tracking is not configured.")
+        now = datetime.now(SINGAPORE_TZ)
+        if (
+            not force
+            and self.payment_config_cache is not None
+            and now - self.payment_config_cache.loaded_at < PAYMENT_CONFIG_CACHE_WINDOW
+        ):
+            return self.payment_config_cache.config
+        config = self.sheets.get_payment_config(
+            self.settings.payment_methods_sheet,
+            self.settings.card_limits_sheet,
+        )
+        self.payment_config_cache = CachedPaymentConfig(config=config, loaded_at=now)
+        return config
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(HELP_TEXT)
@@ -212,6 +261,26 @@ class FinanceBot:
             f"Variable categories: {len(VARIABLE_CATEGORIES)}\n"
             f"Fixed categories: {len(FIXED_CATEGORIES)}"
         )
+
+    async def refresh_payments(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if update.message is None or update.effective_user is None:
+            return
+        if self.settings.label_for_user(update.effective_user.id) is None:
+            await update.message.reply_text("I do not recognize this Telegram user ID yet.")
+            return
+        try:
+            config = self._load_payment_config(force=True)
+        except (RuntimeError, ValueError) as exc:
+            await update.message.reply_text(f"Payment setup could not be loaded: {exc}")
+            return
+        await update.message.reply_text(
+            "Payment methods refreshed from Google Sheets.\n\n"
+            f"Active payment methods: {len(config.payment_methods)}\n"
+            f"Active card limits: {len(config.card_limits)}"
+        )
+
+    async def cards_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        await self._reply_with_card_summary(update)
 
     async def summary_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if update.message is None:
@@ -290,8 +359,7 @@ class FinanceBot:
             )
             return
 
-        row = self._expense_row(draft, logged_by, update, draft.category, "Confirmed", "Text")
-        logged_line = await self._append_or_hold_duplicate(update, row)
+        logged_line = await self._record_or_request_payment(update, draft, logged_by, draft.category, "Text")
         if logged_line:
             await update.message.reply_text(logged_line)
 
@@ -394,18 +462,16 @@ class FinanceBot:
             date_override = datetime.fromisoformat(category_args[-1]).date()
             category_args = category_args[:-1]
         category = " ".join(category_args).strip()
-        pending = self.pending.pop(pending_id, None)
+        pending = self.pending.get(pending_id)
         if pending is None:
             await update.message.reply_text("Pending ID not found.")
             return
         category = _normalize_category(category) if category else pending.draft.category or ""
         if category not in VARIABLE_CATEGORIES:
             await update.message.reply_text("Unknown category. Use /categories to see valid names.")
-            self.pending[pending_id] = pending
             return
 
-        row = self._expense_row_from_pending(pending, category, "Confirmed", "Text", date_override)
-        logged_line = await self._append_or_hold_duplicate(update, row)
+        logged_line = await self._record_pending_or_request_payment(update, pending_id, pending, category, date_override)
         if logged_line:
             await update.message.reply_text(logged_line)
 
@@ -502,6 +568,13 @@ class FinanceBot:
             await update.message.reply_text(HELP_TEXT)
             return True
 
+        if re.search(r"\b(card|cards)\s+summary\b", lowered) or lowered in {"cards", "my cards"}:
+            await self._reply_with_card_summary(update)
+            return True
+
+        if await self._reply_with_personal_expense_history(update, text):
+            return True
+
         if re.search(r"\bsummary\b", lowered):
             await self._reply_with_summary(update, text)
             return True
@@ -564,6 +637,9 @@ class FinanceBot:
             return True
 
         if lowered in {"confirm all", "log all", "extract all"}:
+            if self._payment_choice_is_active(update):
+                await update.message.reply_text("Please choose a payment method using the buttons above, or reply cancel to discard these pending expenses.")
+                return True
             await self._confirm_all_pending(update, latest_batch_only=bool(self._matching_pending(update, latest_batch_only=True)))
             return True
 
@@ -572,7 +648,7 @@ class FinanceBot:
             return False
 
         pending_id = match.group(1)
-        pending = self.pending.pop(pending_id, None)
+        pending = self.pending.get(pending_id)
         if pending is None:
             await update.message.reply_text("I could not find that pending item.")
             return True
@@ -582,11 +658,9 @@ class FinanceBot:
         date_override = datetime.fromisoformat(match.group(3)).date() if match.group(3) else None
         if category not in VARIABLE_CATEGORIES:
             await update.message.reply_text("I do not recognize that category. Send 'categories' to see the list.")
-            self.pending[pending_id] = pending
             return True
 
-        row = self._expense_row_from_pending(pending, category, "Confirmed", "Text", date_override)
-        logged_line = await self._append_or_hold_duplicate(update, row)
+        logged_line = await self._record_pending_or_request_payment(update, pending_id, pending, category, date_override)
         if logged_line:
             await update.message.reply_text(logged_line)
         return True
@@ -613,10 +687,15 @@ class FinanceBot:
 
         if lowered in {"cancel", "no", "stop", "never mind", "nevermind"}:
             cancelled = self._cancel_visible_pending(update)
+            self._clear_payment_batch(update)
             if cancelled:
                 await update.message.reply_text("Pending expenses cancelled.")
             else:
                 await update.message.reply_text("No pending expenses to cancel.")
+            return True
+
+        if self._payment_choice_is_active(update):
+            await update.message.reply_text("Please choose a payment method using the buttons above, or reply cancel to discard these pending expenses.")
             return True
 
         if lowered in {"confirm all", "confirmed all", "log all", "extract all"}:
@@ -1152,6 +1231,27 @@ class FinanceBot:
         drafts: list[ExpenseDraft],
         skipped_lines: list[str] | None = None,
     ) -> None:
+        if self._payment_tracking_enabled():
+            payment_ids: list[str] = []
+            pending_ids: list[str] = []
+            for draft in drafts:
+                if draft.category is None or draft.confidence < 0.7 or draft.needs_date_confirmation:
+                    pending_ids.append(self._add_pending(draft, logged_by, update, "category", input_type="Text"))
+                    continue
+                payment_ids.append(self._add_pending(draft, logged_by, update, "payment", input_type="Text"))
+            if payment_ids:
+                await self._begin_payment_batch(update, payment_ids)
+            if pending_ids:
+                await update.message.reply_text(
+                    "These entries still need a category:\n\n"
+                    + "\n".join(pending_ids)
+                )
+            if not payment_ids and not pending_ids:
+                await update.message.reply_text("No new expenses found.")
+            if skipped_lines:
+                await update.message.reply_text("Skipped lines:\n" + "\n".join(f"- {line}" for line in skipped_lines))
+            return
+
         logged_lines = []
         pending_ids = []
         for draft in drafts:
@@ -1183,6 +1283,37 @@ class FinanceBot:
         records = self.sheets.get_expense_records(self.settings.raw_expenses_sheet)
         summary = build_spending_summary(records, period)
         await update.message.reply_text(format_spending_summary(summary))
+
+    async def _reply_with_card_summary(self, update: Update) -> None:
+        if update.message is None or update.effective_user is None:
+            return
+        logged_by = self.settings.label_for_user(update.effective_user.id)
+        if logged_by is None:
+            await update.message.reply_text("I do not recognize this Telegram user ID yet.")
+            return
+        try:
+            config = self._load_payment_config()
+        except (RuntimeError, ValueError) as exc:
+            await update.message.reply_text(f"Payment setup could not be loaded: {exc}")
+            return
+        records = self.sheets.get_expense_records(self.settings.raw_expenses_sheet)
+        items = build_card_summary(config, records, logged_by, datetime.now(SINGAPORE_TZ).date())
+        await update.message.reply_text(format_card_summary(items))
+
+    async def _reply_with_personal_expense_history(self, update: Update, text: str) -> bool:
+        if update.message is None or update.effective_user is None:
+            return False
+        period = parse_expense_history_period(text, datetime.now(SINGAPORE_TZ).date())
+        if period is None:
+            return False
+        logged_by = self.settings.label_for_user(update.effective_user.id)
+        if logged_by is None:
+            await update.message.reply_text("I do not recognize this Telegram user ID yet.")
+            return True
+        records = self.sheets.get_expense_records(self.settings.raw_expenses_sheet)
+        history = build_personal_expense_history(records, period, logged_by)
+        await update.message.reply_text(format_personal_expense_history(history))
+        return True
 
     async def _change_latest_logged_date(self, update: Update, text: str) -> None:
         if update.message is None or update.effective_user is None:
@@ -1365,6 +1496,10 @@ class FinanceBot:
             self.pending_duplicates.pop(key, None)
             if pending.pending_id is not None:
                 self.pending.pop(pending.pending_id, None)
+            if key in self.pending_payment_batches:
+                await update.message.reply_text("Duplicate not logged.")
+                await self._continue_payment_batch(update)
+                return True
             remaining = self._matching_pending(update, latest_batch_only=True) or self._matching_pending(update)
             if remaining:
                 await update.message.reply_text(
@@ -1384,6 +1519,10 @@ class FinanceBot:
         self._remember_logged(pending.row)
         if pending.pending_id is not None:
             self.pending.pop(pending.pending_id, None)
+        if key in self.pending_payment_batches:
+            await update.message.reply_text(self._logged_line(pending.row))
+            await self._continue_payment_batch(update)
+            return True
         remaining = self._matching_pending(update, latest_batch_only=True) or self._matching_pending(update)
         if remaining:
             await update.message.reply_text(
@@ -1613,7 +1752,14 @@ class FinanceBot:
                 expense_date=expense_date,
                 needs_date_confirmation=False,
             )
-            pending_id = self._add_pending(draft, logged_by, update, reason, batch_id=batch_id)
+            pending_id = self._add_pending(
+                draft,
+                logged_by,
+                update,
+                reason,
+                batch_id=batch_id,
+                input_type=reason.title(),
+            )
             pending_ids.append(pending_id)
             date_text = self._human_date(expense_date or datetime.now(SINGAPORE_TZ).date())
             category_text = category or "category unclear"
@@ -1675,6 +1821,8 @@ class FinanceBot:
                 reason=pending.reason,
                 batch_id=pending.batch_id,
                 category_options=pending.category_options,
+                input_type=pending.input_type,
+                payment_options=pending.payment_options,
             )
             changed = True
         return changed
@@ -1788,6 +1936,8 @@ class FinanceBot:
                 reason=pending.reason,
                 batch_id=pending.batch_id,
                 category_options=pending.category_options,
+                input_type=pending.input_type,
+                payment_options=pending.payment_options,
             )
 
     def _parse_pending_category_changes(self, text: str, pending_count: int) -> tuple[dict[int, str], list[str]]:
@@ -1842,11 +1992,14 @@ class FinanceBot:
                 reason=pending.reason,
                 batch_id=pending.batch_id,
                 category_options=pending.category_options,
+                input_type=pending.input_type,
+                payment_options=pending.payment_options,
             )
 
     async def _apply_category_reply(self, update: Update, category: str) -> tuple[list[str], bool]:
         matching = self._matching_pending(update, latest_batch_only=True) or self._matching_pending(update)
         logged_lines: list[str] = []
+        payment_ids: list[str] = []
         changed = False
 
         for pending_id, pending in matching:
@@ -1871,12 +2024,19 @@ class FinanceBot:
                 reason=pending.reason,
                 batch_id=pending.batch_id,
                 category_options=pending.category_options,
+                input_type=pending.input_type,
+                payment_options=pending.payment_options,
             )
 
             if pending.reason == "category":
+                if self._needs_payment_method(category, pending.input_type):
+                    self.pending[pending_id] = updated_pending
+                    payment_ids.append(pending_id)
+                    changed = True
+                    continue
                 self.pending.pop(pending_id, None)
-                row = self._expense_row_from_pending(updated_pending, category, "Confirmed", "Text", None)
-                logged_line = await self._append_or_hold_duplicate(update, row)
+                row = self._expense_row_from_pending(updated_pending, category, "Confirmed", updated_pending.input_type, None)
+                logged_line = await self._append_or_hold_duplicate(update, row, pending_id=pending_id)
                 if logged_line:
                     logged_lines.append(logged_line)
                 changed = True
@@ -1885,6 +2045,11 @@ class FinanceBot:
             self.pending[pending_id] = updated_pending
             changed = True
 
+        if payment_ids:
+            if len(payment_ids) == 1:
+                await self._request_payment_method(update, payment_ids[0])
+            else:
+                await self._begin_payment_batch(update, payment_ids)
         return logged_lines, changed
 
     def _update_unclear_pending_categories(self, update: Update, category: str) -> bool:
@@ -1910,6 +2075,8 @@ class FinanceBot:
                 reason=pending.reason,
                 batch_id=pending.batch_id,
                 category_options=pending.category_options,
+                input_type=pending.input_type,
+                payment_options=pending.payment_options,
             )
             changed = True
         return changed
@@ -1932,6 +2099,25 @@ class FinanceBot:
                 continue
             selected_rows.append((position, pending_id, pending, category))
         if not selected_rows:
+            return []
+
+        if self._payment_tracking_enabled() and all(
+            _transaction_type_for_category(category, pending.input_type).casefold() == "expense"
+            for _position, _pending_id, pending, category in selected_rows
+        ):
+            selected_ids = []
+            for _position, pending_id, pending, category in selected_rows:
+                self.pending[pending_id] = replace(
+                    pending,
+                    draft=replace(pending.draft, category=category, confidence=max(pending.draft.confidence, 0.95)),
+                    payment_options=(),
+                )
+                selected_ids.append(pending_id)
+            if cancel_unselected:
+                for position, (pending_id, _pending) in enumerate(matching, start=1):
+                    if position not in selected_positions:
+                        self.pending.pop(pending_id, None)
+            await self._begin_payment_batch(update, selected_ids)
             return []
 
         await update.message.reply_text("Logging expenses...")
@@ -1985,6 +2171,17 @@ class FinanceBot:
             row = self._expense_row_from_pending(pending, category, "Confirmed", pending.reason.title(), None)
             prepared_rows.append((pending_id, row))
 
+        if self._payment_tracking_enabled() and all(row.transaction_type.casefold() == "expense" for _pending_id, row in prepared_rows):
+            for pending_id, row in prepared_rows:
+                pending = self.pending[pending_id]
+                self.pending[pending_id] = replace(
+                    pending,
+                    draft=replace(pending.draft, category=row.category, confidence=max(pending.draft.confidence, 0.95)),
+                    payment_options=(),
+                )
+            await self._begin_payment_batch(update, [pending_id for pending_id, _row in prepared_rows])
+            return
+
         await update.message.reply_text("Logging expenses...")
         logged_lines = []
         duplicate_seen = False
@@ -2010,6 +2207,7 @@ class FinanceBot:
         reason: str,
         batch_id: str | None = None,
         category_options: tuple[str, ...] = (),
+        input_type: str = "Text",
     ) -> str:
         pending_id = uuid.uuid4().hex[:6]
         self.pending[pending_id] = PendingExpense(
@@ -2021,8 +2219,190 @@ class FinanceBot:
             reason=reason,
             batch_id=batch_id,
             category_options=category_options,
+            input_type=input_type,
         )
         return pending_id
+
+    def _needs_payment_method(self, category: str, input_type: str) -> bool:
+        return self._payment_tracking_enabled() and _transaction_type_for_category(category, input_type).casefold() == "expense"
+
+    async def _record_or_request_payment(
+        self,
+        update: Update,
+        draft: ExpenseDraft,
+        logged_by: str,
+        category: str,
+        input_type: str,
+    ) -> str | None:
+        if not self._needs_payment_method(category, input_type):
+            row = self._expense_row(draft, logged_by, update, category, "Confirmed", input_type)
+            return await self._append_or_hold_duplicate(update, row)
+
+        pending_id = self._add_pending(draft, logged_by, update, "payment", input_type=input_type)
+        await self._request_payment_method(update, pending_id)
+        return None
+
+    async def _record_pending_or_request_payment(
+        self,
+        update: Update,
+        pending_id: str,
+        pending: PendingExpense,
+        category: str,
+        date_override=None,
+    ) -> str | None:
+        draft = pending.draft
+        if date_override is not None:
+            draft = replace(draft, expense_date=date_override, needs_date_confirmation=False)
+            pending = replace(pending, draft=draft)
+            self.pending[pending_id] = pending
+        if self._needs_payment_method(category, pending.input_type):
+            self.pending[pending_id] = replace(pending, draft=replace(draft, category=category, confidence=max(draft.confidence, 0.95)))
+            await self._request_payment_method(update, pending_id)
+            return None
+        row = self._expense_row_from_pending(pending, category, "Confirmed", pending.input_type, date_override)
+        logged_line = await self._append_or_hold_duplicate(update, row, pending_id=pending_id)
+        if logged_line:
+            self.pending.pop(pending_id, None)
+        return logged_line
+
+    async def _request_payment_method(self, update: Update, pending_id: str, position: tuple[int, int] | None = None) -> bool:
+        pending = self.pending.get(pending_id)
+        if pending is None:
+            return False
+        try:
+            config = self._load_payment_config()
+        except (RuntimeError, ValueError) as exc:
+            await self._reply_to_update(update, f"Payment setup could not be loaded: {exc}")
+            return False
+        methods = config.methods_for_owner(pending.logged_by)
+        if not methods:
+            await self._reply_to_update(
+                update,
+                f"No active payment methods are configured for {pending.logged_by}. "
+                "Check the Payment Methods tab, then use /refreshpayments.",
+            )
+            return False
+        options = tuple(method.name for method in methods)
+        self.pending[pending_id] = replace(pending, payment_options=options)
+        date_value = pending.draft.expense_date or datetime.now(SINGAPORE_TZ).date()
+        position_text = f"Payment method for {position[0]} of {position[1]}:\n\n" if position else "Which payment method?\n\n"
+        await self._reply_to_update(
+            update,
+            position_text
+            + f"${pending.draft.amount:,.2f} to {pending.draft.category} - "
+            + f"{self._human_date(date_value)} - {pending.draft.description}",
+            reply_markup=self._payment_method_keyboard(pending_id, options),
+        )
+        return True
+
+    def _payment_method_keyboard(self, pending_id: str, options: tuple[str, ...]):
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+        buttons = [
+            InlineKeyboardButton(name, callback_data=f"{PAYMENT_METHOD_CALLBACK}|{pending_id}|{index}")
+            for index, name in enumerate(options)
+        ]
+        rows = [buttons[index:index + 2] for index in range(0, len(buttons), 2)]
+        return InlineKeyboardMarkup(rows)
+
+    async def handle_payment_method_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        query = update.callback_query
+        if query is None or update.effective_user is None:
+            return
+        parts = (query.data or "").split("|")
+        if len(parts) != 3 or parts[0] != PAYMENT_METHOD_CALLBACK:
+            return
+        pending_id = parts[1]
+        try:
+            option_index = int(parts[2])
+        except ValueError:
+            await query.answer("That payment method is invalid.", show_alert=True)
+            return
+        pending = self.pending.get(pending_id)
+        if pending is None:
+            await query.edit_message_reply_markup(reply_markup=None)
+            await query.answer("This payment choice is no longer available.", show_alert=True)
+            return
+        logged_by = self.settings.label_for_user(update.effective_user.id)
+        message_chat_id = query.message.chat_id if query.message is not None else None
+        if logged_by is None or logged_by != pending.logged_by or message_chat_id != pending.chat_id:
+            await query.answer("Only the person who submitted this expense can choose its payment method.", show_alert=True)
+            return
+        if option_index < 0 or option_index >= len(pending.payment_options):
+            await query.answer("That payment method is no longer available.", show_alert=True)
+            return
+        payment_method = pending.payment_options[option_index]
+        try:
+            config = self._load_payment_config()
+        except (RuntimeError, ValueError) as exc:
+            await query.answer("Payment setup needs attention.", show_alert=True)
+            await query.message.reply_text(f"Payment setup could not be loaded: {exc}")
+            return
+        if config.method_for(pending.logged_by, payment_method) is None:
+            await query.answer("That payment method is no longer active.", show_alert=True)
+            return
+
+        await query.answer()
+        category = pending.draft.category or self._infer_pending_category(pending)
+        if category not in VARIABLE_CATEGORIES:
+            await query.answer("This expense still needs a category.", show_alert=True)
+            return
+        await query.message.reply_text("Logging expense...")
+        row = self._expense_row_from_pending(
+            pending,
+            category,
+            "Confirmed",
+            pending.input_type,
+            None,
+            payment_method=payment_method,
+        )
+        logged_line = await self._append_or_hold_duplicate(update, row, pending_id=pending_id)
+        await query.edit_message_reply_markup(reply_markup=None)
+        if logged_line:
+            self.pending.pop(pending_id, None)
+            await query.edit_message_text(logged_line)
+            await self._continue_payment_batch(update)
+
+    async def _begin_payment_batch(self, update: Update, pending_ids: list[str]) -> None:
+        if update.effective_user is None:
+            return
+        key = (update.effective_chat.id, update.effective_user.id)
+        self.pending_payment_batches[key] = PendingPaymentBatch(
+            pending_ids=pending_ids,
+            chat_id=update.effective_chat.id,
+            requested_by_user_id=update.effective_user.id,
+        )
+        await self._continue_payment_batch(update)
+
+    async def _continue_payment_batch(self, update: Update) -> None:
+        if update.effective_user is None:
+            return
+        key = (update.effective_chat.id, update.effective_user.id)
+        batch = self.pending_payment_batches.get(key)
+        if batch is None:
+            return
+        active_ids = [pending_id for pending_id in batch.pending_ids if pending_id in self.pending]
+        if not active_ids:
+            self.pending_payment_batches.pop(key, None)
+            return
+        batch.pending_ids = active_ids
+        pending_id = active_ids[0]
+        await self._request_payment_method(update, pending_id, position=(1, len(active_ids)))
+
+    async def _reply_to_update(self, update: Update, text: str, reply_markup=None) -> None:
+        if update.message is not None:
+            await update.message.reply_text(text, reply_markup=reply_markup)
+            return
+        if update.callback_query is not None and update.callback_query.message is not None:
+            await update.callback_query.message.reply_text(text, reply_markup=reply_markup)
+
+    def _payment_choice_is_active(self, update: Update) -> bool:
+        matching = self._matching_pending(update, latest_batch_only=True) or self._matching_pending(update)
+        return any(pending.payment_options for _pending_id, pending in matching)
+
+    def _clear_payment_batch(self, update: Update) -> None:
+        if update.effective_user is not None:
+            self.pending_payment_batches.pop((update.effective_chat.id, update.effective_user.id), None)
 
     def _expense_row(
         self,
@@ -2032,6 +2412,7 @@ class FinanceBot:
         category: str,
         status: str,
         input_type: str,
+        payment_method: str = "",
     ) -> ExpenseRow:
         return ExpenseRow(
             entry_id=uuid.uuid4().hex[:6],
@@ -2046,6 +2427,7 @@ class FinanceBot:
             telegram_chat_id=update.effective_chat.id,
             telegram_message_id=update.message.message_id,
             transaction_type=_transaction_type_for_category(category, input_type),
+            payment_method=payment_method,
         )
 
     def _row_timestamp(self, draft: ExpenseDraft) -> datetime:
@@ -2061,6 +2443,7 @@ class FinanceBot:
         status: str,
         input_type: str,
         date_override,
+        payment_method: str = "",
     ) -> ExpenseRow:
         draft = pending.draft
         if date_override is not None:
@@ -2086,12 +2469,14 @@ class FinanceBot:
             telegram_chat_id=pending.chat_id,
             telegram_message_id=pending.message_id,
             transaction_type=_transaction_type_for_category(category, input_type),
+            payment_method=payment_method,
         )
 
     def _logged_line(self, row: ExpenseRow) -> str:
         if row.transaction_type.lower() == "income":
             return f"Logged income ${row.amount:.2f} to {row.category} - {self._human_date(row.timestamp.date())} [{row.entry_id}]"
-        return f"Logged ${row.amount:.2f} to {row.category} - {self._human_date(row.timestamp.date())} [{row.entry_id}]"
+        payment = f" via {row.payment_method}" if row.payment_method else ""
+        return f"Logged ${row.amount:.2f} to {row.category} - {self._human_date(row.timestamp.date())}{payment} [{row.entry_id}]"
 
     def _human_date(self, value) -> str:
         return value.strftime("%-d %B %Y")
@@ -2305,8 +2690,10 @@ def main() -> None:
     application.add_handler(CommandHandler(["categories", "category"], finance_bot.categories))
     application.add_handler(CommandHandler("categorydebug", finance_bot.category_debug))
     application.add_handler(CommandHandler("refreshcategories", finance_bot.refresh_categories))
+    application.add_handler(CommandHandler("refreshpayments", finance_bot.refresh_payments))
     application.add_handler(CommandHandler("pending", finance_bot.pending_command))
     application.add_handler(CommandHandler("summary", finance_bot.summary_command))
+    application.add_handler(CommandHandler(["cards", "cardsummary"], finance_bot.cards_command))
     application.add_handler(CommandHandler("confirm", finance_bot.confirm_command))
     application.add_handler(CommandHandler("undo", finance_bot.undo_command))
     application.add_handler(CommandHandler("fixed", finance_bot.fixed_command))
@@ -2315,6 +2702,12 @@ def main() -> None:
         CallbackQueryHandler(
             finance_bot.handle_income_category_callback,
             pattern=rf"^{INCOME_CATEGORY_CALLBACK}\|",
+        )
+    )
+    application.add_handler(
+        CallbackQueryHandler(
+            finance_bot.handle_payment_method_callback,
+            pattern=rf"^{PAYMENT_METHOD_CALLBACK}\|",
         )
     )
     application.add_handler(MessageHandler(filters.PHOTO, finance_bot.handle_photo))

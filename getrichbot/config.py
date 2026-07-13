@@ -33,6 +33,8 @@ class Settings:
     bot_state_sheet: str
     categories_sheet: str
     category_keywords_sheet: str
+    payment_methods_sheet: str
+    card_limits_sheet: str
     telegram_chat_id: int | None
     openai_api_key: str | None
     openai_model: str
@@ -63,6 +65,8 @@ class Settings:
             bot_state_sheet=os.getenv("BOT_STATE_SHEET", "Bot State"),
             categories_sheet=os.getenv("CATEGORIES_SHEET", "Categories"),
             category_keywords_sheet=os.getenv("CATEGORY_KEYWORDS_SHEET", "Category Keywords"),
+            payment_methods_sheet=os.getenv("PAYMENT_METHODS_SHEET", "Payment Methods"),
+            card_limits_sheet=os.getenv("CARD_LIMITS_SHEET", "Card Limits"),
             telegram_chat_id=_optional_int("TELEGRAM_CHAT_ID"),
             openai_api_key=os.getenv("OPENAI_API_KEY") or None,
             openai_model=os.getenv("OPENAI_MODEL", "gpt-5.4-mini"),

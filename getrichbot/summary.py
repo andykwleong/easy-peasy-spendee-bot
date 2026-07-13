@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal
@@ -30,6 +31,13 @@ class SpendingSummary:
     net: Decimal
 
 
+@dataclass(frozen=True)
+class ExpenseHistory:
+    period: SummaryPeriod
+    records: list[ExpenseRecord]
+    total: Decimal
+
+
 def parse_summary_period(text: str, today: date) -> SummaryPeriod | None:
     lowered = " ".join(text.lower().strip().split())
     if lowered.startswith("/summary"):
@@ -50,6 +58,76 @@ def parse_summary_period(text: str, today: date) -> SummaryPeriod | None:
         return SummaryPeriod(start=start, end=today, label=today.strftime("%B %Y"))
 
     return None
+
+
+def parse_expense_history_period(text: str, today: date) -> SummaryPeriod | None:
+    lowered = " ".join(text.lower().strip().split())
+    if not any(word in lowered for word in ("expense", "expenses", "spending", "spent", "keyed", "logged", "entered")) and "key in" not in lowered:
+        return None
+
+    range_match = re.search(
+        r"\b(?:between|from)\s+(\d{1,2})(?:st|nd|rd|th)?\s*(?:-|to|and)\s*"
+        r"(\d{1,2})(?:st|nd|rd|th)?\s+([a-z]+)(?:\s+(\d{4}))?\b",
+        lowered,
+    )
+    if range_match is not None:
+        month = _month_number(range_match.group(3))
+        year = int(range_match.group(4) or today.year)
+        if month is None:
+            return None
+        try:
+            start = date(year, month, int(range_match.group(1)))
+            end = date(year, month, int(range_match.group(2)))
+        except ValueError:
+            return None
+        if end < start:
+            return None
+        return SummaryPeriod(start=start, end=end, label=f"{start.strftime('%-d %B')} to {end.strftime('%-d %B %Y')}")
+
+    range_match = re.search(r"\b(?:between|from)\s+(.+?)\s+(?:and|to)\s+(.+?)\s*$", lowered)
+    if range_match is not None:
+        start = _parse_history_date(range_match.group(1), today)
+        end = _parse_history_date(range_match.group(2), today)
+        if start is not None and end is not None and end >= start:
+            return SummaryPeriod(start=start, end=end, label=f"{start.strftime('%-d %B')} to {end.strftime('%-d %B %Y')}")
+
+    on_match = re.search(r"\b(?:on|for)\s+(.+?)\s*$", lowered)
+    if on_match is None:
+        return None
+    target = _parse_history_date(on_match.group(1), today)
+    if target is None:
+        return None
+    return SummaryPeriod(start=target, end=target, label=target.strftime("%-d %B %Y"))
+
+
+def build_personal_expense_history(records: list[ExpenseRecord], period: SummaryPeriod, logged_by: str) -> ExpenseHistory:
+    matching: list[ExpenseRecord] = []
+    for record in records:
+        if record.status.casefold() != "confirmed" or record.transaction_type.casefold() != "expense":
+            continue
+        if record.logged_by != logged_by:
+            continue
+        try:
+            record_date = date.fromisoformat(record.expense_date)
+        except ValueError:
+            continue
+        if period.start <= record_date <= period.end:
+            matching.append(record)
+    matching.sort(key=lambda record: (record.expense_date, record.timestamp, record.entry_id))
+    return ExpenseHistory(period=period, records=matching, total=sum((record.amount for record in matching), Decimal("0")))
+
+
+def format_personal_expense_history(history: ExpenseHistory) -> str:
+    if not history.records:
+        return f"Your expenses - {history.period.label}:\n\nNo confirmed expenses logged."
+    lines = [f"Your expenses - {history.period.label}:"]
+    for record in history.records:
+        payment = f" via {record.payment_method}" if record.payment_method else ""
+        lines.append(
+            f"${record.amount:,.2f} to {record.category} - {record.description}{payment} [{record.entry_id}]"
+        )
+    lines.append(f"Total: ${history.total:,.2f}")
+    return "\n\n".join(lines)
 
 
 def build_spending_summary(records: list[ExpenseRecord], period: SummaryPeriod) -> SpendingSummary:
@@ -176,6 +254,40 @@ def _format_optional_amount(value: Decimal | None) -> str:
     if value is None or value == 0:
         return ""
     return f"{value:.2f}"
+
+
+def _parse_history_date(text: str, today: date) -> date | None:
+    normalized = text.strip().casefold()
+    if normalized == "today":
+        return today
+    if normalized == "yesterday":
+        return today - timedelta(days=1)
+    iso_match = re.fullmatch(r"(\d{4})-(\d{1,2})-(\d{1,2})", normalized)
+    if iso_match is not None:
+        try:
+            return date(int(iso_match.group(1)), int(iso_match.group(2)), int(iso_match.group(3)))
+        except ValueError:
+            return None
+    match = re.fullmatch(r"(\d{1,2})(?:st|nd|rd|th)?\s+([a-z]+)(?:\s+(\d{4}))?", normalized)
+    if match is None:
+        return None
+    month = _month_number(match.group(2))
+    if month is None:
+        return None
+    try:
+        return date(int(match.group(3) or today.year), month, int(match.group(1)))
+    except ValueError:
+        return None
+
+
+def _month_number(value: str) -> int | None:
+    months = {
+        "jan": 1, "january": 1, "feb": 2, "february": 2, "mar": 3, "march": 3,
+        "apr": 4, "april": 4, "may": 5, "jun": 6, "june": 6, "jul": 7, "july": 7,
+        "aug": 8, "august": 8, "sep": 9, "sept": 9, "september": 9, "oct": 10,
+        "october": 10, "nov": 11, "november": 11, "dec": 12, "december": 12,
+    }
+    return months.get(value.casefold())
 
 
 def _month_from_record_date(record: ExpenseRecord) -> str | None:

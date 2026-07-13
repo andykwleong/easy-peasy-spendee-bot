@@ -31,7 +31,8 @@ This file contains project-specific instructions for coding agents working on Ge
 - `Raw Expenses` contains all confirmed transaction rows.
 - `Fixed Expenses` contains active fixed expense setup.
 - `Monthly Summary` is generated as a P&L summary; rows include income categories, expense categories, total income, total expenses, and net P&L.
-- `Raw Expenses` includes a `Transaction Type` column after `Description`; valid values are `Expense`, `Income`, and `Fixed`.
+- `Raw Expenses` includes `Payment Method` after `Description`, followed by `Transaction Type`; valid transaction types are `Expense`, `Income`, and `Fixed`.
+- Historical rows with a blank `Payment Method` are valid but must not be included in card tracking.
 - Old rows with blank `Transaction Type` are backward compatible: infer `Income` when the category starts with `Income -`, infer `Fixed` when input type is fixed, otherwise treat as `Expense`.
 - If `Monthly Summary` shows an unexpected month, investigate and fix the source row in `Raw Expenses` instead of manually deleting the summary column.
 - Date parsing must not treat decimal amounts as years. For example, `shopping 20th may 23.20` should resolve to the current/default year for `20 May`, not year 2023.
@@ -64,7 +65,14 @@ This file contains project-specific instructions for coding agents working on Ge
 - In multiline messages, a standalone first-line date should apply to all following expense lines before checking for individually dated lines.
 - Date-like text such as `21 May` should be removed before amount selection, so `30 gifts spent on 21 May` logs `$30`, not `$21`.
 - Follow-up replies should handle normal wording such as `confirm 2`, `gift`, and `change spend date to 21 May`.
-- If a normal typed expense is pending only because the category is missing, replying with a valid category should log it immediately.
+- Normal expenses need a visible payment-method selection before they are written to `Raw Expenses`. Income and fixed expenses do not need a payment method.
+- `Payment Methods` and `Card Limits` are user-managed Google Sheet tabs. A payment method is identified by its `Owner` and `Payment Method` pair; do not hardcode personal cards in source code.
+- Payment buttons must only show active methods belonging to the Telegram sender. `Card Limits` rows only count confirmed normal expenses matching the same owner, payment method, category, and card cycle.
+- A card with no active `Card Limits` row is uncapped and must still appear in that owner's card summary with its period spend.
+- Use `/refreshpayments` after sheet edits to reload payment config immediately. Otherwise, payment config may remain in a one-minute in-memory cache; it is read only on demand and makes no background Google Sheets calls.
+- Payment-selection and screenshot/voice batch state are temporary in-memory state. Railway restarts clear them; the user must send the expense again if a restart happens before its payment button is tapped.
+- `card summary` and `/cards` show only the requesting person's active credit cards. Use green below 60%, yellow from 60% to 79%, orange from 80% to 94%, and red at 95% or above for configured caps.
+- Personal history requests such as `expenses on 12 July` and `expenses between 10-12 July` must only return normal expense rows logged by the requesting Telegram user.
 - Screenshot and voice-note pending entries must remain pending after category/date changes until the user explicitly confirms logging.
 - Plain pending replies like `confirm`, `confirmed`, and `confirm all` should target the latest pending batch for that chat/user when one exists; otherwise they should fall back to normal text pending entries.
 - Plain `yes` should not confirm screenshot or voice-note pending batches. Reserve `yes` for delete/edit confirmations and similar explicit yes/no prompts.

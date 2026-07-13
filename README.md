@@ -27,6 +27,9 @@ Telegram group chat
 - Supports monthly fixed expenses confirmation.
 - Sends 9am Singapore month-end fixed expense reminders when `TELEGRAM_CHAT_ID` is set.
 - Updates `Monthly Summary` as a month-by-month P&L with total income, total expenses, and net P&L.
+- Records a payment method for normal expenses using personal card, Cash, and PayNow buttons.
+- Tracks personal credit-card spend against configurable calendar-month or billing-cycle caps.
+- Shows each sender their own expense history for a chosen date or date range.
 - Supports undo for the last expense sent by a user.
 - Keeps the bot private to configured Telegram user IDs.
 
@@ -48,10 +51,12 @@ Create a Google Sheet with these tabs:
 Header row:
 
 ```text
-Entry ID,Timestamp,Date,Month,Logged By,Raw Input,Amount,Category,Description,Transaction Type,Input Type,Status,Telegram Chat ID,Telegram Message ID
+Entry ID,Timestamp,Date,Month,Logged By,Raw Input,Amount,Category,Description,Payment Method,Transaction Type,Input Type,Status,Telegram Chat ID,Telegram Message ID
 ```
 
 `Timestamp` is time only, for example `21:34:12`. `Date` stores the transaction date.
+
+`Payment Method` is selected in Telegram for new normal expenses. Historical rows may be blank; they remain valid for monthly summaries but are not included in card tracking.
 
 `Transaction Type` is one of:
 
@@ -91,6 +96,33 @@ If an unexpected month appears, for example `2023-05`, check `Raw Expenses` for 
 ### Bot State
 
 The bot creates this tab automatically when needed. It stores small markers so Railway restarts do not resend the same month-end reminder or final summary.
+
+### Payment Methods
+
+Create a `Payment Methods` tab. Each row is one payment method belonging to one person. The bot uses `Owner` to show only that person's buttons.
+
+```text
+Payment Method,Owner,Type,Cycle Type,Cycle Start Day,Active,Notes
+Example Rewards Card,Me,Credit Card,Calendar,1,TRUE,
+Example Rewards Card,My wife,Credit Card,Calendar,1,TRUE,
+Cash,Me,Cash,Calendar,1,TRUE,
+PayNow,My wife,PayNow,Calendar,1,TRUE,
+```
+
+Use `Calendar` with a start day of `1` for a calendar-month cap. Use `Billing` and the day the rewards cap resets for statement-cycle cards. For example, `17` means the cycle runs from the 17th to the 16th. `Notes` is optional and ignored by the bot.
+
+### Card Limits
+
+Create a `Card Limits` tab. Add a row only when a card has a cap you want to track. A card with no row here is still selectable and appears under `Uncapped` in the card summary.
+
+```text
+Payment Method,Owner,Category,Limit Amount,Active
+Example Rewards Card,Me,Food,750,TRUE
+Example Rewards Card,Me,Groceries,750,TRUE
+Example Rewards Card,My wife,All,1000,TRUE
+```
+
+The `Payment Method` and `Owner` pair must match `Payment Methods` exactly. `Category` must be an existing expense category, or `All` for an overall cap. A transaction can count towards both an overall `All` cap and a category-specific cap where both are configured.
 
 ## Category Setup
 
@@ -193,6 +225,8 @@ GOOGLE_SERVICE_ACCOUNT_FILE=
 GOOGLE_SERVICE_ACCOUNT_JSON=
 CATEGORIES_SHEET=Categories
 CATEGORY_KEYWORDS_SHEET=Category Keywords
+PAYMENT_METHODS_SHEET=Payment Methods
+CARD_LIMITS_SHEET=Card Limits
 ME_TELEGRAM_IDS=
 WIFE_TELEGRAM_IDS=
 ME_LABEL=Me
@@ -209,6 +243,8 @@ OPENAI_MODEL=gpt-5.4-mini
 Never commit real secrets. Keep them in Railway variables or your local `.env`.
 
 For categories, set `CATEGORIES_SHEET` and `CATEGORY_KEYWORDS_SHEET`. The running bot expects active category rows in Google Sheets.
+
+Payment configuration is read only when you use the bot. It is cached in memory for one minute to keep payment buttons responsive. Use `/refreshpayments` after editing `Payment Methods` or `Card Limits` to apply a change immediately. No background payment-sheet polling occurs.
 
 ## Telegram Usage
 
@@ -229,6 +265,8 @@ groceries 63 and 15.20
 ```
 
 `groceries 63 and 15.20` logs two separate grocery rows for today. This is not bill splitting; it is just a quick way to enter multiple separate expenses under the same category.
+
+After a normal expense has a category, the bot asks which payment method was used. It only shows methods owned by the person who sent the expense. The expense is saved after a payment button is tapped. Income and fixed expenses do not ask for a payment method.
 
 You can also upload a receipt, payment, or banking screenshot if `OPENAI_API_KEY` is configured. The bot will extract the likely expense and ask for confirmation before logging it.
 
@@ -277,12 +315,14 @@ Commands:
 - `/whoami` - show your Telegram numeric user ID for setup
 - `/pending` - show entries needing confirmation
 - `/summary` - show this month's checkpoint summary
+- `/cards` - show your current card spending and limits
 - `/confirm <pending_id> <category>` - confirm a pending entry
 - `/undo` - delete your latest logged row from Google Sheets
 - `/fixed` - preview active fixed expenses
 - `/confirmfixed` - review active fixed expenses before adding them
 - `/categories` - show available categories
 - `/refreshcategories` - reload `Categories` and `Category Keywords` from Google Sheets after you edit them
+- `/refreshpayments` - reload `Payment Methods` and `Card Limits` from Google Sheets after you edit them
 
 Plain-language shortcuts:
 
@@ -301,6 +341,9 @@ Plain-language shortcuts:
 - `summary`
 - `summary this month`
 - `summary last month`
+- `card summary`
+- `expenses on 12 July`
+- `expenses between 10-12 July`
 - `confirm fixed`
 - `confirm fixed last month`
 - `confirm fixed May 2026`
@@ -337,6 +380,23 @@ When a new screenshot or voice note creates a pending list, plain replies like `
 Duplicate checks use Google Sheets as the source of truth, plus a one-minute in-memory safety window for entries that were just logged but may not be visible in a read-back yet.
 
 If a duplicate is found while confirming a pending list, the bot stops at the first duplicate instead of continuing through the batch. Reply `confirm` to log that duplicate anyway, or `cancel` to skip it and continue deciding on the remaining pending items.
+
+### Card Summary
+
+Use `card summary` or `/cards` to see only your own active credit cards. Capped cards show their spending against each configured cap. Uncapped cards still show their total spending for the current calendar month or billing cycle.
+
+The cap marker is green below 60%, yellow from 60% to 79%, orange from 80% to 94%, and red at 95% or more.
+
+### Personal Expense History
+
+These requests show only normal expenses logged by the person asking. They exclude income and fixed expenses.
+
+```text
+expenses on 12 July
+expenses between 10-12 July
+expenses from 10 July to 12 July
+what did I key in on 12 July
+```
 
 ## Monthly Automation
 
@@ -376,6 +436,8 @@ The bot shows the full fixed expense list again after edits. Once you reply `con
 - A clear list of amounts under one category, such as `groceries 63 and 15.20`, logs as separate expense rows.
 - Multiple undated expense lines default to today's date.
 - Category changes should be made in the `Categories` and `Category Keywords` Google Sheet tabs. After editing those tabs, send `/refreshcategories` in Telegram so the running Railway bot reloads the latest sheet values.
+- Payment methods and limits should be changed in `Payment Methods` and `Card Limits`. After editing either tab, send `/refreshpayments` to load the change immediately. Otherwise, the bot keeps the current payment configuration for up to one minute after a read.
+- Payment selection is temporary while the bot is running. If Railway restarts before you tap a payment button, resend the expense instead of assuming it was logged.
 - Follow-up replies can update pending entries, for example `gift` or `confirm 2 as Gifts`.
 - `change spend date to 21 May` updates the latest logged expense for that sender.
 - A bare entry ID like `1d9c9a` opens the delete confirmation for that expense, so it will not be mistaken for a $9 expense.

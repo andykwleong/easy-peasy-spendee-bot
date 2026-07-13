@@ -1,4 +1,5 @@
 import unittest
+from datetime import date
 from decimal import Decimal
 
 from getrichbot.bot import FinanceBot
@@ -313,8 +314,8 @@ class TestFollowups(unittest.IsolatedAsyncioTestCase):
         update = FakeUpdate("cancel")
         bot.latest_pending_batch[(-100, 456)] = "screenshot"
         bot.pending = {
-            "one111": bot_pending("21.01", "Food Panda", "Food", batch_id="screenshot"),
-            "two222": bot_pending("43.15", "Cut Butchery", "Groceries", batch_id="screenshot"),
+            "one111": bot_pending("21.01", "Food Panda", "Food", batch_id="screenshot", expense_date=date(2026, 7, 7)),
+            "two222": bot_pending("43.15", "Cut Butchery", "Groceries", batch_id="screenshot", expense_date=date(2026, 7, 7)),
         }
 
         handled = await bot.handle_pending_update(update)
@@ -344,8 +345,8 @@ class TestFollowups(unittest.IsolatedAsyncioTestCase):
         update = FakeUpdate("confirm all")
         bot.latest_pending_batch[(-100, 456)] = "screenshot"
         bot.pending = {
-            "one111": bot_pending("21.01", "Food Panda", "Food", batch_id="screenshot"),
-            "two222": bot_pending("43.15", "Cut Butchery", "Groceries", batch_id="screenshot"),
+            "one111": bot_pending("21.01", "Food Panda", "Food", batch_id="screenshot", expense_date=date(2026, 7, 7)),
+            "two222": bot_pending("43.15", "Cut Butchery", "Groceries", batch_id="screenshot", expense_date=date(2026, 7, 7)),
         }
 
         handled = await bot.handle_pending_update(update)
@@ -529,7 +530,13 @@ class TestFollowups(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sheets.updated[0]["category"], "Food")
 
 
-def bot_pending(amount: str, description: str, category: str | None = None, batch_id: str | None = None):
+def bot_pending(
+    amount: str,
+    description: str,
+    category: str | None = None,
+    batch_id: str | None = None,
+    expense_date=None,
+):
     from datetime import datetime
 
     from getrichbot.bot import PendingExpense
@@ -541,6 +548,7 @@ def bot_pending(amount: str, description: str, category: str | None = None, batc
             category=category,
             description=description,
             confidence=0,
+            expense_date=expense_date,
         ),
         logged_by="My wife",
         chat_id=-100,

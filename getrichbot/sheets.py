@@ -6,6 +6,7 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from getrichbot.models import ExpenseRecord, ExpenseRow
+from getrichbot.cards import PaymentConfig, parse_payment_config
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
@@ -35,11 +36,26 @@ class SheetsClient:
     def append_expense(self, sheet_name: str, row: ExpenseRow) -> None:
         self._service().spreadsheets().values().append(
             spreadsheetId=self.sheet_id,
-            range=f"{sheet_name}!A:N",
+            range=f"{sheet_name}!A:O",
             valueInputOption="USER_ENTERED",
             insertDataOption="INSERT_ROWS",
             body={"values": [row.to_sheet_row()]},
         ).execute()
+
+    def get_payment_config(self, payment_methods_sheet: str, card_limits_sheet: str) -> PaymentConfig:
+        methods_source, method_rows = self._get_values_first_available(
+            [payment_methods_sheet, "Payment Methods", "payment methods"],
+            "A:Z",
+        )
+        limits_source, limit_rows = self._get_values_first_available(
+            [card_limits_sheet, "Card Limits", "card limits"],
+            "A:Z",
+        )
+        if methods_source is None:
+            raise ValueError(f"Sheet tab not found: {payment_methods_sheet}")
+        if limits_source is None:
+            raise ValueError(f"Sheet tab not found: {card_limits_sheet}")
+        return parse_payment_config(method_rows, limit_rows)
 
     def get_fixed_expenses(self, sheet_name: str) -> list[dict[str, str | Decimal]]:
         result = self._service().spreadsheets().values().get(
@@ -156,7 +172,7 @@ class SheetsClient:
     def delete_entry_by_id(self, sheet_name: str, entry_id: str, logged_by: str | None = None) -> bool:
         result = self._service().spreadsheets().values().get(
             spreadsheetId=self.sheet_id,
-            range=f"{sheet_name}!A2:N",
+            range=f"{sheet_name}!A2:O",
         ).execute()
         rows = result.get("values", [])
 
@@ -173,7 +189,7 @@ class SheetsClient:
     def delete_fixed_expenses_for_month(self, sheet_name: str, month: str) -> int:
         result = self._service().spreadsheets().values().get(
             spreadsheetId=self.sheet_id,
-            range=f"{sheet_name}!A2:N",
+            range=f"{sheet_name}!A2:O",
         ).execute()
         rows = result.get("values", [])
         deleted_count = 0
@@ -222,6 +238,7 @@ class SheetsClient:
                     input_type=input_type,
                     status=status,
                     transaction_type=transaction_type,
+                    payment_method=_record_payment_method(row),
                 )
             )
         return records
@@ -300,7 +317,7 @@ class SheetsClient:
         if description is not None:
             updates.append({"range": f"{sheet_name}!I{row_number}", "values": [[description]]})
         if transaction_type is not None:
-            updates.append({"range": f"{sheet_name}!J{row_number}", "values": [[transaction_type]]})
+            updates.append({"range": f"{sheet_name}!K{row_number}", "values": [[transaction_type]]})
         if not updates:
             return
 
@@ -372,10 +389,10 @@ def _cell(row: list[str], index: int) -> str:
 
 
 def _record_type_fields(row: list[str]) -> tuple[str, str, str]:
-    new_status = _cell(row, 11)
-    if new_status:
-        transaction_type = _cell(row, 9)
-        input_type = _cell(row, 10)
+    new_status = _cell(row, 12)
+    if new_status.casefold() in {"confirmed", "pending", "cancelled", "canceled"}:
+        transaction_type = _cell(row, 10)
+        input_type = _cell(row, 11)
         status = new_status
     else:
         transaction_type = ""
@@ -384,6 +401,11 @@ def _record_type_fields(row: list[str]) -> tuple[str, str, str]:
     if not transaction_type:
         transaction_type = _infer_transaction_type(_cell(row, 7), input_type)
     return transaction_type, input_type, status
+
+
+def _record_payment_method(row: list[str]) -> str:
+    # New rows have Payment Method in column J. Old rows keep the previous layout.
+    return _cell(row, 9) if _cell(row, 12).casefold() in {"confirmed", "pending", "cancelled", "canceled"} else ""
 
 
 def _infer_transaction_type(category: str, input_type: str) -> str:

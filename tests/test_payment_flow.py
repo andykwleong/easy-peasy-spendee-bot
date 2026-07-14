@@ -113,7 +113,7 @@ class TestPaymentFlow(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(sheets.rows), 1)
         self.assertEqual(sheets.rows[0].payment_method, "Citi Rewards")
-        self.assertEqual(callback_update.callback_query.message.replies[0], "Logging expense...")
+        self.assertEqual(callback_update.callback_query.message.replies, [])
         self.assertIn("via Citi Rewards", callback_update.callback_query.edited_text)
 
     async def test_confirmed_screenshot_batch_asks_for_cards_before_logging(self):

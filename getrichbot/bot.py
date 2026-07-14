@@ -2419,7 +2419,6 @@ class FinanceBot:
         if category not in VARIABLE_CATEGORIES:
             await query.answer("This expense still needs a category.", show_alert=True)
             return
-        await query.message.reply_text("Logging expense...")
         row = self._expense_row_from_pending(
             pending,
             category,

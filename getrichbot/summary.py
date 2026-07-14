@@ -210,7 +210,17 @@ def build_monthly_summary_table(
         rows.append([category, *[_format_optional_amount(category_months[category].get(month)) for month in months]])
     expense_totals = _month_totals(category_months, expense_categories, months)
     rows.append(["Total Expenses", *[f"{expense_totals[month]:.2f}" for month in months]])
-    rows.append(["Net P&L", *[f"{(income_totals[month] - expense_totals[month]):.2f}" for month in months]])
+    net_by_month = {
+        month: income_totals[month] - expense_totals[month]
+        for month in months
+    }
+    rows.append(["Net P&L", *[f"{net_by_month[month]:.2f}" for month in months]])
+    running_total = Decimal("0")
+    cumulative_values: list[str] = []
+    for month in months:
+        running_total += net_by_month[month]
+        cumulative_values.append(f"{running_total:.2f}")
+    rows.append(["Cumulative P&L", *cumulative_values])
     return rows
 
 

@@ -156,7 +156,21 @@ class TestSummary(unittest.TestCase):
         self.assertIn(["Groceries", "20.00", "", ""], table)
         self.assertIn(["Food", "15.00", "30.00", ""], table)
         self.assertIn(["Total Expenses", "35.00", "30.00", "0.00"], table)
-        self.assertEqual(table[-1], ["Net P&L", "-35.00", "-30.00", "0.00"])
+        self.assertEqual(table[-2], ["Net P&L", "-35.00", "-30.00", "0.00"])
+        self.assertEqual(table[-1], ["Cumulative P&L", "-35.00", "-65.00", "-65.00"])
+
+    def test_monthly_summary_cumulative_p_and_l_rolls_across_months(self):
+        table = build_monthly_summary_table(
+            [
+                record("2026-05-01", "300", "Income - A", transaction_type="Income"),
+                record("2026-05-02", "100", "Food"),
+                record("2026-06-01", "400", "Income - A", transaction_type="Income"),
+                record("2026-06-02", "500", "Food"),
+            ]
+        )
+
+        self.assertEqual(table[-2], ["Net P&L", "200.00", "-100.00"])
+        self.assertEqual(table[-1], ["Cumulative P&L", "200.00", "100.00"])
 
     def test_monthly_summary_uses_date_when_month_column_is_wrong(self):
         shopping_category = SHOPPING_CATEGORIES["me"]
@@ -174,7 +188,8 @@ class TestSummary(unittest.TestCase):
 
         self.assertNotIn(["Custom Fixed Expense", "123.45"], table)
         self.assertIn(["Total Expenses", "0.00"], table)
-        self.assertEqual(table[-1], ["Net P&L", "0.00"])
+        self.assertEqual(table[-2], ["Net P&L", "0.00"])
+        self.assertEqual(table[-1], ["Cumulative P&L", "0.00"])
 
     def test_monthly_summary_uses_latest_fixed_value_without_summing_duplicates(self):
         table = build_monthly_summary_table([
@@ -184,7 +199,8 @@ class TestSummary(unittest.TestCase):
 
         self.assertNotIn(["Mortgage", "930.00"], table)
         self.assertIn(["Total Expenses", "0.00"], table)
-        self.assertEqual(table[-1], ["Net P&L", "0.00"])
+        self.assertEqual(table[-2], ["Net P&L", "0.00"])
+        self.assertEqual(table[-1], ["Cumulative P&L", "0.00"])
 
     def test_monthly_summary_fixed_override_replaces_raw_fixed_value(self):
         table = build_monthly_summary_table(
@@ -194,7 +210,8 @@ class TestSummary(unittest.TestCase):
 
         self.assertNotIn(["Mortgage", "950.00"], table)
         self.assertIn(["Total Expenses", "0.00"], table)
-        self.assertEqual(table[-1], ["Net P&L", "0.00"])
+        self.assertEqual(table[-2], ["Net P&L", "0.00"])
+        self.assertEqual(table[-1], ["Cumulative P&L", "0.00"])
 
     def test_monthly_summary_uses_latest_configured_fixed_value_without_summing_duplicates(self):
         table = build_monthly_summary_table([
@@ -204,7 +221,8 @@ class TestSummary(unittest.TestCase):
 
         self.assertIn(["Loan repayment", "1100.00"], table)
         self.assertIn(["Total Expenses", "1100.00"], table)
-        self.assertEqual(table[-1], ["Net P&L", "-1100.00"])
+        self.assertEqual(table[-2], ["Net P&L", "-1100.00"])
+        self.assertEqual(table[-1], ["Cumulative P&L", "-1100.00"])
 
     def test_monthly_summary_fixed_override_replaces_configured_raw_fixed_value(self):
         table = build_monthly_summary_table(
@@ -214,7 +232,8 @@ class TestSummary(unittest.TestCase):
 
         self.assertIn(["Loan repayment", "950.00"], table)
         self.assertIn(["Total Expenses", "950.00"], table)
-        self.assertEqual(table[-1], ["Net P&L", "-950.00"])
+        self.assertEqual(table[-2], ["Net P&L", "-950.00"])
+        self.assertEqual(table[-1], ["Cumulative P&L", "-950.00"])
 
     def test_monthly_summary_has_income_expense_and_net_rows(self):
         table = build_monthly_summary_table([
@@ -227,7 +246,8 @@ class TestSummary(unittest.TestCase):
         self.assertIn(["Income - Misc", "120.00"], table)
         self.assertIn(["Total Income", "5120.00"], table)
         self.assertIn(["Total Expenses", "100.00"], table)
-        self.assertEqual(table[-1], ["Net P&L", "5020.00"])
+        self.assertEqual(table[-2], ["Net P&L", "5020.00"])
+        self.assertEqual(table[-1], ["Cumulative P&L", "5020.00"])
 
     def test_format_summary_shows_income_p_and_l(self):
         period = parse_summary_period("summary", date(2026, 5, 22))

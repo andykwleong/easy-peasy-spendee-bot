@@ -130,6 +130,14 @@ class PendingEdit:
 
 
 @dataclass
+class PendingEditDate:
+    record: ExpenseRecord
+    chat_id: int
+    requested_by_user_id: int
+    created_at: datetime
+
+
+@dataclass
 class FixedReview:
     month_date: object
     items: list[dict[str, str | Decimal]]
@@ -163,6 +171,7 @@ class FinanceBot:
         self.pending_deletes: dict[tuple[int, int], PendingDelete] = {}
         self.pending_duplicates: dict[tuple[int, int], PendingDuplicate] = {}
         self.pending_edits: dict[tuple[int, int], PendingEdit] = {}
+        self.pending_edit_dates: dict[tuple[int, int], PendingEditDate] = {}
         self.pending_fixed_reviews: dict[int | str, FixedReview] = {}
         self.latest_pending_batch: dict[tuple[int, int], str] = {}
         self.pending_payment_batches: dict[tuple[int, int], PendingPaymentBatch] = {}
@@ -494,6 +503,12 @@ class FinanceBot:
         by_id = {record.entry_id: record for record in records}
 
         if intent.action == "clarify":
+            record = self._clarification_record(intent, by_id)
+            if record is not None and (
+                intent.clarification_field == "date" or _is_date_change_request(text)
+            ):
+                await self._ask_for_edit_date(update, record)
+                return True
             await update.message.reply_text(intent.clarification_question or "Which expense should I use?")
             return True
 
@@ -542,6 +557,9 @@ class FinanceBot:
                     expense_date=update_item.date,
                 ))
             if changes:
+                if _is_date_change_request(text) and len(changes) == 1 and changes[0].expense_date is None:
+                    await self._ask_for_edit_date(update, changes[0].record)
+                    return True
                 await self._ask_edit_confirmation(update, changes)
             else:
                 await update.message.reply_text("I could not find a matching entry to update.")
@@ -554,6 +572,9 @@ class FinanceBot:
             return False
         text = (update.message.text or "").strip()
         lowered = text.lower()
+
+        if await self._handle_pending_edit_date_reply(update, text, lowered):
+            return True
 
         if await self._handle_pending_edit_reply(update, lowered):
             return True
@@ -1359,6 +1380,57 @@ class FinanceBot:
             lines.append(f"{prefix}After: {self._edit_after_line(change)}")
         lines.append("Reply: yes to update, or cancel.")
         await update.message.reply_text("\n\n".join(lines))
+
+    def _clarification_record(self, intent: ExpenseIntent, by_id: dict[str, ExpenseRecord]) -> ExpenseRecord | None:
+        candidate_ids = [intent.clarification_entry_id, *intent.entry_ids]
+        candidate_ids.extend(
+            re.findall(r"\b[a-f0-9]{6}\b", intent.clarification_question or "", flags=re.IGNORECASE)
+        )
+        records = {by_id[entry_id] for entry_id in candidate_ids if entry_id in by_id}
+        return next(iter(records)) if len(records) == 1 else None
+
+    async def _ask_for_edit_date(self, update: Update, record: ExpenseRecord) -> None:
+        if update.message is None or update.effective_user is None:
+            return
+        key = (update.effective_chat.id, update.effective_user.id)
+        self.pending_edit_dates[key] = PendingEditDate(
+            record=record,
+            chat_id=update.effective_chat.id,
+            requested_by_user_id=update.effective_user.id,
+            created_at=datetime.now(SINGAPORE_TZ),
+        )
+        await update.message.reply_text(
+            f"Which date should I change {self._delete_candidate_line(record)} to?\n\n"
+            "Reply with a date such as 30 June 2026, or cancel."
+        )
+
+    async def _handle_pending_edit_date_reply(self, update: Update, text: str, lowered: str) -> bool:
+        if update.message is None or update.effective_user is None:
+            return False
+        key = (update.effective_chat.id, update.effective_user.id)
+        pending = self.pending_edit_dates.get(key)
+        if pending is None:
+            return False
+
+        if lowered in {"cancel", "no", "stop", "never mind", "nevermind"}:
+            self.pending_edit_dates.pop(key, None)
+            await update.message.reply_text("Date change cancelled.")
+            return True
+
+        parsed_date, ambiguous = extract_date_phrase(text, datetime.now(SINGAPORE_TZ).date())
+        if ambiguous:
+            await update.message.reply_text("That date is ambiguous. Try 30 June 2026, or cancel.")
+            return True
+        if parsed_date is None:
+            await update.message.reply_text("I am waiting for the new date. Reply with a date such as 30 June 2026, or cancel.")
+            return True
+
+        self.pending_edit_dates.pop(key, None)
+        await self._ask_edit_confirmation(
+            update,
+            [PendingEditChange(record=pending.record, expense_date=parsed_date.isoformat())],
+        )
+        return True
 
     async def _handle_pending_edit_reply(self, update: Update, lowered: str) -> bool:
         if update.message is None or update.effective_user is None:
@@ -2564,6 +2636,16 @@ def _looks_like_ai_request(text: str) -> bool:
         "last week",
     ]
     return any(trigger in lowered for trigger in triggers)
+
+
+def _is_date_change_request(text: str) -> bool:
+    return bool(
+        re.search(
+            r"\b(?:change|edit|update|correct)\b.*\bdate\b|\bdate\b.*\b(?:change|edit|update|correct)\b",
+            text,
+            re.IGNORECASE,
+        )
+    )
 
 
 def _last_day_of_month(value) -> object:

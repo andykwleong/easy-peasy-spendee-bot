@@ -24,6 +24,8 @@ class ExpenseIntent(BaseModel):
     updates: list[EntryUpdate] = Field(default_factory=list)
     answer: str | None = None
     clarification_question: str | None = None
+    clarification_entry_id: str | None = Field(default=None, description="Entry ID the clarification is about, if exactly one existing entry was identified")
+    clarification_field: Literal["date", "amount", "category", "description"] | None = Field(default=None, description="The missing edit value being requested")
 
 
 class ExtractedExpense(BaseModel):
@@ -63,6 +65,9 @@ class AIInterpreter:
             "You help operate a household expense Google Sheet from Telegram messages. "
             "Return only a structured action. Use only entry IDs that appear in the provided rows. "
             "For delete/edit, choose the best matching existing row. If multiple rows match and the user did not specify enough detail, ask for clarification. "
+            "When one existing entry is identified for an edit but the user has not supplied a required new value, "
+            "return action 'clarify', include that entry in clarification_entry_id and entry_ids, and set clarification_field "
+            "to the missing value. "
             "For questions, answer from the provided rows only. If the answer is not in the rows, say you cannot find it. "
             "Do not invent expenses or entry IDs. Categories must match the allowed categories exactly. "
             + category_guidance_text()

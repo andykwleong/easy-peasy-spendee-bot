@@ -231,6 +231,40 @@ class TestFollowups(unittest.IsolatedAsyncioTestCase):
         self.assertIn("3. $60.70 to Groceries", update.message.replies[0])
         self.assertIn("5. $30.81 to Food", update.message.replies[0])
 
+    async def test_date_edit_keeps_matched_entry_for_a_follow_up_date(self):
+        class DateClarifyingAI:
+            def interpret(self, *args, **kwargs):
+                return ExpenseIntent(
+                    action="clarify",
+                    clarification_question="Which date should I change entry 4bea7c to?",
+                )
+
+        settings = FakeSettings()
+        settings.openai_api_key = "test-key"
+        sheets = FakeSheets(records=[record()])
+        bot = FinanceBot(settings, sheets)
+        bot.ai = DateClarifyingAI()
+        update = FakeUpdate("change date gifts")
+
+        await bot.handle_text(update, FakeContext())
+
+        self.assertIn("Which date should I change", update.message.replies[0])
+        self.assertIn((-100, 456), bot.pending_edit_dates)
+
+        update.message = FakeMessage("June 30th")
+        await bot.handle_text(update, FakeContext())
+
+        self.assertIn("Change this expense?", update.message.replies[0])
+        self.assertIn("30 June 2026", update.message.replies[0])
+        self.assertNotIn((-100, 456), bot.pending_edit_dates)
+        self.assertEqual(sheets.updated, [])
+
+        update.message = FakeMessage("yes")
+        handled = await bot.handle_plain_language_command(update)
+
+        self.assertTrue(handled)
+        self.assertEqual(sheets.updated[0]["expense_date"], "2026-06-30")
+
     async def test_confirm_targets_latest_pending_batch_only(self):
         sheets = FakeSheets()
         bot = FinanceBot(FakeSettings(), sheets)

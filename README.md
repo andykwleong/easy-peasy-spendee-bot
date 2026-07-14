@@ -26,7 +26,7 @@ Telegram group chat
 - Supports screenshot and voice-note extraction with confirmation before logging.
 - Supports monthly fixed expenses confirmation.
 - Sends 9am Singapore month-end fixed expense reminders when `TELEGRAM_CHAT_ID` is set.
-- Updates `Monthly Summary` as a month-by-month P&L with total income, total expenses, and net P&L.
+- Updates `Monthly Summary` as a month-by-month P&L with total income, total expenses, net P&L, and cumulative P&L.
 - Records a payment method for normal expenses using personal card, Cash, and PayNow buttons.
 - Tracks personal credit-card spend against configurable calendar-month or billing-cycle caps.
 - Shows each sender their own expense history for a chosen date or date range.
@@ -361,7 +361,7 @@ The bot still validates actions against real `Entry ID` rows in Google Sheets be
 
 Delete requests ask for confirmation before removing a row. Reply `yes` to delete, or `cancel`.
 
-Edit requests for already logged Google Sheet rows also ask for confirmation before changing the row. Reply `yes` to update, or `cancel`.
+Edit requests for already logged Google Sheet rows also ask for confirmation before changing the row. If a date edit needs the new date, the bot remembers the matched row while it waits for your next reply, such as `30 June 2026`. Reply `cancel` to discard that date change. This temporary state is cleared after the confirmation prompt or a Railway restart. Reply `yes` to the before/after confirmation to update the row.
 
 If the bot asks for a missing category on a normal typed expense, reply with the category name. For example, if the bot asks about `durian 12`, replying `Food` logs it immediately.
 

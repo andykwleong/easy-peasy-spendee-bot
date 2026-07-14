@@ -52,7 +52,7 @@ This file contains project-specific instructions for coding agents working on Ge
 - Income-category buttons use the existing temporary pending-entry memory and are lost if Railway restarts before selection. Do not add hidden persistence or expiry without calling it out in the implementation plan.
 - Plain `confirm`, `confirmed`, `confirm fixed`, and `confirmed fixed` should all confirm an active fixed expense review.
 - Delete operations must be confirmation-based. Show the matched expense and wait for explicit confirmation before deleting from Google Sheets.
-- Existing logged expense edits must be confirmation-based. Show the before/after row and wait for explicit confirmation before updating Google Sheets.
+- Existing logged expense edits must be confirmation-based. Show the before/after row and wait for explicit confirmation before updating Google Sheets. When an edit needs a follow-up date, retain the matched row temporarily for that chat/user until a date or `cancel` is received; a Railway restart clears it.
 - User-specific categories should live in the Google Sheet `Categories` and `Category Keywords` tabs; do not hardcode personal category lists in public source.
 - Production category loading must use the Google Sheet `Categories` and `Category Keywords` tabs. Do not silently fall back to JSON/default categories in production.
 - If Google Sheet categories are missing or empty at startup, fail loudly so public fallback categories cannot leak into `Monthly Summary`.

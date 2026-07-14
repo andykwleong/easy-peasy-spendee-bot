@@ -210,7 +210,7 @@ class SheetsClient:
     def get_expense_records(self, sheet_name: str) -> list[ExpenseRecord]:
         result = self._service().spreadsheets().values().get(
             spreadsheetId=self.sheet_id,
-            range=f"{sheet_name}!A2:N",
+            range=f"{sheet_name}!A2:O",
         ).execute()
         rows = result.get("values", [])
         records: list[ExpenseRecord] = []
@@ -396,8 +396,10 @@ def _record_type_fields(row: list[str]) -> tuple[str, str, str]:
         status = new_status
     else:
         transaction_type = ""
-        input_type = _cell(row, 9)
-        status = _cell(row, 10)
+        # Rows created before Payment Method used the 14-column layout:
+        # transaction type I, input type J, status K.
+        input_type = _cell(row, 10)
+        status = _cell(row, 11)
     if not transaction_type:
         transaction_type = _infer_transaction_type(_cell(row, 7), input_type)
     return transaction_type, input_type, status

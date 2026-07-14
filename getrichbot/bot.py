@@ -1319,7 +1319,7 @@ class FinanceBot:
             return
         records = self.sheets.get_expense_records(self.settings.raw_expenses_sheet)
         items = build_card_summary(config, records, logged_by, datetime.now(SINGAPORE_TZ).date())
-        await update.message.reply_text(format_card_summary(items))
+        await update.message.reply_text(format_card_summary(items), do_quote=False)
 
     async def _reply_with_personal_expense_history(self, update: Update, text: str) -> bool:
         if update.message is None or update.effective_user is None:

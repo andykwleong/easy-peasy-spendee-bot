@@ -73,11 +73,11 @@ class TestCardTracking(unittest.TestCase):
 
         self.assertIn("Capped", message)
         self.assertIn("UOB Lady's", message)
-        self.assertIn("🟢 Food: $400.00 / $750.00 (53%)", message)
-        self.assertIn("🟢 Groceries: $200.00 / $750.00 (27%)", message)
+        self.assertIn("Food - $400.00/$750.00 (🟢 53%)", message)
+        self.assertIn("Groceries - $200.00/$750.00 (🟢 27%)", message)
         self.assertIn("Uncapped", message)
-        self.assertIn("Citi PremierMiles", message)
-        self.assertIn("$94.00", message)
+        self.assertIn("Citi PremierMiles - $94.00", message)
+        self.assertNotIn("to 16 Jul", message)
         self.assertNotIn("$700.00", message)
 
     def test_overall_limit_counts_every_category(self):
@@ -101,7 +101,7 @@ class TestCardTracking(unittest.TestCase):
             date(2026, 7, 10),
         )[0]
         self.assertEqual(item.limits[0].spent, Decimal("95"))
-        self.assertIn("🔴 All spending: $95.00 / $100.00 (95%)", format_card_summary([item]))
+        self.assertIn("Citi Rewards - $95.00/$100.00 (🔴 95%)", format_card_summary([item]))
 
     def test_blank_active_limit_amount_keeps_card_uncapped(self):
         config = parse_payment_config(

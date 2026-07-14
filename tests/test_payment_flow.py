@@ -55,10 +55,12 @@ class Message:
         self.message_id = 55
         self.replies = []
         self.markups = []
+        self.reply_kwargs = []
 
     async def reply_text(self, text, **kwargs):
         self.replies.append(text)
         self.markups.append(kwargs.get("reply_markup"))
+        self.reply_kwargs.append(kwargs)
 
 
 class Update:
@@ -93,10 +95,30 @@ class CallbackUpdate(Update):
         self.callback_query = CallbackQuery(data)
 
 
+class FakeButton:
+    def __init__(self, text, callback_data):
+        self.text = text
+        self.callback_data = callback_data
+
+
+class FakeMarkup:
+    def __init__(self, rows):
+        self.inline_keyboard = rows
+
+
+class TestFinanceBot(FinanceBot):
+    def _payment_method_keyboard(self, pending_id, options):
+        buttons = [
+            FakeButton(name, callback_data=f"payment_method|{pending_id}|{index}")
+            for index, name in enumerate(options)
+        ]
+        return FakeMarkup([buttons])
+
+
 class TestPaymentFlow(unittest.IsolatedAsyncioTestCase):
     async def test_expense_waits_for_the_sender_payment_button(self):
         sheets = Sheets()
-        bot = FinanceBot(Settings(), sheets)
+        bot = TestFinanceBot(Settings(), sheets)
         update = Update()
 
         await bot.handle_text(update, None)
@@ -116,9 +138,19 @@ class TestPaymentFlow(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(callback_update.callback_query.message.replies, [])
         self.assertIn("via Citi Rewards", callback_update.callback_query.edited_text)
 
+    async def test_card_summary_is_sent_without_a_quote(self):
+        sheets = Sheets()
+        bot = TestFinanceBot(Settings(), sheets)
+        update = Update("card summary")
+
+        await bot._reply_with_card_summary(update)
+
+        self.assertEqual(update.message.replies[0], "Card summary\n\nUncapped\nCiti Rewards - $0.00")
+        self.assertFalse(update.message.reply_kwargs[0]["do_quote"])
+
     async def test_confirmed_screenshot_batch_asks_for_cards_before_logging(self):
         sheets = Sheets()
-        bot = FinanceBot(Settings(), sheets)
+        bot = TestFinanceBot(Settings(), sheets)
         update = Update("confirm all")
         bot.latest_pending_batch[(-100, 123)] = "photo01"
         bot.pending = {

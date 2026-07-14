@@ -244,7 +244,7 @@ class SheetsClient:
         return records
 
     def update_monthly_summary(self, sheet_name: str, rows: list[list[str]]) -> None:
-        self._ensure_sheet(sheet_name)
+        sheet_id = self._ensure_sheet(sheet_name)
         self._service().spreadsheets().values().clear(
             spreadsheetId=self.sheet_id,
             range=f"{sheet_name}!A:ZZ",
@@ -255,6 +255,31 @@ class SheetsClient:
             range=f"{sheet_name}!A1",
             valueInputOption="USER_ENTERED",
             body={"values": rows},
+        ).execute()
+        self._service().spreadsheets().batchUpdate(
+            spreadsheetId=self.sheet_id,
+            body={
+                "requests": [
+                    {
+                        "repeatCell": {
+                            "range": {
+                                "sheetId": sheet_id,
+                                "startRowIndex": 1,
+                                "startColumnIndex": 1,
+                            },
+                            "cell": {
+                                "userEnteredFormat": {
+                                    "numberFormat": {
+                                        "type": "CURRENCY",
+                                        "pattern": "$#,##0.00",
+                                    }
+                                }
+                            },
+                            "fields": "userEnteredFormat.numberFormat",
+                        }
+                    }
+                ]
+            },
         ).execute()
 
     def get_state_value(self, sheet_name: str, key: str) -> str | None:
@@ -349,13 +374,18 @@ class SheetsClient:
             },
         ).execute()
 
-    def _ensure_sheet(self, sheet_name: str) -> None:
-        if self._sheet_id(sheet_name) is not None:
-            return
+    def _ensure_sheet(self, sheet_name: str) -> int:
+        sheet_id = self._sheet_id(sheet_name)
+        if sheet_id is not None:
+            return sheet_id
         self._service().spreadsheets().batchUpdate(
             spreadsheetId=self.sheet_id,
             body={"requests": [{"addSheet": {"properties": {"title": sheet_name}}}]},
         ).execute()
+        sheet_id = self._sheet_id(sheet_name)
+        if sheet_id is None:
+            raise RuntimeError(f"Could not create sheet tab: {sheet_name}")
+        return sheet_id
 
     def _sheet_id(self, sheet_name: str) -> int | None:
         metadata = self._service().spreadsheets().get(spreadsheetId=self.sheet_id).execute()

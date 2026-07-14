@@ -89,7 +89,10 @@ Total Income
 Expense and fixed expense categories
 Total Expenses
 Net P&L
+Cumulative P&L
 ```
+
+Monthly values are formatted as dollar currency automatically when the bot rebuilds this tab.
 
 If an unexpected month appears, for example `2023-05`, check `Raw Expenses` for a row with the wrong `Date` or `Month`. Fix the source row in `Raw Expenses`; do not only delete the column from `Monthly Summary`, because the bot rebuilds the summary from raw rows.
 
@@ -383,7 +386,7 @@ If a duplicate is found while confirming a pending list, the bot stops at the fi
 
 ### Card Summary
 
-Use `card summary` or `/cards` to see only your own active credit cards. Capped cards show their spending against each configured cap. Uncapped cards still show their total spending for the current calendar month or billing cycle.
+Use `card summary` or `/cards` to see only your own active credit cards. Capped cards with one limit show card, spend, cap, and percentage on one line. Cards with multiple limits show their category lines below the card name. Uncapped cards show their total spending on one line. Card-cycle dates are used for calculation but omitted from the message.
 
 The cap marker is green below 60%, yellow from 60% to 79%, orange from 80% to 94%, and red at 95% or more.
 

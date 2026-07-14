@@ -150,21 +150,18 @@ def format_card_summary(items: list[CardSummaryItem]) -> str:
     uncapped = [item for item in items if not item.limits]
     lines = ["Card summary"]
     if capped:
-        lines.append("Capped")
+        lines.extend(["", "Capped"])
         for item in capped:
-            lines.append(_card_heading(item))
-            for usage in item.limits:
-                label = "All spending" if usage.limit.category.casefold() == "all" else usage.limit.category
-                lines.append(
-                    f"{_limit_marker(usage.percent)} {label}: "
-                    f"${usage.spent:,.2f} / ${usage.limit.amount:,.2f} ({usage.percent:.0f}%)"
-                )
+            if len(item.limits) == 1:
+                lines.append(f"{item.payment_method.name} - {_format_limit_usage(item.limits[0], include_category=False)}")
+                continue
+            lines.append(item.payment_method.name)
+            lines.extend(_format_limit_usage(usage, include_category=True) for usage in item.limits)
     if uncapped:
-        lines.append("Uncapped")
+        lines.extend(["", "Uncapped"])
         for item in uncapped:
-            lines.append(_card_heading(item))
-            lines.append(f"${item.total_spend:,.2f}")
-    return "\n\n".join(lines)
+            lines.append(f"{item.payment_method.name} - ${item.total_spend:,.2f}")
+    return "\n".join(lines)
 
 
 def _parse_payment_methods(rows: list[list[str]]) -> list[PaymentMethod]:
@@ -308,10 +305,12 @@ def _matches_limit_category(record: ExpenseRecord, category: str) -> bool:
     return category.casefold() == "all" or record.category.casefold() == category.casefold()
 
 
-def _card_heading(item: CardSummaryItem) -> str:
-    start = item.period_start.strftime("%-d %b")
-    end = item.period_end.strftime("%-d %b %Y")
-    return f"{item.payment_method.name} ({start} to {end})"
+def _format_limit_usage(usage: CardLimitUsage, include_category: bool) -> str:
+    usage_text = f"${usage.spent:,.2f}/${usage.limit.amount:,.2f} ({_limit_marker(usage.percent)} {usage.percent:.0f}%)"
+    if not include_category:
+        return usage_text
+    label = "All spending" if usage.limit.category.casefold() == "all" else usage.limit.category
+    return f"{label} - {usage_text}"
 
 
 def _limit_marker(percent: Decimal) -> str:

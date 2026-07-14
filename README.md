@@ -347,6 +347,7 @@ Plain-language shortcuts:
 - `card summary`
 - `expenses on 12 July`
 - `expenses between 10-12 July`
+- `expenses from 11 till 14 July`
 - `confirm fixed`
 - `confirm fixed last month`
 - `confirm fixed May 2026`
@@ -398,6 +399,7 @@ These requests show only normal expenses logged by the person asking. They exclu
 expenses on 12 July
 expenses between 10-12 July
 expenses from 10 July to 12 July
+expenses from 11 till 14 July
 what did I key in on 12 July
 ```
 

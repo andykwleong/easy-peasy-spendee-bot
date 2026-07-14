@@ -24,8 +24,10 @@ from getrichbot.sheets import SheetsClient
 from getrichbot.summary import (
     build_personal_expense_history,
     build_spending_summary,
+    expense_history_clarification,
     format_personal_expense_history,
     format_spending_summary,
+    looks_like_expense_history_request,
     parse_expense_history_period,
     parse_summary_period,
 )
@@ -1326,6 +1328,9 @@ class FinanceBot:
             return False
         period = parse_expense_history_period(text, datetime.now(SINGAPORE_TZ).date())
         if period is None:
+            if looks_like_expense_history_request(text):
+                await update.message.reply_text(expense_history_clarification())
+                return True
             return False
         logged_by = self.settings.label_for_user(update.effective_user.id)
         if logged_by is None:

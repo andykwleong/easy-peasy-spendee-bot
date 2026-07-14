@@ -62,11 +62,11 @@ def parse_summary_period(text: str, today: date) -> SummaryPeriod | None:
 
 def parse_expense_history_period(text: str, today: date) -> SummaryPeriod | None:
     lowered = " ".join(text.lower().strip().split())
-    if not any(word in lowered for word in ("expense", "expenses", "spending", "spent", "keyed", "logged", "entered")) and "key in" not in lowered:
+    if not looks_like_expense_history_request(lowered):
         return None
 
     range_match = re.search(
-        r"\b(?:between|from)\s+(\d{1,2})(?:st|nd|rd|th)?\s*(?:-|to|and)\s*"
+        r"\b(?:between|from)\s+(\d{1,2})(?:st|nd|rd|th)?\s*(?:-|to|and|till|until|through)\s*"
         r"(\d{1,2})(?:st|nd|rd|th)?\s+([a-z]+)(?:\s+(\d{4}))?\b",
         lowered,
     )
@@ -84,7 +84,7 @@ def parse_expense_history_period(text: str, today: date) -> SummaryPeriod | None
             return None
         return SummaryPeriod(start=start, end=end, label=f"{start.strftime('%-d %B')} to {end.strftime('%-d %B %Y')}")
 
-    range_match = re.search(r"\b(?:between|from)\s+(.+?)\s+(?:and|to)\s+(.+?)\s*$", lowered)
+    range_match = re.search(r"\b(?:between|from)\s+(.+?)\s+(?:and|to|till|until|through)\s+(.+?)\s*$", lowered)
     if range_match is not None:
         start = _parse_history_date(range_match.group(1), today)
         end = _parse_history_date(range_match.group(2), today)
@@ -98,6 +98,29 @@ def parse_expense_history_period(text: str, today: date) -> SummaryPeriod | None
     if target is None:
         return None
     return SummaryPeriod(start=target, end=target, label=target.strftime("%-d %B %Y"))
+
+
+def looks_like_expense_history_request(text: str) -> bool:
+    lowered = " ".join(text.lower().strip().split())
+    has_history_word = (
+        any(word in lowered for word in ("expense", "expenses", "spending", "spent", "keyed", "logged", "entered"))
+        or "key in" in lowered
+    )
+    has_date_phrase = any(
+        phrase in lowered
+        for phrase in (" on ", " for ", " between ", " from ", " to ", " till ", " until ", " through ")
+    )
+    return has_history_word and has_date_phrase
+
+
+def expense_history_clarification() -> str:
+    return (
+        "I think you are asking for past expenses, but I could not understand the date range.\n\n"
+        "Try:\n"
+        "expenses from 11 July to 14 July\n"
+        "expenses between 11-14 July\n"
+        "expenses on 11 July"
+    )
 
 
 def build_personal_expense_history(records: list[ExpenseRecord], period: SummaryPeriod, logged_by: str) -> ExpenseHistory:

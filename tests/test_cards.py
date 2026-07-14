@@ -103,3 +103,25 @@ class TestCardTracking(unittest.TestCase):
         self.assertEqual(item.limits[0].spent, Decimal("95"))
         self.assertIn("🔴 All spending: $95.00 / $100.00 (95%)", format_card_summary([item]))
 
+    def test_blank_active_limit_amount_keeps_card_uncapped(self):
+        config = parse_payment_config(
+            [
+                ["Payment Method", "Owner", "Type", "Cycle Type", "Cycle Start Day", "Active"],
+                ["Citi PremierMiles", "Me", "Credit Card", "Calendar", "1", "TRUE"],
+            ],
+            [
+                ["Payment Method", "Owner", "Category", "Limit Amount", "Active"],
+                ["Citi PremierMiles", "Me", "All", "", "TRUE"],
+            ],
+        )
+
+        item = build_card_summary(
+            config,
+            [record("miles1", "94", "Food", "Citi PremierMiles")],
+            "Me",
+            date(2026, 7, 10),
+        )[0]
+
+        self.assertEqual(item.limits, ())
+        self.assertIn("Uncapped", format_card_summary([item]))
+        self.assertIn("$94.00", format_card_summary([item]))

@@ -113,7 +113,7 @@ Use `Calendar` with a start day of `1` for a calendar-month cap. Use `Billing` a
 
 ### Card Limits
 
-Create a `Card Limits` tab. Add a row only when a card has a cap you want to track. A card with no row here is still selectable and appears under `Uncapped` in the card summary.
+Create a `Card Limits` tab. Add a row only when a card has a cap you want to track. A card with no row here is still selectable and appears under `Uncapped` in the card summary. If you prefer to list every card here, leave `Limit Amount` blank for an uncapped card; it is treated the same as having no cap.
 
 ```text
 Payment Method,Owner,Category,Limit Amount,Active

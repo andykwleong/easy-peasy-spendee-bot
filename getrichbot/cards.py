@@ -232,8 +232,12 @@ def _parse_card_limits(rows: list[list[str]]) -> list[CardLimit]:
         owner = _value(row, indexes["owner"])
         category = _value(row, indexes["category"])
         amount_raw = _value(row, indexes["amount"])
-        if not payment_method or not owner or not category or not amount_raw:
-            raise ValueError("Each active Card Limits row needs Payment Method, Owner, Category, and Limit Amount.")
+        if not payment_method or not owner or not category:
+            raise ValueError("Each active Card Limits row needs Payment Method, Owner, and Category.")
+        # An active row without an amount documents an uncapped card. It does
+        # not create a limit, but the card still appears via Payment Methods.
+        if not amount_raw:
+            continue
         try:
             amount = Decimal(amount_raw.replace(",", "").replace("S$", "").replace("$", ""))
         except Exception as exc:

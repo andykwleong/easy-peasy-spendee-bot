@@ -71,7 +71,7 @@ class TestCardTracking(unittest.TestCase):
         )
         message = format_card_summary(items)
 
-        self.assertIn("Capped:", message)
+        self.assertIn("Capped:\n\nUOB Lady's", message)
         self.assertIn("UOB Lady's", message)
         self.assertIn("Food - $400.00/$750.00 (🟢 53%)", message)
         self.assertIn("Groceries - $200.00/$750.00 (🟢 27%)", message)
@@ -79,7 +79,7 @@ class TestCardTracking(unittest.TestCase):
         self.assertIn("Citi PremierMiles - $94.00", message)
         self.assertNotIn("to 16 Jul", message)
         self.assertNotIn("$700.00", message)
-        self.assertIn("Groceries - $200.00/$750.00 (🟢 27%)\n\nUncapped:", message)
+        self.assertIn("Groceries - $200.00/$750.00 (🟢 27%)\n\nUncapped:\n\nCiti PremierMiles", message)
 
     def test_overall_limit_counts_every_category(self):
         config = parse_payment_config(

@@ -145,7 +145,7 @@ class TestPaymentFlow(unittest.IsolatedAsyncioTestCase):
 
         await bot._reply_with_card_summary(update)
 
-        self.assertEqual(update.message.replies[0], "Card summary\n\nUncapped:\nCiti Rewards - $0.00")
+        self.assertEqual(update.message.replies[0], "Card summary\n\nUncapped:\n\nCiti Rewards - $0.00")
         self.assertFalse(update.message.reply_kwargs[0]["do_quote"])
 
     async def test_confirmed_screenshot_batch_asks_for_cards_before_logging(self):

@@ -150,17 +150,23 @@ def format_card_summary(items: list[CardSummaryItem]) -> str:
     uncapped = [item for item in items if not item.limits]
     lines = ["Card summary"]
     if capped:
-        lines.extend(["", "Capped"])
+        lines.extend(["", "Capped:"])
         for item in capped:
             if len(item.limits) == 1:
                 lines.append(f"{item.payment_method.name} - {_format_limit_usage(item.limits[0], include_category=False)}")
-                continue
-            lines.append(item.payment_method.name)
-            lines.extend(_format_limit_usage(usage, include_category=True) for usage in item.limits)
+            else:
+                lines.append(item.payment_method.name)
+                lines.extend(_format_limit_usage(usage, include_category=True) for usage in item.limits)
+            lines.append("")
     if uncapped:
-        lines.extend(["", "Uncapped"])
+        if lines[-1] != "":
+            lines.append("")
+        lines.append("Uncapped:")
         for item in uncapped:
             lines.append(f"{item.payment_method.name} - ${item.total_spend:,.2f}")
+            lines.append("")
+    while lines and lines[-1] == "":
+        lines.pop()
     return "\n".join(lines)
 
 

@@ -30,6 +30,7 @@ Telegram group chat
 - Records a payment method for normal expenses using personal card, Cash, and PayNow buttons.
 - Tracks personal credit-card spend against configurable calendar-month or billing-cycle caps.
 - Shows each sender their own expense history for a chosen date or date range.
+- Shows category spending breakdowns by month, including who logged each row and category totals.
 - Supports undo for the last expense sent by a user.
 - Keeps the bot private to configured Telegram user IDs.
 
@@ -324,6 +325,7 @@ Commands:
 - `/fixed` - preview active fixed expenses
 - `/confirmfixed` - review active fixed expenses before adding them
 - `/categories` - show available categories
+- `/category` - same as `/categories`
 - `/refreshcategories` - reload `Categories` and `Category Keywords` from Google Sheets after you edit them
 - `/refreshpayments` - reload `Payment Methods` and `Card Limits` from Google Sheets after you edit them
 

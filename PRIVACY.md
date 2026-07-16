@@ -10,6 +10,7 @@ Depending on how you use it, the bot may process:
 - Expense text you send in Telegram
 - Expense amounts, dates, categories, and descriptions
 - Your private category names and keyword rules
+- Payment method names, card owners, card cycle setup, and card limit rows
 - Screenshots you upload for expense extraction
 - Voice notes you upload for transcription and extraction
 - Fixed expense categories and default amounts from your Google Sheet
@@ -17,6 +18,8 @@ Depending on how you use it, the bot may process:
 ## Where Data Goes
 
 Confirmed expense entries are written to your configured Google Sheet.
+
+Payment method and card limit setup is read from your configured Google Sheet to show payment buttons, card summaries, and card-limit usage. Category breakdown and personal history requests read confirmed rows from `Raw Expenses` and reply in Telegram.
 
 When `OPENAI_API_KEY` is configured:
 
@@ -35,6 +38,7 @@ Your private category configuration usually lives in the Google Sheet `Categorie
 - It does not publish your expenses publicly.
 - It does not need bank login access.
 - It does not scrape your bank account automatically.
+- It does not store or require full card numbers.
 - It does not intentionally store screenshots or voice notes after processing.
 - It does not make background OpenAI calls unless handling a message, media upload, natural-language action, or scheduled summary/reminder logic that needs bot processing.
 

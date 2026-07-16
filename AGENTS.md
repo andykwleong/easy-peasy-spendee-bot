@@ -73,6 +73,7 @@ This file contains project-specific instructions for coding agents working on Ge
 - Payment-selection and screenshot/voice batch state are temporary in-memory state. Railway restarts clear them; the user must send the expense again if a restart happens before its payment button is tapped.
 - `card summary` and `/cards` show only the requesting person's active credit cards. Use green below 60%, yellow from 60% to 79%, orange from 80% to 94%, and red at 95% or above for configured caps.
 - Personal history requests such as `expenses on 12 July` and `expenses between 10-12 July` must only return normal expense rows logged by the requesting Telegram user.
+- Category breakdown requests such as `food for june` should show normal expense rows for that category from both configured users and include `Logged By` on each line. `shopping` defaults to the requester's own shopping category; `all shopping` combines both shopping categories.
 - Screenshot and voice-note pending entries must remain pending after category/date changes until the user explicitly confirms logging.
 - Plain pending replies like `confirm`, `confirmed`, and `confirm all` should target the latest pending batch for that chat/user when one exists; otherwise they should fall back to normal text pending entries.
 - Plain `yes` should not confirm screenshot or voice-note pending batches. Reserve `yes` for delete/edit confirmations and similar explicit yes/no prompts.

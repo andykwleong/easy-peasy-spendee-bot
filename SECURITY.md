@@ -19,6 +19,7 @@ Sensitive values should live in Railway variables or a local `.env` file that is
 - `CATEGORIES_JSON`
 - private `categories.json` files
 - private category setup in Google Sheets
+- private payment method and card limit setup in Google Sheets
 - `ME_TELEGRAM_IDS`
 - `WIFE_TELEGRAM_IDS`
 - `TELEGRAM_CHAT_ID`
@@ -29,6 +30,8 @@ Google service account JSON files are private credentials. Keep them outside the
 If a Telegram bot token, OpenAI API key, or Google service account key is exposed, rotate it immediately in the relevant provider dashboard and redeploy Railway with the new value.
 
 If your private category config is exposed, remove it from the public repo and review your Google Sheet sharing settings. Category names are not usually credentials, but they can still reveal personal household information.
+
+If your payment method or card limit setup is exposed, review whether the names reveal personal banking information. Do not store full card numbers in `Payment Methods`, `Card Limits`, Telegram messages, or docs.
 
 Category setup should normally live in the private Google Sheet `Categories` and `Category Keywords` tabs. Keeping `CATEGORIES_JSON` in Railway is acceptable as a private fallback, but treat it like sensitive configuration, keep it updated if you use it, and remove it if it becomes stale or confusing.
 
@@ -41,6 +44,8 @@ For group chats, disable Telegram bot privacy mode only for the intended private
 ## Data Handling
 
 Expense data is stored in your Google Sheet. Screenshot and voice-note extraction may send image/audio-derived content to OpenAI when `OPENAI_API_KEY` is configured.
+
+Payment method names and card-limit rows are read from your private Google Sheet when needed for payment buttons and card summaries. The bot does not need bank login access and does not pull transactions from banks automatically.
 
 Avoid sending bank account numbers, card numbers, government IDs, or other unnecessary sensitive information to the bot.
 

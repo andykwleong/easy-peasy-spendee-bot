@@ -319,7 +319,7 @@ Commands:
 - `/whoami` - show your Telegram numeric user ID for setup
 - `/pending` - show entries needing confirmation
 - `/summary` - show this month's checkpoint summary
-- `/cards` - show your current card spending and limits
+- `/cards` or `/cardlimits` - show your current card spending and limits
 - `/confirm <pending_id> <category>` - confirm a pending entry
 - `/undo` - delete your latest logged row from Google Sheets
 - `/fixed` - preview active fixed expenses
@@ -347,6 +347,8 @@ Plain-language shortcuts:
 - `summary this month`
 - `summary last month`
 - `card summary`
+- `card limits`
+- `credit card limits`
 - `food for june`
 - `shopping from may to july`
 - `all shopping for july`
@@ -392,7 +394,7 @@ If a duplicate is found while confirming a pending list, the bot stops at the fi
 
 ### Card Summary
 
-Use `card summary` or `/cards` to see only your own active credit cards. Capped cards are grouped under `Capped:` and uncapped cards under `Uncapped:`. Cards with one limit show card, spend, cap, and percentage on one line. Cards with multiple limits show their category lines below the card name. Card-cycle dates are used for calculation but omitted from the message.
+Use `card summary`, `card limits`, `/cards`, or `/cardlimits` to see only your own active credit cards. Capped cards are grouped under `Capped:` and uncapped cards under `Uncapped:`. Cards with one limit show card, spend, cap, and percentage on one line. Cards with multiple limits show their category lines below the card name. Card-cycle dates are used for calculation but omitted from the message.
 
 The cap marker is green below 60%, yellow from 60% to 79%, orange from 80% to 94%, and red at 95% or more.
 

@@ -148,6 +148,26 @@ class TestPaymentFlow(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(update.message.replies[0], "Card summary\n\nUncapped:\n\nCiti Rewards - $0.00")
         self.assertFalse(update.message.reply_kwargs[0]["do_quote"])
 
+    async def test_card_limits_phrases_show_card_summary(self):
+        phrases = [
+            "card limits",
+            "cards limits",
+            "my card limits",
+            "credit card limits",
+            "credit cards summary",
+        ]
+        for phrase in phrases:
+            with self.subTest(phrase=phrase):
+                sheets = Sheets()
+                bot = TestFinanceBot(Settings(), sheets)
+                update = Update(phrase)
+
+                handled = await bot.handle_plain_language_command(update)
+
+                self.assertTrue(handled)
+                self.assertEqual(update.message.replies[0], "Card summary\n\nUncapped:\n\nCiti Rewards - $0.00")
+                self.assertFalse(update.message.reply_kwargs[0]["do_quote"])
+
     async def test_confirmed_screenshot_batch_asks_for_cards_before_logging(self):
         sheets = Sheets()
         bot = TestFinanceBot(Settings(), sheets)

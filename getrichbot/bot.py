@@ -64,7 +64,7 @@ Useful commands:
 /refreshcategories - reload categories from Google Sheets
 /refreshpayments - reload payment methods and card limits from Google Sheets
 /summary - show this month's checkpoint
-/cards - show your card spending against current limits
+/cards or /cardlimits - show your card spending against current limits
 /fixed - preview fixed expenses
 /confirmfixed - review fixed expenses
 /undo - delete your latest logged expense
@@ -596,7 +596,7 @@ class FinanceBot:
             await update.message.reply_text(HELP_TEXT)
             return True
 
-        if re.search(r"\b(card|cards)\s+summary\b", lowered) or lowered in {"cards", "my cards"}:
+        if _is_card_summary_request(lowered):
             await self._reply_with_card_summary(update)
             return True
 
@@ -2752,6 +2752,43 @@ def _normalize_lookup_text(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", value.lower()).strip()
 
 
+def _is_card_summary_request(text: str) -> bool:
+    normalized = " ".join(text.lower().strip().split())
+    direct_matches = {
+        "cards",
+        "my cards",
+        "credit cards",
+        "my credit cards",
+        "card summary",
+        "cards summary",
+        "my card summary",
+        "my cards summary",
+        "credit card summary",
+        "credit cards summary",
+        "my credit card summary",
+        "my credit cards summary",
+        "card limits",
+        "card limit",
+        "cards limits",
+        "cards limit",
+        "my card limits",
+        "my card limit",
+        "my cards limits",
+        "my cards limit",
+        "credit card limits",
+        "credit card limit",
+        "credit cards limits",
+        "credit cards limit",
+        "my credit card limits",
+        "my credit card limit",
+        "my credit cards limits",
+        "my credit cards limit",
+    }
+    if normalized in direct_matches:
+        return True
+    return re.fullmatch(r"(?:my\s+)?(?:credit\s+)?cards?\s+(?:summary|limits?)", normalized) is not None
+
+
 def load_category_config_from_sheets(settings: Settings, sheets: SheetsClient) -> dict:
     sheet_category_config = sheets.get_category_config(settings.categories_sheet, settings.category_keywords_sheet)
     if not sheet_category_config.get("variable_categories"):
@@ -2811,7 +2848,7 @@ def main() -> None:
     application.add_handler(CommandHandler("refreshpayments", finance_bot.refresh_payments))
     application.add_handler(CommandHandler("pending", finance_bot.pending_command))
     application.add_handler(CommandHandler("summary", finance_bot.summary_command))
-    application.add_handler(CommandHandler(["cards", "cardsummary"], finance_bot.cards_command))
+    application.add_handler(CommandHandler(["cards", "cardsummary", "cardlimits", "cardlimit"], finance_bot.cards_command))
     application.add_handler(CommandHandler("confirm", finance_bot.confirm_command))
     application.add_handler(CommandHandler("undo", finance_bot.undo_command))
     application.add_handler(CommandHandler("fixed", finance_bot.fixed_command))

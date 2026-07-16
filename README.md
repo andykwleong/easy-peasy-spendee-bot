@@ -345,6 +345,9 @@ Plain-language shortcuts:
 - `summary this month`
 - `summary last month`
 - `card summary`
+- `food for june`
+- `shopping from may to july`
+- `all shopping for july`
 - `expenses on 12 July`
 - `expenses between 10-12 July`
 - `expenses from 11 till 14 July`
@@ -401,6 +404,18 @@ expenses between 10-12 July
 expenses from 10 July to 12 July
 expenses from 11 till 14 July
 what did I key in on 12 July
+```
+
+### Category Breakdown
+
+Use category breakdown requests to list the entries inside a category and show a total. Normal categories show entries from both people and include who logged each row. `shopping` defaults to the requester's own shopping category; use `all shopping` to combine both shopping categories.
+
+```text
+food for june
+groceries for july
+shopping from may to july
+all shopping for july
+category spending baby for june
 ```
 
 ## Monthly Automation

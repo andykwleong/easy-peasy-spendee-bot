@@ -22,12 +22,17 @@ from getrichbot.models import ExpenseDraft, ExpenseRecord, ExpenseRow
 from getrichbot.parser import categorize_description, extract_date_phrase, extract_standalone_date, parse_expense, parse_expenses
 from getrichbot.sheets import SheetsClient
 from getrichbot.summary import (
+    build_category_breakdown,
     build_personal_expense_history,
     build_spending_summary,
+    category_breakdown_clarification,
     expense_history_clarification,
+    format_category_breakdown,
     format_personal_expense_history,
     format_spending_summary,
+    looks_like_category_breakdown_request,
     looks_like_expense_history_request,
+    parse_category_breakdown_request,
     parse_expense_history_period,
     parse_summary_period,
 )
@@ -593,6 +598,9 @@ class FinanceBot:
 
         if re.search(r"\b(card|cards)\s+summary\b", lowered) or lowered in {"cards", "my cards"}:
             await self._reply_with_card_summary(update)
+            return True
+
+        if await self._reply_with_category_breakdown(update, text):
             return True
 
         if await self._reply_with_personal_expense_history(update, text):
@@ -1322,6 +1330,30 @@ class FinanceBot:
         records = self.sheets.get_expense_records(self.settings.raw_expenses_sheet)
         items = build_card_summary(config, records, logged_by, datetime.now(SINGAPORE_TZ).date())
         await update.message.reply_text(format_card_summary(items), do_quote=False)
+
+    async def _reply_with_category_breakdown(self, update: Update, text: str) -> bool:
+        if update.message is None or update.effective_user is None:
+            return False
+        logged_by = self.settings.label_for_user(update.effective_user.id)
+        if logged_by is None:
+            await update.message.reply_text("I do not recognize this Telegram user ID yet.")
+            return True
+        request = parse_category_breakdown_request(
+            text,
+            datetime.now(SINGAPORE_TZ).date(),
+            logged_by,
+            getattr(self.settings, "me_label", "Me"),
+            getattr(self.settings, "wife_label", "My wife"),
+        )
+        if request is None:
+            if looks_like_category_breakdown_request(text):
+                await update.message.reply_text(category_breakdown_clarification())
+                return True
+            return False
+        records = self.sheets.get_expense_records(self.settings.raw_expenses_sheet)
+        breakdown = build_category_breakdown(records, request)
+        await update.message.reply_text(format_category_breakdown(breakdown))
+        return True
 
     async def _reply_with_personal_expense_history(self, update: Update, text: str) -> bool:
         if update.message is None or update.effective_user is None:

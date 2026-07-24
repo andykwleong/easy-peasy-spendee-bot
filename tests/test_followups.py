@@ -265,6 +265,39 @@ class TestFollowups(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(handled)
         self.assertEqual(sheets.updated[0]["expense_date"], "2026-06-30")
 
+    async def test_change_to_category_updates_latest_logged_expense_immediately(self):
+        configure_category_config(
+            {
+                **self.original_config,
+                "variable_categories": [*self.original_config["variable_categories"], "Travel"],
+            }
+        )
+        latest = ExpenseRecord(
+            row_number=8,
+            entry_id="38218a",
+            timestamp="21:35:00",
+            expense_date="2026-07-24",
+            month="2026-07",
+            logged_by="My wife",
+            raw_input="40.79 travel insurance",
+            amount=Decimal("40.79"),
+            category="Bills (Insurance)",
+            description="travel insurance",
+            input_type="Text",
+            status="Confirmed",
+        )
+        sheets = FakeSheets(records=[latest])
+        bot = FinanceBot(FakeSettings(), sheets)
+        update = FakeUpdate("change to travel")
+
+        handled = await bot.handle_plain_language_command(update)
+
+        self.assertTrue(handled)
+        self.assertEqual(sheets.updated[0]["row_number"], 8)
+        self.assertEqual(sheets.updated[0]["category"], "Travel")
+        self.assertEqual(sheets.updated[0]["transaction_type"], "Expense")
+        self.assertEqual(update.message.replies[0], "Updated $40.79 to Travel - 24 July 2026 [38218a]")
+
     async def test_confirm_targets_latest_pending_batch_only(self):
         sheets = FakeSheets()
         bot = FinanceBot(FakeSettings(), sheets)

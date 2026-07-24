@@ -53,6 +53,7 @@ This file contains project-specific instructions for coding agents working on Ge
 - Plain `confirm`, `confirmed`, `confirm fixed`, and `confirmed fixed` should all confirm an active fixed expense review.
 - Delete operations must be confirmation-based. Show the matched expense and wait for explicit confirmation before deleting from Google Sheets.
 - Existing logged expense edits must be confirmation-based. Show the before/after row and wait for explicit confirmation before updating Google Sheets. When an edit needs a follow-up date, retain the matched row temporarily for that chat/user until a date or `cancel` is received; a Railway restart clears it.
+- Narrow latest-expense category corrections are the exception: `change to Travel`, `change it to Travel`, and `change category to Travel` should immediately update the latest logged normal expense for the same Telegram user when `Travel` is a valid active category.
 - User-specific categories should live in the Google Sheet `Categories` and `Category Keywords` tabs; do not hardcode personal category lists in public source.
 - Production category loading must use the Google Sheet `Categories` and `Category Keywords` tabs. Do not silently fall back to JSON/default categories in production.
 - If Google Sheet categories are missing or empty at startup, fail loudly so public fallback categories cannot leak into `Monthly Summary`.

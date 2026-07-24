@@ -617,6 +617,9 @@ class FinanceBot:
             await self._start_fixed_review(update, text)
             return True
 
+        if await self._change_latest_logged_category(update, text):
+            return True
+
         if any(phrase in lowered for phrase in ["change spend date", "change spending date", "change logged date", "change expense date"]):
             await self._change_latest_logged_date(update, text)
             return True
@@ -1399,6 +1402,41 @@ class FinanceBot:
             [PendingEditChange(record=record, expense_date=parsed_date.isoformat())],
         )
 
+    async def _change_latest_logged_category(self, update: Update, text: str) -> bool:
+        if update.message is None or update.effective_user is None:
+            return False
+        category_raw = _latest_category_change_target(text)
+        if category_raw is None:
+            return False
+
+        category = _normalize_category(category_raw)
+        if category not in VARIABLE_CATEGORIES or category.lower().startswith("income -"):
+            await update.message.reply_text("I do not recognize this category. Send: categories")
+            return True
+
+        logged_by = self.settings.label_for_user(update.effective_user.id)
+        if logged_by is None:
+            await update.message.reply_text("I do not recognize this Telegram user ID yet.")
+            return True
+
+        record = self.sheets.get_last_matching_record(self.settings.raw_expenses_sheet, logged_by)
+        if record is None:
+            await update.message.reply_text("I could not find a recent logged expense to update.")
+            return True
+        if record.transaction_type.casefold() != "expense" or record.input_type.casefold() == "fixed":
+            await update.message.reply_text("I could not find a recent normal expense to update.")
+            return True
+
+        self.sheets.update_expense_record(
+            self.settings.raw_expenses_sheet,
+            record.row_number,
+            category=category,
+            transaction_type=_transaction_type_for_category(category, record.input_type),
+        )
+        self._refresh_monthly_summary()
+        await update.message.reply_text(self._latest_category_update_line(record, category))
+        return True
+
     async def _ask_edit_confirmation(self, update: Update, changes: list[PendingEditChange]) -> None:
         if update.message is None or update.effective_user is None:
             return
@@ -1511,6 +1549,13 @@ class FinanceBot:
         except ValueError:
             date_text = date_value
         return f"${amount:.2f} logged as {category} - {date_text} [{change.record.entry_id}]"
+
+    def _latest_category_update_line(self, record: ExpenseRecord, category: str) -> str:
+        try:
+            date_text = datetime.fromisoformat(record.expense_date).strftime("%-d %B %Y")
+        except ValueError:
+            date_text = record.expense_date
+        return f"Updated ${record.amount:.2f} to {category} - {date_text} [{record.entry_id}]"
 
     async def _ask_delete_confirmation(
         self,
@@ -2601,6 +2646,22 @@ def _normalize_category(raw: str) -> str:
         if category.lower().startswith(lowered):
             return category
     return raw
+
+
+def _latest_category_change_target(text: str) -> str | None:
+    cleaned = " ".join(text.strip().split()).strip(" .")
+    if re.search(r"\b(date|amount|price|cost)\b", cleaned, flags=re.IGNORECASE):
+        return None
+    match = re.fullmatch(
+        r"(?:change|changed|update|set|make)"
+        r"(?:\s+(?:it|this|that|category|the category|expense category|spend category))?"
+        r"\s+(?:to|as)\s+(.+)",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    if match is None:
+        return None
+    return match.group(1).strip(" .")
 
 
 def _transaction_type_for_category(category: str, input_type: str) -> str:

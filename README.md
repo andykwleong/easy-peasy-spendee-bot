@@ -342,6 +342,8 @@ Plain-language shortcuts:
 - `confirm 2`
 - `confirm 2 as Gifts`
 - `gift`
+- `change to Travel`
+- `change category to Travel`
 - `change spend date to 21 May`
 - `summary`
 - `summary this month`
@@ -372,7 +374,7 @@ The bot still validates actions against real `Entry ID` rows in Google Sheets be
 
 Delete requests ask for confirmation before removing a row. Reply `yes` to delete, or `cancel`.
 
-Edit requests for already logged Google Sheet rows also ask for confirmation before changing the row. If a date edit needs the new date, the bot remembers the matched row while it waits for your next reply, such as `30 June 2026`. Reply `cancel` to discard that date change. This temporary state is cleared after the confirmation prompt or a Railway restart. Reply `yes` to the before/after confirmation to update the row.
+Edit requests for already logged Google Sheet rows also ask for confirmation before changing the row. The narrow shortcut `change to Travel` or `change category to Travel` is treated as an immediate category correction for your latest logged expense only. If a date edit needs the new date, the bot remembers the matched row while it waits for your next reply, such as `30 June 2026`. Reply `cancel` to discard that date change. This temporary state is cleared after the confirmation prompt or a Railway restart. Reply `yes` to the before/after confirmation to update the row.
 
 If the bot asks for a missing category on a normal typed expense, reply with the category name. For example, if the bot asks about `durian 12`, replying `Food` logs it immediately.
 
@@ -464,6 +466,7 @@ The bot shows the full fixed expense list again after edits. Once you reply `con
 - Payment selection is temporary while the bot is running. If Railway restarts before you tap a payment button, resend the expense instead of assuming it was logged.
 - Follow-up replies can update pending entries, for example `gift` or `confirm 2 as Gifts`.
 - `change spend date to 21 May` updates the latest logged expense for that sender.
+- `change to Travel` updates the latest logged expense category for that sender immediately.
 - A bare entry ID like `1d9c9a` opens the delete confirmation for that expense, so it will not be mistaken for a $9 expense.
 - Telegram summaries and the `Monthly Summary` tab are recalculated from `Raw Expenses`.
 - If a wrong month appears in `Monthly Summary`, correct the relevant `Date` and `Month` cells in `Raw Expenses`, then let the bot refresh the summary.

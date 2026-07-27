@@ -5,7 +5,7 @@ from typing import Any
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
-from getrichbot.models import ExpenseRecord, ExpenseRow
+from getrichbot.models import CardUsageRecord, CardUsageRow, ExpenseRecord, ExpenseRow
 from getrichbot.cards import PaymentConfig, parse_payment_config
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
@@ -37,6 +37,16 @@ class SheetsClient:
         self._service().spreadsheets().values().append(
             spreadsheetId=self.sheet_id,
             range=f"{sheet_name}!A:O",
+            valueInputOption="USER_ENTERED",
+            insertDataOption="INSERT_ROWS",
+            body={"values": [row.to_sheet_row()]},
+        ).execute()
+
+    def append_card_usage(self, sheet_name: str, row: CardUsageRow) -> None:
+        self._ensure_sheet(sheet_name)
+        self._service().spreadsheets().values().append(
+            spreadsheetId=self.sheet_id,
+            range=f"{sheet_name}!A:M",
             valueInputOption="USER_ENTERED",
             insertDataOption="INSERT_ROWS",
             body={"values": [row.to_sheet_row()]},
@@ -239,6 +249,36 @@ class SheetsClient:
                     status=status,
                     transaction_type=transaction_type,
                     payment_method=_record_payment_method(row),
+                )
+            )
+        return records
+
+    def get_card_usage_records(self, sheet_name: str) -> list[CardUsageRecord]:
+        source, rows = self._get_values_first_available([sheet_name], "A2:M")
+        if source is None:
+            return []
+        records: list[CardUsageRecord] = []
+        for index, row in enumerate(rows, start=2):
+            entry_id = _cell(row, 0)
+            if not entry_id:
+                continue
+            amount = _parse_sheet_amount(_cell(row, 6))
+            if amount is None:
+                continue
+            records.append(
+                CardUsageRecord(
+                    row_number=index,
+                    entry_id=entry_id,
+                    timestamp=_cell(row, 1),
+                    usage_date=_cell(row, 2),
+                    month=_cell(row, 3),
+                    logged_by=_cell(row, 4),
+                    raw_input=_cell(row, 5),
+                    amount=amount,
+                    payment_method=_cell(row, 7),
+                    description=_cell(row, 8),
+                    usage_type=_cell(row, 9),
+                    status=_cell(row, 10),
                 )
             )
         return records

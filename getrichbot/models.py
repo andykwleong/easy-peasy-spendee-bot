@@ -77,3 +77,53 @@ class ExpenseRecord:
             f"{self.entry_id} | {self.expense_date} | {self.logged_by} | "
             f"${self.amount:.2f} | {self.category} | {self.description} | raw: {self.raw_input}"
         )
+
+
+@dataclass(frozen=True)
+class CardUsageRow:
+    entry_id: str
+    timestamp: datetime
+    logged_by: str
+    raw_input: str
+    amount: Decimal
+    payment_method: str
+    description: str
+    usage_type: str
+    status: str
+    telegram_chat_id: int | str
+    telegram_message_id: int | str
+
+    def to_sheet_row(self) -> list[str]:
+        usage_date = self.timestamp.strftime("%Y-%m-%d")
+        month = self.timestamp.strftime("%Y-%m")
+        return [
+            self.entry_id,
+            self.timestamp.strftime("%H:%M:%S"),
+            usage_date,
+            month,
+            self.logged_by,
+            self.raw_input,
+            f"{self.amount:.2f}",
+            self.payment_method,
+            self.description,
+            self.usage_type,
+            self.status,
+            str(self.telegram_chat_id),
+            str(self.telegram_message_id),
+        ]
+
+
+@dataclass(frozen=True)
+class CardUsageRecord:
+    row_number: int
+    entry_id: str
+    timestamp: str
+    usage_date: str
+    month: str
+    logged_by: str
+    raw_input: str
+    amount: Decimal
+    payment_method: str
+    description: str
+    usage_type: str
+    status: str

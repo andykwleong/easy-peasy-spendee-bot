@@ -67,8 +67,11 @@ This file contains project-specific instructions for coding agents working on Ge
 - Date-like text such as `21 May` should be removed before amount selection, so `30 gifts spent on 21 May` logs `$30`, not `$21`.
 - Follow-up replies should handle normal wording such as `confirm 2`, `gift`, and `change spend date to 21 May`.
 - Normal expenses need a visible payment-method selection before they are written to `Raw Expenses`. Income and fixed expenses do not need a payment method.
+- Claimable or card-only spend is detected with wording such as `claim`, `claimable`, `reimbursable`, `card only`, or `not expense`. It should ask for payment method, write to `Card Usage`, count toward card summaries/limits, and never write to `Raw Expenses` or `Monthly Summary`.
 - `Payment Methods` and `Card Limits` are user-managed Google Sheet tabs. A payment method is identified by its `Owner` and `Payment Method` pair; do not hardcode personal cards in source code.
 - Payment buttons must only show active methods belonging to the Telegram sender. `Card Limits` rows only count confirmed normal expenses matching the same owner, payment method, category, and card cycle.
+- `Card Usage` rows are not normal expense-categorised. They count toward total card spend and `All` card limits only, not category-specific limits such as Food or Groceries.
+- Manual deletion from `Card Usage` should remove that spend from future card summaries because summaries read the current Google Sheet rows.
 - A card with no active `Card Limits` row, or with an active row whose `Limit Amount` is blank, is uncapped and must still appear in that owner's card summary with its period spend.
 - Use `/refreshpayments` after sheet edits to reload payment config immediately. Otherwise, payment config may remain in a one-minute in-memory cache; it is read only on demand and makes no background Google Sheets calls.
 - Payment-selection and screenshot/voice batch state are temporary in-memory state. Railway restarts clear them; the user must send the expense again if a restart happens before its payment button is tapped.

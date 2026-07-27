@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 
-from getrichbot.models import ExpenseRecord
+from getrichbot.models import CardUsageRecord, ExpenseRecord
 
 
 @dataclass(frozen=True)
@@ -109,7 +109,9 @@ def build_card_summary(
     records: list[ExpenseRecord],
     owner: str,
     today: date,
+    card_usage_records: list[CardUsageRecord] | None = None,
 ) -> list[CardSummaryItem]:
+    card_usage_records = card_usage_records or []
     items: list[CardSummaryItem] = []
     for method in config.methods_for_owner(owner):
         if not method.is_credit_card:
@@ -120,11 +122,28 @@ def build_card_summary(
             for record in records
             if _is_matching_card_expense(record, owner, method.name, period_start, period_end)
         ]
+        usage_records = [
+            record
+            for record in card_usage_records
+            if _is_matching_card_usage(record, owner, method.name, period_start, period_end)
+        ]
         limits = tuple(
             CardLimitUsage(
                 limit=limit,
                 spent=sum(
-                    (record.amount for record in card_records if _matches_limit_category(record, limit.category)),
+                    (
+                        record.amount
+                        for record in card_records
+                        if _matches_limit_category(record, limit.category)
+                    ),
+                    Decimal("0"),
+                )
+                + sum(
+                    (
+                        record.amount
+                        for record in usage_records
+                        if limit.category.casefold() == "all"
+                    ),
                     Decimal("0"),
                 ),
             )
@@ -135,7 +154,8 @@ def build_card_summary(
                 payment_method=method,
                 period_start=period_start,
                 period_end=period_end,
-                total_spend=sum((record.amount for record in card_records), Decimal("0")),
+                total_spend=sum((record.amount for record in card_records), Decimal("0"))
+                + sum((record.amount for record in usage_records), Decimal("0")),
                 limits=limits,
             )
         )
@@ -302,6 +322,24 @@ def _is_matching_card_expense(
         return False
     try:
         record_date = date.fromisoformat(record.expense_date)
+    except ValueError:
+        return False
+    return period_start <= record_date <= period_end
+
+
+def _is_matching_card_usage(
+    record: CardUsageRecord,
+    owner: str,
+    payment_method: str,
+    period_start: date,
+    period_end: date,
+) -> bool:
+    if record.status.casefold() != "confirmed":
+        return False
+    if record.logged_by != owner or record.payment_method.casefold() != payment_method.casefold():
+        return False
+    try:
+        record_date = date.fromisoformat(record.usage_date)
     except ValueError:
         return False
     return period_start <= record_date <= period_end

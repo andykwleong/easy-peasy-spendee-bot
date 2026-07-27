@@ -14,6 +14,7 @@ class Settings:
     monthly_summary_sheet = "Monthly Summary"
     payment_methods_sheet = "Payment Methods"
     card_limits_sheet = "Card Limits"
+    card_usage_sheet = "Card Usage"
     me_label = "Me"
     wife_label = "My wife"
     openai_api_key = None
@@ -26,6 +27,7 @@ class Settings:
 class Sheets:
     def __init__(self):
         self.rows = []
+        self.card_usage_rows = []
         self.config = parse_payment_config(
             [
                 ["Payment Method", "Owner", "Type", "Cycle Type", "Cycle Start Day", "Active"],
@@ -42,7 +44,13 @@ class Sheets:
     def append_expense(self, sheet_name, row):
         self.rows.append(row)
 
+    def append_card_usage(self, sheet_name, row):
+        self.card_usage_rows.append(row)
+
     def get_expense_records(self, sheet_name):
+        return []
+
+    def get_card_usage_records(self, sheet_name):
         return []
 
     def update_monthly_summary(self, sheet_name, rows):
@@ -167,6 +175,30 @@ class TestPaymentFlow(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(handled)
                 self.assertEqual(update.message.replies[0], "Card summary\n\nUncapped:\n\nCiti Rewards - $0.00")
                 self.assertFalse(update.message.reply_kwargs[0]["do_quote"])
+
+    async def test_claimable_card_usage_waits_for_payment_and_skips_expenses(self):
+        sheets = Sheets()
+        bot = TestFinanceBot(Settings(), sheets)
+        update = Update("doctor claim 120")
+
+        await bot.handle_text(update, None)
+
+        self.assertEqual(sheets.rows, [])
+        self.assertEqual(sheets.card_usage_rows, [])
+        self.assertIn("card usage only", update.message.replies[0])
+        button_names = [button.text for row in update.message.markups[0].inline_keyboard for button in row]
+        self.assertEqual(button_names, ["Citi Rewards", "Cash"])
+
+        callback_data = update.message.markups[0].inline_keyboard[0][0].callback_data
+        callback_update = CallbackUpdate(callback_data)
+        await bot.handle_payment_method_callback(callback_update, None)
+
+        self.assertEqual(sheets.rows, [])
+        self.assertEqual(len(sheets.card_usage_rows), 1)
+        self.assertEqual(sheets.card_usage_rows[0].amount, Decimal("120"))
+        self.assertEqual(sheets.card_usage_rows[0].payment_method, "Citi Rewards")
+        self.assertEqual(sheets.card_usage_rows[0].usage_type, "Claimable")
+        self.assertIn("card limit only, not added to expenses", callback_update.callback_query.edited_text)
 
     async def test_confirmed_screenshot_batch_asks_for_cards_before_logging(self):
         sheets = Sheets()

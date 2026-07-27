@@ -5,7 +5,7 @@ from datetime import date
 from decimal import Decimal
 
 from getrichbot.cards import build_card_summary, current_card_period, format_card_summary, parse_payment_config
-from getrichbot.models import ExpenseRecord
+from getrichbot.models import CardUsageRecord, ExpenseRecord
 
 
 def record(
@@ -30,6 +30,29 @@ def record(
         input_type="Text",
         status="Confirmed",
         payment_method=payment_method,
+    )
+
+
+def card_usage(
+    entry_id: str,
+    amount: str,
+    payment_method: str,
+    usage_date: str = "2026-07-10",
+    logged_by: str = "Me",
+) -> CardUsageRecord:
+    return CardUsageRecord(
+        row_number=2,
+        entry_id=entry_id,
+        timestamp="12:00:00",
+        usage_date=usage_date,
+        month=usage_date[:7],
+        logged_by=logged_by,
+        raw_input="doctor claim",
+        amount=Decimal(amount),
+        payment_method=payment_method,
+        description="doctor claim",
+        usage_type="Claimable",
+        status="Confirmed",
     )
 
 
@@ -126,3 +149,40 @@ class TestCardTracking(unittest.TestCase):
         self.assertEqual(item.limits, ())
         self.assertIn("Uncapped:", format_card_summary([item]))
         self.assertIn("$94.00", format_card_summary([item]))
+
+    def test_card_usage_counts_towards_overall_limit_and_total_spend(self):
+        config = parse_payment_config(
+            [
+                ["Payment Method", "Owner", "Type", "Cycle Type", "Cycle Start Day", "Active"],
+                ["Citi Rewards", "Me", "Credit Card", "Calendar", "1", "TRUE"],
+            ],
+            [
+                ["Payment Method", "Owner", "Category", "Limit Amount", "Active"],
+                ["Citi Rewards", "Me", "All", "1000", "TRUE"],
+            ],
+        )
+
+        item = build_card_summary(
+            config,
+            [record("food01", "60", "Food", "Citi Rewards")],
+            "Me",
+            date(2026, 7, 10),
+            [card_usage("claim1", "120", "Citi Rewards")],
+        )[0]
+
+        self.assertEqual(item.total_spend, Decimal("180"))
+        self.assertEqual(item.limits[0].spent, Decimal("180"))
+        self.assertIn("Citi Rewards - $180.00/$1,000.00", format_card_summary([item]))
+
+    def test_card_usage_does_not_count_towards_category_specific_limit(self):
+        item = build_card_summary(
+            self.config,
+            [record("food01", "60", "Food", "UOB Lady's")],
+            "Me",
+            date(2026, 7, 10),
+            [card_usage("claim1", "120", "UOB Lady's")],
+        )[0]
+
+        self.assertEqual(item.total_spend, Decimal("180"))
+        self.assertEqual(item.limits[0].spent, Decimal("60"))
+        self.assertEqual(item.limits[1].spent, Decimal("0"))

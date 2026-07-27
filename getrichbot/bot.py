@@ -18,7 +18,7 @@ from getrichbot.categories import ALL_CATEGORIES, CATEGORY_ALIASES, FIXED_CATEGO
 from getrichbot.config import Settings
 from getrichbot.cards import PaymentConfig, build_card_summary, format_card_summary
 from getrichbot.image_utils import prepare_image_for_vision
-from getrichbot.models import ExpenseDraft, ExpenseRecord, ExpenseRow
+from getrichbot.models import CardUsageRow, ExpenseDraft, ExpenseRecord, ExpenseRow
 from getrichbot.parser import categorize_description, extract_date_phrase, extract_standalone_date, parse_expense, parse_expenses
 from getrichbot.sheets import SheetsClient
 from getrichbot.summary import (
@@ -332,6 +332,19 @@ class FinanceBot:
             wife_label=self.settings.wife_label,
             today=datetime.now(SINGAPORE_TZ).date(),
         )
+        if _is_card_usage_only_text(update.message.text or ""):
+            if not drafts:
+                await update.message.reply_text("I saw this is card-only or claimable, but I could not find an amount.")
+                return
+            if len(drafts) != 1:
+                await update.message.reply_text("I saw this is card-only or claimable, but please send one card usage item at a time.")
+                return
+            draft = drafts[0]
+            if draft.needs_date_confirmation:
+                await update.message.reply_text("That date is ambiguous. Try a clear date like 2026-07-24 or 24 July.")
+                return
+            await self._record_card_usage_or_request_payment(update, draft, logged_by)
+            return
         if len(drafts) > 1:
             await self._log_multiline_drafts(update, logged_by, drafts)
             return
@@ -1331,7 +1344,8 @@ class FinanceBot:
             await update.message.reply_text(f"Payment setup could not be loaded: {exc}")
             return
         records = self.sheets.get_expense_records(self.settings.raw_expenses_sheet)
-        items = build_card_summary(config, records, logged_by, datetime.now(SINGAPORE_TZ).date())
+        card_usage_records = self.sheets.get_card_usage_records(self.settings.card_usage_sheet) if hasattr(self.sheets, "get_card_usage_records") else []
+        items = build_card_summary(config, records, logged_by, datetime.now(SINGAPORE_TZ).date(), card_usage_records)
         await update.message.reply_text(format_card_summary(items), do_quote=False)
 
     async def _reply_with_category_breakdown(self, update: Update, text: str) -> bool:
@@ -2396,6 +2410,18 @@ class FinanceBot:
         await self._request_payment_method(update, pending_id)
         return None
 
+    async def _record_card_usage_or_request_payment(
+        self,
+        update: Update,
+        draft: ExpenseDraft,
+        logged_by: str,
+    ) -> None:
+        if not self._payment_tracking_enabled():
+            await update.message.reply_text("Payment tracking is not configured.")
+            return
+        pending_id = self._add_pending(draft, logged_by, update, "card_usage", input_type="Card Usage")
+        await self._request_payment_method(update, pending_id)
+
     async def _record_pending_or_request_payment(
         self,
         update: Update,
@@ -2440,6 +2466,16 @@ class FinanceBot:
         self.pending[pending_id] = replace(pending, payment_options=options)
         date_value = pending.draft.expense_date or datetime.now(SINGAPORE_TZ).date()
         position_text = f"Payment method for {position[0]} of {position[1]}:\n\n" if position else "Which payment method?\n\n"
+        if pending.reason == "card_usage":
+            await self._reply_to_update(
+                update,
+                position_text
+                + f"${pending.draft.amount:,.2f} card usage only - "
+                + f"{self._human_date(date_value)} - {pending.draft.description}\n\n"
+                + "This will count toward card limits only, not monthly expenses.",
+                reply_markup=self._payment_method_keyboard(pending_id, options),
+            )
+            return True
         await self._reply_to_update(
             update,
             position_text
@@ -2497,6 +2533,15 @@ class FinanceBot:
             return
 
         await query.answer()
+        if pending.reason == "card_usage":
+            row = self._card_usage_row_from_pending(pending, payment_method)
+            self.sheets.append_card_usage(self.settings.card_usage_sheet, row)
+            self.pending.pop(pending_id, None)
+            await query.edit_message_reply_markup(reply_markup=None)
+            await query.edit_message_text(self._card_usage_logged_line(row))
+            await self._continue_payment_batch(update)
+            return
+
         category = pending.draft.category or self._infer_pending_category(pending)
         if category not in VARIABLE_CATEGORIES:
             await query.answer("This expense still needs a category.", show_alert=True)
@@ -2625,11 +2670,33 @@ class FinanceBot:
             payment_method=payment_method,
         )
 
+    def _card_usage_row_from_pending(self, pending: PendingExpense, payment_method: str) -> CardUsageRow:
+        draft = pending.draft
+        return CardUsageRow(
+            entry_id=uuid.uuid4().hex[:6],
+            timestamp=self._row_timestamp(draft),
+            logged_by=pending.logged_by,
+            raw_input=draft.raw_input,
+            amount=draft.amount,
+            payment_method=payment_method,
+            description=draft.description,
+            usage_type=_card_usage_type(draft.raw_input),
+            status="Confirmed",
+            telegram_chat_id=pending.chat_id,
+            telegram_message_id=pending.message_id,
+        )
+
     def _logged_line(self, row: ExpenseRow) -> str:
         if row.transaction_type.lower() == "income":
             return f"Logged income ${row.amount:.2f} to {row.category} - {self._human_date(row.timestamp.date())} [{row.entry_id}]"
         payment = f" via {row.payment_method}" if row.payment_method else ""
         return f"Logged ${row.amount:.2f} to {row.category} - {self._human_date(row.timestamp.date())}{payment} [{row.entry_id}]"
+
+    def _card_usage_logged_line(self, row: CardUsageRow) -> str:
+        return (
+            f"Tracked ${row.amount:.2f} on {row.payment_method} - "
+            f"{self._human_date(row.timestamp.date())} - card limit only, not added to expenses [{row.entry_id}]"
+        )
 
     def _human_date(self, value) -> str:
         return value.strftime("%-d %B %Y")
@@ -2662,6 +2729,23 @@ def _latest_category_change_target(text: str) -> str | None:
     if match is None:
         return None
     return match.group(1).strip(" .")
+
+
+def _is_card_usage_only_text(text: str) -> bool:
+    lowered = " ".join(text.lower().strip().split())
+    return bool(
+        re.search(r"\bclaim(?:able|ed|s)?\b", lowered)
+        or re.search(r"\breimburs(?:e|ed|able|ement)\b", lowered)
+        or re.search(r"\bcard\s+only\b", lowered)
+        or re.search(r"\bnot\s+(?:an\s+)?expense\b", lowered)
+    )
+
+
+def _card_usage_type(text: str) -> str:
+    lowered = text.lower()
+    if re.search(r"\bclaim(?:able|ed|s)?\b", lowered) or re.search(r"\breimburs", lowered):
+        return "Claimable"
+    return "Card Only"
 
 
 def _transaction_type_for_category(category: str, input_type: str) -> str:

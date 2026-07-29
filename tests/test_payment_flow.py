@@ -146,6 +146,26 @@ class TestPaymentFlow(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(callback_update.callback_query.message.replies, [])
         self.assertIn("via Citi Rewards", callback_update.callback_query.edited_text)
 
+    async def test_category_reply_only_shows_payment_selection_for_text_pending(self):
+        sheets = Sheets()
+        bot = TestFinanceBot(Settings(), sheets)
+        update = Update("Food")
+        bot.pending = {
+            "abc123": PendingExpense(
+                ExpenseDraft("50 cleaning deposit 28 july", Decimal("50"), None, "cleaning deposit", 0.4),
+                "Me", -100, 55, datetime.now(), "category", input_type="Text",
+            )
+        }
+
+        handled = await bot.handle_pending_update(update)
+
+        self.assertTrue(handled)
+        self.assertEqual(sheets.rows, [])
+        self.assertEqual(len(update.message.replies), 1)
+        self.assertIn("Which payment method?", update.message.replies[0])
+        self.assertNotIn("Updated pending category", update.message.replies[0])
+        self.assertEqual(bot.pending["abc123"].draft.category, "Food")
+
     async def test_card_summary_is_sent_without_a_quote(self):
         sheets = Sheets()
         bot = TestFinanceBot(Settings(), sheets)

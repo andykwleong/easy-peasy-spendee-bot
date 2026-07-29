@@ -805,6 +805,8 @@ class FinanceBot:
                 await update.message.reply_text("\n\n".join(logged_lines))
                 return True
             if changed:
+                if self._payment_choice_is_active(update):
+                    return True
                 await update.message.reply_text(self._pending_summary(update, f"Updated pending category to {category_reply}:"))
                 return True
 

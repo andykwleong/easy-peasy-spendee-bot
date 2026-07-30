@@ -44,6 +44,23 @@ class TestPersonalHistory(unittest.TestCase):
         self.assertEqual((ranged.start, ranged.end), (date(2026, 7, 10), date(2026, 7, 12)))
         self.assertEqual((till_range.start, till_range.end), (date(2026, 7, 11), date(2026, 7, 14)))
 
+    def test_parses_loose_history_phrases(self):
+        today = date(2026, 7, 30)
+        samples = [
+            "Spend on 25th June",
+            "25th June spending",
+            "25th July entry",
+            "entries on 25th July",
+            "what did I log on 25th July",
+        ]
+
+        periods = [parse_expense_history_period(sample, today) for sample in samples]
+
+        self.assertEqual((periods[0].start, periods[0].end), (date(2026, 6, 25), date(2026, 6, 25)))
+        self.assertEqual((periods[1].start, periods[1].end), (date(2026, 6, 25), date(2026, 6, 25)))
+        for period in periods[2:]:
+            self.assertEqual((period.start, period.end), (date(2026, 7, 25), date(2026, 7, 25)))
+
     def test_unclear_history_request_can_be_clarified(self):
         text = "expenses from 11"
 

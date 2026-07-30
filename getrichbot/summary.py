@@ -113,6 +113,16 @@ def parse_expense_history_period(text: str, today: date) -> SummaryPeriod | None
         if start is not None and end is not None and end >= start:
             return SummaryPeriod(start=start, end=end, label=f"{start.strftime('%-d %B')} to {end.strftime('%-d %B %Y')}")
 
+    date_first_match = re.search(
+        r"\b(\d{1,2}(?:st|nd|rd|th)?\s+[a-z]+(?:\s+\d{4})?)\s+"
+        r"(?:expense|expenses|spend|spending|spent|entry|entries|keyed|logged|entered)\b",
+        lowered,
+    )
+    if date_first_match is not None:
+        target = _parse_history_date(date_first_match.group(1), today)
+        if target is not None:
+            return SummaryPeriod(start=target, end=target, label=target.strftime("%-d %B %Y"))
+
     on_match = re.search(r"\b(?:on|for)\s+(.+?)\s*$", lowered)
     if on_match is None:
         return None
@@ -124,14 +134,16 @@ def parse_expense_history_period(text: str, today: date) -> SummaryPeriod | None
 
 def looks_like_expense_history_request(text: str) -> bool:
     lowered = " ".join(text.lower().strip().split())
+    if re.search(r"\b(change|update|make|delete)\b", lowered):
+        return False
     has_history_word = (
-        any(word in lowered for word in ("expense", "expenses", "spending", "spent", "keyed", "logged", "entered"))
+        any(word in lowered for word in ("expense", "expenses", "spend", "spending", "spent", "entry", "entries", "keyed", "log", "logged", "entered"))
         or "key in" in lowered
     )
     has_date_phrase = any(
         phrase in lowered
         for phrase in (" on ", " for ", " between ", " from ", " to ", " till ", " until ", " through ")
-    )
+    ) or re.search(r"\b\d{1,2}(?:st|nd|rd|th)?\s+[a-z]+(?:\s+\d{4})?\s+(?:expense|expenses|spend|spending|spent|entry|entries|keyed|logged|entered)\b", lowered) is not None
     return has_history_word and has_date_phrase
 
 

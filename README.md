@@ -382,6 +382,8 @@ Plain-language shortcuts:
 - `shopping from may to july`
 - `all shopping for july`
 - `expenses on 12 July`
+- `25th July entry`
+- `spend on 25th June`
 - `expenses between 10-12 July`
 - `expenses from 11 till 14 July`
 - `confirm fixed`
@@ -433,11 +435,16 @@ These requests show only normal expenses logged by the person asking. They exclu
 
 ```text
 expenses on 12 July
+25th July entry
+spend on 25th June
+25th June spending
 expenses between 10-12 July
 expenses from 10 July to 12 July
 expenses from 11 till 14 July
 what did I key in on 12 July
 ```
+
+If the bot sees a history-style request but cannot understand the date, it replies with examples instead of silently ignoring the message.
 
 ### Category Breakdown
 

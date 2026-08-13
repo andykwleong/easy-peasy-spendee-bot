@@ -31,7 +31,8 @@ This file contains project-specific instructions for coding agents working on Ge
 - `Raw Expenses` contains all confirmed transaction rows.
 - `Fixed Expenses` contains active fixed expense setup.
 - `Monthly Summary` is generated as a P&L summary; rows include income categories, expense categories, total income, total expenses, and net P&L.
-- `Raw Expenses` includes `Payment Method` after `Description`, followed by `Transaction Type`; valid transaction types are `Expense`, `Income`, and `Fixed`.
+- `Raw Expenses` includes `Payment Owner` and `Payment Method` after `Description`, followed by `Transaction Type`; valid transaction types are `Expense`, `Income`, and `Fixed`.
+- `Logged By` identifies who submitted the transaction. `Payment Owner` identifies whose card or payment account was used. Historical rows without `Payment Owner` fall back to `Logged By`.
 - Historical rows with a blank `Payment Method` are valid but must not be included in card tracking.
 - Old rows with blank `Transaction Type` are backward compatible: infer `Income` when the category starts with `Income -`, infer `Fixed` when input type is fixed, otherwise treat as `Expense`.
 - If `Monthly Summary` shows an unexpected month, investigate and fix the source row in `Raw Expenses` instead of manually deleting the summary column.
@@ -69,8 +70,10 @@ This file contains project-specific instructions for coding agents working on Ge
 - Normal expenses need a visible payment-method selection before they are written to `Raw Expenses`. Income and fixed expenses do not need a payment method.
 - Claimable or card-only spend is detected with wording such as `claim`, `claimable`, `reimbursable`, `card only`, or `not expense`. It should ask for payment method, write to `Card Usage`, count toward card summaries/limits, and never write to `Raw Expenses` or `Monthly Summary`.
 - `Payment Methods` and `Card Limits` are user-managed Google Sheet tabs. A payment method is identified by its `Owner` and `Payment Method` pair; do not hardcode personal cards in source code.
-- Payment buttons must only show active methods belonging to the Telegram sender. `Card Limits` rows only count confirmed normal expenses matching the same owner, payment method, category, and card cycle.
-- `Card Usage` rows are not normal expense-categorised. They count toward total card spend and `All` card limits only, not category-specific limits such as Food or Groceries.
+- Payment buttons show the Telegram sender's active methods first. A bottom partner-card button may show the other configured person's active credit cards. The submitting user remains the only person allowed to choose the payment method.
+- Choosing the other person's card must preserve the sender's `Logged By` value and expense category, while storing the selected card's owner in `Payment Owner`.
+- `Card Limits` and card summaries count confirmed normal expenses by `Payment Owner`, payment method, category, and card cycle. Historical rows without `Payment Owner` use `Logged By`.
+- `Card Usage` includes `Payment Owner`. Its rows are not normal expense-categorised. They count toward the selected owner's total card spend and `All` card limits only, not category-specific limits such as Food or Groceries.
 - Manual deletion from `Card Usage` should remove that spend from future card summaries because summaries read the current Google Sheet rows.
 - A card with no active `Card Limits` row, or with an active row whose `Limit Amount` is blank, is uncapped and must still appear in that owner's card summary with its period spend.
 - Use `/refreshpayments` after sheet edits to reload payment config immediately. Otherwise, payment config may remain in a one-minute in-memory cache; it is read only on demand and makes no background Google Sheets calls.

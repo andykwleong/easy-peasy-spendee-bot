@@ -17,6 +17,8 @@ class Settings:
     card_usage_sheet = "Card Usage"
     me_label = "Me"
     wife_label = "My wife"
+    me_card_button_label = "Andy's Cards"
+    wife_card_button_label = "Wife's Cards"
     openai_api_key = None
     openai_model = "test-model"
 
@@ -40,6 +42,9 @@ class Sheets:
 
     def get_payment_config(self, payment_methods_sheet, card_limits_sheet):
         return self.config
+
+    def has_payment_owner_column(self, sheet_name):
+        return True
 
     def append_expense(self, sheet_name, row):
         self.rows.append(row)
@@ -92,8 +97,9 @@ class CallbackQuery:
     async def edit_message_reply_markup(self, **kwargs):
         pass
 
-    async def edit_message_text(self, text):
+    async def edit_message_text(self, text, **kwargs):
         self.edited_text = text
+        self.message.markups.append(kwargs.get("reply_markup"))
 
 
 class CallbackUpdate(Update):
@@ -116,14 +122,35 @@ class FakeMarkup:
 
 class TestFinanceBot(FinanceBot):
     def _payment_method_keyboard(self, pending_id, options):
+        pending = self.pending.get(pending_id)
+        method_count = len(pending.payment_option_owners) if pending is not None else len(options)
         buttons = [
             FakeButton(name, callback_data=f"payment_method|{pending_id}|{index}")
             for index, name in enumerate(options)
         ]
-        return FakeMarkup([buttons])
+        method_buttons = buttons[:method_count]
+        rows = [method_buttons[index:index + 2] for index in range(0, len(method_buttons), 2)]
+        if len(buttons) > method_count:
+            rows.append(buttons[method_count:])
+        return FakeMarkup(rows)
+
+
+class LegacyLayoutSheets(Sheets):
+    def has_payment_owner_column(self, sheet_name):
+        return False
 
 
 class TestPaymentFlow(unittest.IsolatedAsyncioTestCase):
+    async def test_spouse_button_stays_hidden_until_payment_owner_column_exists(self):
+        sheets = LegacyLayoutSheets()
+        bot = TestFinanceBot(Settings(), sheets)
+        update = Update()
+
+        await bot.handle_text(update, None)
+
+        button_names = [button.text for row in update.message.markups[0].inline_keyboard for button in row]
+        self.assertEqual(button_names, ["Citi Rewards", "Cash"])
+
     async def test_expense_waits_for_the_sender_payment_button(self):
         sheets = Sheets()
         bot = TestFinanceBot(Settings(), sheets)
@@ -135,7 +162,7 @@ class TestPaymentFlow(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(bot.pending), 1)
         self.assertIn("Which payment method?", update.message.replies[0])
         button_names = [button.text for row in update.message.markups[0].inline_keyboard for button in row]
-        self.assertEqual(button_names, ["Citi Rewards", "Cash"])
+        self.assertEqual(button_names, ["Citi Rewards", "Cash", "Wife's Cards"])
 
         callback_data = update.message.markups[0].inline_keyboard[0][0].callback_data
         callback_update = CallbackUpdate(callback_data)
@@ -143,6 +170,7 @@ class TestPaymentFlow(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(sheets.rows), 1)
         self.assertEqual(sheets.rows[0].payment_method, "Citi Rewards")
+        self.assertEqual(sheets.rows[0].payment_owner, "Me")
         self.assertEqual(callback_update.callback_query.message.replies, [])
         self.assertIn("via Citi Rewards", callback_update.callback_query.edited_text)
 
@@ -207,7 +235,7 @@ class TestPaymentFlow(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sheets.card_usage_rows, [])
         self.assertIn("card usage only", update.message.replies[0])
         button_names = [button.text for row in update.message.markups[0].inline_keyboard for button in row]
-        self.assertEqual(button_names, ["Citi Rewards", "Cash"])
+        self.assertEqual(button_names, ["Citi Rewards", "Cash", "Wife's Cards"])
 
         callback_data = update.message.markups[0].inline_keyboard[0][0].callback_data
         callback_update = CallbackUpdate(callback_data)
@@ -217,6 +245,7 @@ class TestPaymentFlow(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(sheets.card_usage_rows), 1)
         self.assertEqual(sheets.card_usage_rows[0].amount, Decimal("120"))
         self.assertEqual(sheets.card_usage_rows[0].payment_method, "Citi Rewards")
+        self.assertEqual(sheets.card_usage_rows[0].payment_owner, "Me")
         self.assertEqual(sheets.card_usage_rows[0].usage_type, "Claimable")
         self.assertIn("card limit only, not added to expenses", callback_update.callback_query.edited_text)
 
@@ -241,3 +270,37 @@ class TestPaymentFlow(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sheets.rows, [])
         self.assertEqual(len(bot.pending_payment_batches[(-100, 123)].pending_ids), 2)
         self.assertIn("Payment method for 1 of 2", update.message.replies[0])
+
+    async def test_sender_can_switch_to_spouse_card_without_changing_category_owner(self):
+        sheets = Sheets()
+        bot = TestFinanceBot(Settings(), sheets)
+        update = Update("shopping 80", user_id=456)
+
+        await bot.handle_text(update, None)
+
+        button_names = [button.text for row in update.message.markups[0].inline_keyboard for button in row]
+        self.assertEqual(button_names, ["Wife Card", "Andy's Cards"])
+        self.assertEqual(
+            [[button.text for button in row] for row in update.message.markups[0].inline_keyboard],
+            [["Wife Card"], ["Andy's Cards"]],
+        )
+
+        switch_data = update.message.markups[0].inline_keyboard[-1][0].callback_data
+        callback_update = CallbackUpdate(switch_data)
+        callback_update.effective_user = type("User", (), {"id": 456})()
+        await bot.handle_payment_method_callback(callback_update, None)
+
+        switched_markup = callback_update.callback_query.message.markups[-1]
+        switched_names = [button.text for row in switched_markup.inline_keyboard for button in row]
+        self.assertEqual(switched_names, ["Citi Rewards", "Wife's Cards"])
+        self.assertEqual(callback_update.callback_query.message.replies, [])
+
+        card_data = switched_markup.inline_keyboard[0][0].callback_data
+        callback_update.callback_query.data = card_data
+        await bot.handle_payment_method_callback(callback_update, None)
+
+        self.assertEqual(len(sheets.rows), 1)
+        self.assertEqual(sheets.rows[0].logged_by, "My wife")
+        self.assertEqual(sheets.rows[0].category, "Shopping - My wife")
+        self.assertEqual(sheets.rows[0].payment_owner, "Me")
+        self.assertEqual(sheets.rows[0].payment_method, "Citi Rewards")

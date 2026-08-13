@@ -53,10 +53,12 @@ Create a Google Sheet with these tabs:
 Header row:
 
 ```text
-Entry ID,Timestamp,Date,Month,Logged By,Raw Input,Amount,Category,Description,Payment Method,Transaction Type,Input Type,Status,Telegram Chat ID,Telegram Message ID
+Entry ID,Timestamp,Date,Month,Logged By,Raw Input,Amount,Category,Description,Payment Owner,Payment Method,Transaction Type,Input Type,Status,Telegram Chat ID,Telegram Message ID
 ```
 
 `Timestamp` is time only, for example `21:34:12`. `Date` stores the transaction date.
+
+`Payment Owner` identifies whose card or payment account was used. `Logged By` remains the person who submitted the expense, so personal history and sender-specific shopping categories remain accurate. If an old row has a `Payment Method` but no `Payment Owner`, the bot treats `Logged By` as the payment owner.
 
 `Payment Method` is selected in Telegram for new normal expenses. Historical rows may be blank; they remain valid for monthly summaries but are not included in card tracking.
 
@@ -104,7 +106,7 @@ The bot creates this tab automatically when needed. It stores small markers so R
 
 ### Payment Methods
 
-Create a `Payment Methods` tab. Each row is one payment method belonging to one person. The bot uses `Owner` to show only that person's buttons.
+Create a `Payment Methods` tab. Each row is one payment method belonging to one person. The bot shows the sender's methods first. When both people have active credit cards and the transaction tabs include `Payment Owner`, a button at the bottom opens the other person's credit cards.
 
 ```text
 Payment Method,Owner,Type,Cycle Type,Cycle Start Day,Active,Notes
@@ -134,7 +136,7 @@ The `Payment Method` and `Owner` pair must match `Payment Methods` exactly. `Cat
 Create a `Card Usage` tab for claimable or card-only spend that should affect card limits but should not be counted as household expenses.
 
 ```text
-Entry ID,Timestamp,Date,Month,Logged By,Raw Input,Amount,Payment Method,Description,Usage Type,Status,Telegram Chat ID,Telegram Message ID
+Entry ID,Timestamp,Date,Month,Logged By,Raw Input,Amount,Payment Owner,Payment Method,Description,Usage Type,Status,Telegram Chat ID,Telegram Message ID
 ```
 
 Use this for entries such as insurance claims, reimbursable healthcare, or other card spend that should not affect `Monthly Summary`.
@@ -251,6 +253,8 @@ ME_TELEGRAM_IDS=
 WIFE_TELEGRAM_IDS=
 ME_LABEL=Me
 WIFE_LABEL=My wife
+ME_CARD_BUTTON_LABEL=Partner's Cards
+WIFE_CARD_BUTTON_LABEL=Partner's Cards
 RAW_EXPENSES_SHEET=Raw Expenses
 FIXED_EXPENSES_SHEET=Fixed Expenses
 MONTHLY_SUMMARY_SHEET=Monthly Summary
@@ -264,7 +268,7 @@ Never commit real secrets. Keep them in Railway variables or your local `.env`.
 
 For categories, set `CATEGORIES_SHEET` and `CATEGORY_KEYWORDS_SHEET`. The running bot expects active category rows in Google Sheets.
 
-Payment configuration is read only when you use the bot. It is cached in memory for one minute to keep payment buttons responsive. Use `/refreshpayments` after editing `Payment Methods` or `Card Limits` to apply a change immediately. No background payment-sheet polling occurs.
+Payment configuration is read only when you use the bot. It is cached in memory for one minute to keep payment buttons responsive. Use `/refreshpayments` after editing `Payment Methods` or `Card Limits` to apply a change immediately. No background payment-sheet polling occurs. Each confirmed expense also reads its transaction tab's header row so the bot can safely support both the old layout and the newer `Payment Owner` layout.
 
 `Card Usage` rows are read when card summary is requested. Manual deletion from that tab removes the card-only spend from future card summaries.
 
@@ -497,6 +501,7 @@ The bot shows the full fixed expense list again after edits. Once you reply `con
 - Multiple undated expense lines default to today's date.
 - Category changes should be made in the `Categories` and `Category Keywords` Google Sheet tabs. After editing those tabs, send `/refreshcategories` in Telegram so the running Railway bot reloads the latest sheet values.
 - Payment methods and limits should be changed in `Payment Methods` and `Card Limits`. After editing either tab, send `/refreshpayments` to load the change immediately. Otherwise, the bot keeps the current payment configuration for up to one minute after a read.
+- Each person sees their own active payment methods first. The partner-card button opens the other person's active credit cards. Choosing a partner's card changes `Payment Owner`, but does not change `Logged By` or the expense category.
 - Claimable or card-only spend goes to `Card Usage`, not `Raw Expenses`. Manually deleting a `Card Usage` row removes it from future card summary calculations.
 - Payment selection is temporary while the bot is running. If Railway restarts before you tap a payment button, resend the expense instead of assuming it was logged.
 - Follow-up replies can update pending entries, for example `gift` or `confirm 2 as Gifts`.

@@ -27,6 +27,8 @@ class Settings:
     wife_telegram_ids: set[int]
     me_label: str
     wife_label: str
+    me_card_button_label: str
+    wife_card_button_label: str
     raw_expenses_sheet: str
     fixed_expenses_sheet: str
     monthly_summary_sheet: str
@@ -60,6 +62,8 @@ class Settings:
             wife_telegram_ids=_ids_from_env("WIFE_TELEGRAM_IDS"),
             me_label=os.getenv("ME_LABEL", "Me"),
             wife_label=os.getenv("WIFE_LABEL", "My wife"),
+            me_card_button_label=os.getenv("ME_CARD_BUTTON_LABEL", "Partner's Cards"),
+            wife_card_button_label=os.getenv("WIFE_CARD_BUTTON_LABEL", "Partner's Cards"),
             raw_expenses_sheet=os.getenv("RAW_EXPENSES_SHEET", "Raw Expenses"),
             fixed_expenses_sheet=os.getenv("FIXED_EXPENSES_SHEET", "Fixed Expenses"),
             monthly_summary_sheet=os.getenv("MONTHLY_SUMMARY_SHEET", "Monthly Summary"),

@@ -69,6 +69,10 @@ Useful commands:
 /confirmfixed - review fixed expenses
 /undo - delete your latest logged expense
 
+Payment methods:
+Choose one of your methods, or use the partner-card button to choose one of their credit cards.
+The expense category and Logged By still follow the person who submitted the expense.
+
 Plain replies also work:
 confirm abc123 as Food
 confirm abc123
@@ -92,6 +96,8 @@ class PendingExpense:
     category_options: tuple[str, ...] = ()
     input_type: str = "Text"
     payment_options: tuple[str, ...] = ()
+    payment_option_owners: tuple[str, ...] = ()
+    payment_view_owner: str | None = None
 
 
 @dataclass
@@ -2447,7 +2453,14 @@ class FinanceBot:
             self.pending.pop(pending_id, None)
         return logged_line
 
-    async def _request_payment_method(self, update: Update, pending_id: str, position: tuple[int, int] | None = None) -> bool:
+    async def _request_payment_method(
+        self,
+        update: Update,
+        pending_id: str,
+        position: tuple[int, int] | None = None,
+        view_owner: str | None = None,
+        edit_existing: bool = False,
+    ) -> bool:
         pending = self.pending.get(pending_id)
         if pending is None:
             return False
@@ -2456,45 +2469,83 @@ class FinanceBot:
         except (RuntimeError, ValueError) as exc:
             await self._reply_to_update(update, f"Payment setup could not be loaded: {exc}")
             return False
-        methods = config.methods_for_owner(pending.logged_by)
-        if not methods:
+        selected_owner = view_owner or pending.logged_by
+        methods = config.methods_for_owner(selected_owner)
+        if selected_owner != pending.logged_by:
+            methods = tuple(method for method in methods if method.is_credit_card)
+        other_owner = self._other_payment_owner(selected_owner)
+        sheet_name = self.settings.card_usage_sheet if pending.reason == "card_usage" else self.settings.raw_expenses_sheet
+        supports_payment_owner = not hasattr(self.sheets, "has_payment_owner_column") or self.sheets.has_payment_owner_column(sheet_name)
+        can_switch = bool(
+            supports_payment_owner
+            and other_owner
+            and any(method.is_credit_card for method in config.methods_for_owner(other_owner))
+        )
+        if not methods and not can_switch:
             await self._reply_to_update(
                 update,
-                f"No active payment methods are configured for {pending.logged_by}. "
+                f"No active payment methods are configured for {selected_owner}. "
                 "Check the Payment Methods tab, then use /refreshpayments.",
             )
             return False
-        options = tuple(method.name for method in methods)
-        self.pending[pending_id] = replace(pending, payment_options=options)
+        method_options = tuple(method.name for method in methods)
+        method_owners = tuple(selected_owner for _method in methods)
+        switch_label = self._card_button_label(other_owner) if can_switch else None
+        options = method_options + ((switch_label,) if switch_label else ())
+        self.pending[pending_id] = replace(
+            pending,
+            payment_options=options,
+            payment_option_owners=method_owners,
+            payment_view_owner=selected_owner,
+        )
         date_value = pending.draft.expense_date or datetime.now(SINGAPORE_TZ).date()
         position_text = f"Payment method for {position[0]} of {position[1]}:\n\n" if position else "Which payment method?\n\n"
         if pending.reason == "card_usage":
-            await self._reply_to_update(
-                update,
+            message_text = (
                 position_text
                 + f"${pending.draft.amount:,.2f} card usage only - "
                 + f"{self._human_date(date_value)} - {pending.draft.description}\n\n"
-                + "This will count toward card limits only, not monthly expenses.",
-                reply_markup=self._payment_method_keyboard(pending_id, options),
+                + "This will count toward card limits only, not monthly expenses."
+            )
+            await self._show_payment_method_message(
+                update,
+                message_text,
+                self._payment_method_keyboard(pending_id, options),
+                edit_existing,
             )
             return True
-        await self._reply_to_update(
-            update,
+        message_text = (
             position_text
             + f"${pending.draft.amount:,.2f} to {pending.draft.category} - "
-            + f"{self._human_date(date_value)} - {pending.draft.description}",
-            reply_markup=self._payment_method_keyboard(pending_id, options),
+            + f"{self._human_date(date_value)} - {pending.draft.description}"
+        )
+        await self._show_payment_method_message(
+            update,
+            message_text,
+            self._payment_method_keyboard(pending_id, options),
+            edit_existing,
         )
         return True
+
+    async def _show_payment_method_message(self, update: Update, text: str, reply_markup, edit_existing: bool) -> None:
+        if edit_existing and update.callback_query is not None:
+            await update.callback_query.edit_message_text(text, reply_markup=reply_markup)
+            return
+        await self._reply_to_update(update, text, reply_markup=reply_markup)
 
     def _payment_method_keyboard(self, pending_id: str, options: tuple[str, ...]):
         from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
+        pending = self.pending.get(pending_id)
+        method_count = len(pending.payment_option_owners) if pending is not None else len(options)
         buttons = [
             InlineKeyboardButton(name, callback_data=f"{PAYMENT_METHOD_CALLBACK}|{pending_id}|{index}")
             for index, name in enumerate(options)
         ]
-        rows = [buttons[index:index + 2] for index in range(0, len(buttons), 2)]
+        method_buttons = buttons[:method_count]
+        rows = [method_buttons[index:index + 2] for index in range(0, len(method_buttons), 2)]
+        if len(buttons) > method_count:
+            rows.append(buttons[method_count:])
         return InlineKeyboardMarkup(rows)
 
     async def handle_payment_method_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -2523,20 +2574,29 @@ class FinanceBot:
         if option_index < 0 or option_index >= len(pending.payment_options):
             await query.answer("That payment method is no longer available.", show_alert=True)
             return
+        if option_index >= len(pending.payment_option_owners):
+            switch_owner = self._other_payment_owner(pending.payment_view_owner or pending.logged_by)
+            if switch_owner is None:
+                await query.answer("That card list is no longer available.", show_alert=True)
+                return
+            await query.answer()
+            await self._request_payment_method(update, pending_id, view_owner=switch_owner, edit_existing=True)
+            return
         payment_method = pending.payment_options[option_index]
+        payment_owner = pending.payment_option_owners[option_index]
         try:
             config = self._load_payment_config()
         except (RuntimeError, ValueError) as exc:
             await query.answer("Payment setup needs attention.", show_alert=True)
             await query.message.reply_text(f"Payment setup could not be loaded: {exc}")
             return
-        if config.method_for(pending.logged_by, payment_method) is None:
+        if config.method_for(payment_owner, payment_method) is None:
             await query.answer("That payment method is no longer active.", show_alert=True)
             return
 
         await query.answer()
         if pending.reason == "card_usage":
-            row = self._card_usage_row_from_pending(pending, payment_method)
+            row = self._card_usage_row_from_pending(pending, payment_method, payment_owner)
             self.sheets.append_card_usage(self.settings.card_usage_sheet, row)
             self.pending.pop(pending_id, None)
             await query.edit_message_reply_markup(reply_markup=None)
@@ -2555,6 +2615,7 @@ class FinanceBot:
             pending.input_type,
             None,
             payment_method=payment_method,
+            payment_owner=payment_owner,
         )
         logged_line = await self._append_or_hold_duplicate(update, row, pending_id=pending_id)
         await query.edit_message_reply_markup(reply_markup=None)
@@ -2604,6 +2665,20 @@ class FinanceBot:
         if update.effective_user is not None:
             self.pending_payment_batches.pop((update.effective_chat.id, update.effective_user.id), None)
 
+    def _other_payment_owner(self, owner: str) -> str | None:
+        if owner == self.settings.me_label:
+            return self.settings.wife_label
+        if owner == self.settings.wife_label:
+            return self.settings.me_label
+        return None
+
+    def _card_button_label(self, owner: str | None) -> str:
+        if owner == self.settings.me_label:
+            return getattr(self.settings, "me_card_button_label", "Partner's Cards")
+        if owner == self.settings.wife_label:
+            return getattr(self.settings, "wife_card_button_label", "Partner's Cards")
+        return "Partner's Cards"
+
     def _expense_row(
         self,
         draft: ExpenseDraft,
@@ -2613,6 +2688,7 @@ class FinanceBot:
         status: str,
         input_type: str,
         payment_method: str = "",
+        payment_owner: str = "",
     ) -> ExpenseRow:
         return ExpenseRow(
             entry_id=uuid.uuid4().hex[:6],
@@ -2628,6 +2704,7 @@ class FinanceBot:
             telegram_message_id=update.message.message_id,
             transaction_type=_transaction_type_for_category(category, input_type),
             payment_method=payment_method,
+            payment_owner=payment_owner,
         )
 
     def _row_timestamp(self, draft: ExpenseDraft) -> datetime:
@@ -2644,6 +2721,7 @@ class FinanceBot:
         input_type: str,
         date_override,
         payment_method: str = "",
+        payment_owner: str = "",
     ) -> ExpenseRow:
         draft = pending.draft
         if date_override is not None:
@@ -2670,9 +2748,15 @@ class FinanceBot:
             telegram_message_id=pending.message_id,
             transaction_type=_transaction_type_for_category(category, input_type),
             payment_method=payment_method,
+            payment_owner=payment_owner,
         )
 
-    def _card_usage_row_from_pending(self, pending: PendingExpense, payment_method: str) -> CardUsageRow:
+    def _card_usage_row_from_pending(
+        self,
+        pending: PendingExpense,
+        payment_method: str,
+        payment_owner: str,
+    ) -> CardUsageRow:
         draft = pending.draft
         return CardUsageRow(
             entry_id=uuid.uuid4().hex[:6],
@@ -2681,6 +2765,7 @@ class FinanceBot:
             raw_input=draft.raw_input,
             amount=draft.amount,
             payment_method=payment_method,
+            payment_owner=payment_owner,
             description=draft.description,
             usage_type=_card_usage_type(draft.raw_input),
             status="Confirmed",

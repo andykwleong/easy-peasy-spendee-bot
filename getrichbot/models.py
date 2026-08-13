@@ -32,11 +32,12 @@ class ExpenseRow:
     telegram_message_id: int | str
     transaction_type: str = "Expense"
     payment_method: str = ""
+    payment_owner: str = ""
 
-    def to_sheet_row(self) -> list[str]:
+    def to_sheet_row(self, include_payment_owner: bool = True) -> list[str]:
         expense_date = self.timestamp.strftime("%Y-%m-%d")
         month = self.timestamp.strftime("%Y-%m")
-        return [
+        values = [
             self.entry_id,
             self.timestamp.strftime("%H:%M:%S"),
             expense_date,
@@ -46,13 +47,20 @@ class ExpenseRow:
             f"{self.amount:.2f}",
             self.category,
             self.description,
-            self.payment_method,
-            self.transaction_type,
-            self.input_type,
-            self.status,
-            str(self.telegram_chat_id),
-            str(self.telegram_message_id),
         ]
+        if include_payment_owner:
+            values.append((self.payment_owner or self.logged_by) if self.payment_method else "")
+        values.extend(
+            [
+                self.payment_method,
+                self.transaction_type,
+                self.input_type,
+                self.status,
+                str(self.telegram_chat_id),
+                str(self.telegram_message_id),
+            ]
+        )
+        return values
 
 
 @dataclass(frozen=True)
@@ -71,6 +79,7 @@ class ExpenseRecord:
     status: str
     transaction_type: str = "Expense"
     payment_method: str = ""
+    payment_owner: str = ""
 
     def compact(self) -> str:
         return (
@@ -92,11 +101,12 @@ class CardUsageRow:
     status: str
     telegram_chat_id: int | str
     telegram_message_id: int | str
+    payment_owner: str = ""
 
-    def to_sheet_row(self) -> list[str]:
+    def to_sheet_row(self, include_payment_owner: bool = True) -> list[str]:
         usage_date = self.timestamp.strftime("%Y-%m-%d")
         month = self.timestamp.strftime("%Y-%m")
-        return [
+        values = [
             self.entry_id,
             self.timestamp.strftime("%H:%M:%S"),
             usage_date,
@@ -104,13 +114,20 @@ class CardUsageRow:
             self.logged_by,
             self.raw_input,
             f"{self.amount:.2f}",
-            self.payment_method,
-            self.description,
-            self.usage_type,
-            self.status,
-            str(self.telegram_chat_id),
-            str(self.telegram_message_id),
         ]
+        if include_payment_owner:
+            values.append(self.payment_owner or self.logged_by)
+        values.extend(
+            [
+                self.payment_method,
+                self.description,
+                self.usage_type,
+                self.status,
+                str(self.telegram_chat_id),
+                str(self.telegram_message_id),
+            ]
+        )
+        return values
 
 
 @dataclass(frozen=True)
@@ -127,3 +144,4 @@ class CardUsageRecord:
     description: str
     usage_type: str
     status: str
+    payment_owner: str = ""

@@ -15,6 +15,7 @@ def record(
     payment_method: str,
     expense_date: str = "2026-07-10",
     logged_by: str = "Me",
+    payment_owner: str = "",
 ) -> ExpenseRecord:
     return ExpenseRecord(
         row_number=2,
@@ -30,6 +31,7 @@ def record(
         input_type="Text",
         status="Confirmed",
         payment_method=payment_method,
+        payment_owner=payment_owner,
     )
 
 
@@ -39,6 +41,7 @@ def card_usage(
     payment_method: str,
     usage_date: str = "2026-07-10",
     logged_by: str = "Me",
+    payment_owner: str = "",
 ) -> CardUsageRecord:
     return CardUsageRecord(
         row_number=2,
@@ -53,6 +56,7 @@ def card_usage(
         description="doctor claim",
         usage_type="Claimable",
         status="Confirmed",
+        payment_owner=payment_owner,
     )
 
 
@@ -186,3 +190,54 @@ class TestCardTracking(unittest.TestCase):
         self.assertEqual(item.total_spend, Decimal("180"))
         self.assertEqual(item.limits[0].spent, Decimal("60"))
         self.assertEqual(item.limits[1].spent, Decimal("0"))
+
+    def test_spouse_logged_expense_counts_for_the_selected_card_owner(self):
+        items = build_card_summary(
+            self.config,
+            [
+                record(
+                    "wife01",
+                    "80",
+                    "Shopping - My wife",
+                    "UOB Lady's",
+                    logged_by="My wife",
+                    payment_owner="Me",
+                )
+            ],
+            "Me",
+            date(2026, 7, 10),
+        )
+
+        uob_ladys = next(item for item in items if item.payment_method.name == "UOB Lady's")
+        self.assertEqual(uob_ladys.total_spend, Decimal("80"))
+
+    def test_spouse_logged_card_usage_counts_for_the_selected_card_owner(self):
+        config = parse_payment_config(
+            [
+                ["Payment Method", "Owner", "Type", "Cycle Type", "Cycle Start Day", "Active"],
+                ["Citi Rewards", "Me", "Credit Card", "Calendar", "1", "TRUE"],
+            ],
+            [
+                ["Payment Method", "Owner", "Category", "Limit Amount", "Active"],
+                ["Citi Rewards", "Me", "All", "1000", "TRUE"],
+            ],
+        )
+
+        item = build_card_summary(
+            config,
+            [],
+            "Me",
+            date(2026, 7, 10),
+            [
+                card_usage(
+                    "claim1",
+                    "120",
+                    "Citi Rewards",
+                    logged_by="My wife",
+                    payment_owner="Me",
+                )
+            ],
+        )[0]
+
+        self.assertEqual(item.total_spend, Decimal("120"))
+        self.assertEqual(item.limits[0].spent, Decimal("120"))

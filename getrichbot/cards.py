@@ -318,7 +318,8 @@ def _is_matching_card_expense(
 ) -> bool:
     if record.status.casefold() != "confirmed" or record.transaction_type.casefold() != "expense":
         return False
-    if record.logged_by != owner or record.payment_method.casefold() != payment_method.casefold():
+    payment_owner = record.payment_owner or record.logged_by
+    if payment_owner != owner or record.payment_method.casefold() != payment_method.casefold():
         return False
     try:
         record_date = date.fromisoformat(record.expense_date)
@@ -336,7 +337,8 @@ def _is_matching_card_usage(
 ) -> bool:
     if record.status.casefold() != "confirmed":
         return False
-    if record.logged_by != owner or record.payment_method.casefold() != payment_method.casefold():
+    payment_owner = record.payment_owner or record.logged_by
+    if payment_owner != owner or record.payment_method.casefold() != payment_method.casefold():
         return False
     try:
         record_date = date.fromisoformat(record.usage_date)

@@ -18,6 +18,7 @@ from getrichbot.categories import ALL_CATEGORIES, CATEGORY_ALIASES, FIXED_CATEGO
 from getrichbot.config import Settings
 from getrichbot.cards import PaymentConfig, build_card_summary, format_card_summary
 from getrichbot.image_utils import prepare_image_for_vision
+from getrichbot.logging_utils import configure_logging
 from getrichbot.models import CardUsageRow, ExpenseDraft, ExpenseRecord, ExpenseRow
 from getrichbot.parser import categorize_description, extract_date_phrase, extract_standalone_date, parse_expense, parse_expenses
 from getrichbot.sheets import SheetsClient
@@ -3032,7 +3033,7 @@ def load_category_config_from_sheets(settings: Settings, sheets: SheetsClient) -
 
 
 def main() -> None:
-    logging.basicConfig(level=logging.INFO, force=True)
+    configure_logging()
     print("GetRichBot startup reached.", flush=True)
     settings = Settings.load()
     LOGGER.info("Starting GetRichBot. Raw sheet: %s. Fixed sheet: %s.", settings.raw_expenses_sheet, settings.fixed_expenses_sheet)

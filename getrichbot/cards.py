@@ -27,6 +27,7 @@ class CardLimit:
     owner: str
     category: str
     amount: Decimal
+    payment_channel: str = "All"
 
 
 @dataclass(frozen=True)
@@ -43,6 +44,15 @@ class PaymentConfig:
             for limit in self.card_limits
             if limit.owner == owner and limit.payment_method.casefold() == payment_method.casefold()
         )
+
+    def channel_options_for(self, owner: str, payment_method: str) -> tuple[str, ...]:
+        channels: list[str] = []
+        for limit in self.limits_for(owner, payment_method):
+            if limit.payment_channel.casefold() == "all":
+                continue
+            if not any(channel.casefold() == limit.payment_channel.casefold() for channel in channels):
+                channels.append(limit.payment_channel)
+        return tuple(channels)
 
     def method_for(self, owner: str, payment_method: str) -> PaymentMethod | None:
         for method in self.methods_for_owner(owner):
@@ -89,9 +99,11 @@ def parse_payment_config(method_rows: list[list[str]], limit_rows: list[list[str
     return PaymentConfig(tuple(methods), tuple(limits))
 
 
-def current_card_period(method: PaymentMethod, today: date) -> tuple[date, date]:
+def current_card_period(method: PaymentMethod, today: date, cycle_offset: int = 0) -> tuple[date, date]:
     if method.cycle_type.casefold() == "calendar":
-        return today.replace(day=1), today.replace(day=calendar.monthrange(today.year, today.month)[1])
+        start = today.replace(day=1)
+        end = today.replace(day=calendar.monthrange(today.year, today.month)[1])
+        return _shift_card_period(method, start, end, cycle_offset)
 
     start_this_month = _date_in_month(today.year, today.month, method.cycle_start_day)
     if today >= start_this_month:
@@ -101,7 +113,8 @@ def current_card_period(method: PaymentMethod, today: date) -> tuple[date, date]
         start = _date_in_month(previous_month.year, previous_month.month, method.cycle_start_day)
     next_month = (start.replace(day=1) + date.resolution * 32).replace(day=1)
     next_start = _date_in_month(next_month.year, next_month.month, method.cycle_start_day)
-    return start, next_start - date.resolution
+    end = next_start - date.resolution
+    return _shift_card_period(method, start, end, cycle_offset)
 
 
 def build_card_summary(
@@ -110,13 +123,14 @@ def build_card_summary(
     owner: str,
     today: date,
     card_usage_records: list[CardUsageRecord] | None = None,
+    cycle_offset: int = 0,
 ) -> list[CardSummaryItem]:
     card_usage_records = card_usage_records or []
     items: list[CardSummaryItem] = []
     for method in config.methods_for_owner(owner):
         if not method.is_credit_card:
             continue
-        period_start, period_end = current_card_period(method, today)
+        period_start, period_end = current_card_period(method, today, cycle_offset=cycle_offset)
         card_records = [
             record
             for record in records
@@ -135,6 +149,7 @@ def build_card_summary(
                         record.amount
                         for record in card_records
                         if _matches_limit_category(record, limit.category)
+                        and _matches_limit_channel(record.payment_channel, limit.payment_channel)
                     ),
                     Decimal("0"),
                 )
@@ -143,6 +158,7 @@ def build_card_summary(
                         record.amount
                         for record in usage_records
                         if limit.category.casefold() == "all"
+                        and _matches_limit_channel(record.payment_channel, limit.payment_channel)
                     ),
                     Decimal("0"),
                 ),
@@ -162,13 +178,13 @@ def build_card_summary(
     return items
 
 
-def format_card_summary(items: list[CardSummaryItem]) -> str:
+def format_card_summary(items: list[CardSummaryItem], title: str = "Card summary") -> str:
     if not items:
         return "No active credit cards are configured for you."
 
     capped = [item for item in items if item.limits]
     uncapped = [item for item in items if not item.limits]
-    lines = ["Card summary"]
+    lines = [title]
     if capped:
         lines.extend(["", "Capped:", ""])
         for item in capped:
@@ -241,19 +257,22 @@ def _parse_card_limits(rows: list[list[str]]) -> list[CardLimit]:
             "payment_method": ("payment method",),
             "owner": ("owner",),
             "category": ("category", "applies to categories"),
+            "payment_channel": ("payment channel", "channel"),
             "amount": ("limit amount",),
             "active": ("active",),
         },
         "Card Limits",
+        required=("payment_method", "owner", "category", "amount", "active"),
     )
     limits: list[CardLimit] = []
-    seen: set[tuple[str, str, str]] = set()
+    seen: set[tuple[str, str, str, str]] = set()
     for row in data_rows:
         if not _is_active(_value(row, indexes["active"])):
             continue
         payment_method = _value(row, indexes["payment_method"])
         owner = _value(row, indexes["owner"])
         category = _value(row, indexes["category"])
+        payment_channel = _value(row, indexes.get("payment_channel", -1)) or "All"
         amount_raw = _value(row, indexes["amount"])
         if not payment_method or not owner or not category:
             raise ValueError("Each active Card Limits row needs Payment Method, Owner, and Category.")
@@ -265,11 +284,11 @@ def _parse_card_limits(rows: list[list[str]]) -> list[CardLimit]:
             amount = Decimal(amount_raw.replace(",", "").replace("S$", "").replace("$", ""))
         except Exception as exc:
             raise ValueError(f"Could not read limit amount for {payment_method} / {category}.") from exc
-        key = (owner.casefold(), payment_method.casefold(), category.casefold())
+        key = (owner.casefold(), payment_method.casefold(), category.casefold(), payment_channel.casefold())
         if key in seen:
-            raise ValueError(f"Card Limits has a duplicate active row for {payment_method} / {owner} / {category}.")
+            raise ValueError(f"Card Limits has a duplicate active row for {payment_method} / {owner} / {category} / {payment_channel}.")
         seen.add(key)
-        limits.append(CardLimit(payment_method, owner, category, amount))
+        limits.append(CardLimit(payment_method, owner, category, amount, payment_channel))
     return limits
 
 
@@ -279,13 +298,20 @@ def _headers_and_rows(rows: list[list[str]]) -> tuple[dict[str, int], list[list[
     return ({_normalize_header(value): index for index, value in enumerate(rows[0])}, rows[1:])
 
 
-def _required_indexes(headers: dict[str, int], wanted: dict[str, tuple[str, ...]], sheet_name: str) -> dict[str, int]:
+def _required_indexes(
+    headers: dict[str, int],
+    wanted: dict[str, tuple[str, ...]],
+    sheet_name: str,
+    required: tuple[str, ...] | None = None,
+) -> dict[str, int]:
     indexes: dict[str, int] = {}
     missing: list[str] = []
+    required_keys = set(required or wanted.keys())
     for key, aliases in wanted.items():
         index = next((headers[alias] for alias in aliases if alias in headers), None)
         if index is None:
-            missing.append(aliases[0].title())
+            if key in required_keys:
+                missing.append(aliases[0].title())
         else:
             indexes[key] = index
     if missing:
@@ -298,6 +324,8 @@ def _normalize_header(value: str) -> str:
 
 
 def _value(row: list[str], index: int) -> str:
+    if index < 0:
+        return ""
     return str(row[index]).strip() if index < len(row) else ""
 
 
@@ -307,6 +335,25 @@ def _is_active(value: str) -> bool:
 
 def _date_in_month(year: int, month: int, day: int) -> date:
     return date(year, month, min(day, calendar.monthrange(year, month)[1]))
+
+
+def _shift_card_period(method: PaymentMethod, start: date, end: date, cycle_offset: int) -> tuple[date, date]:
+    if cycle_offset == 0:
+        return start, end
+    if cycle_offset > 0:
+        shifted_start = start
+        shifted_end = end
+        for _ in range(cycle_offset):
+            next_reference = shifted_end + date.resolution
+            shifted_start, shifted_end = current_card_period(method, next_reference)
+        return shifted_start, shifted_end
+
+    shifted_start = start
+    shifted_end = end
+    for _ in range(abs(cycle_offset)):
+        previous_reference = shifted_start - date.resolution
+        shifted_start, shifted_end = current_card_period(method, previous_reference)
+    return shifted_start, shifted_end
 
 
 def _is_matching_card_expense(
@@ -351,11 +398,20 @@ def _matches_limit_category(record: ExpenseRecord, category: str) -> bool:
     return category.casefold() == "all" or record.category.casefold() == category.casefold()
 
 
+def _matches_limit_channel(record_channel: str, limit_channel: str) -> bool:
+    return limit_channel.casefold() == "all" or record_channel.casefold() == limit_channel.casefold()
+
+
 def _format_limit_usage(usage: CardLimitUsage, include_category: bool) -> str:
     usage_text = f"${usage.spent:,.2f}/${usage.limit.amount:,.2f} ({_limit_marker(usage.percent)} {usage.percent:.0f}%)"
     if not include_category:
         return usage_text
-    label = "All spending" if usage.limit.category.casefold() == "all" else usage.limit.category
+    label_parts: list[str] = []
+    if usage.limit.category.casefold() != "all":
+        label_parts.append(usage.limit.category)
+    if usage.limit.payment_channel.casefold() != "all":
+        label_parts.append(usage.limit.payment_channel)
+    label = " / ".join(label_parts) if label_parts else "All spending"
     return f"{label} - {usage_text}"
 
 

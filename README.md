@@ -53,7 +53,7 @@ Create a Google Sheet with these tabs:
 Header row:
 
 ```text
-Entry ID,Timestamp,Date,Month,Logged By,Raw Input,Amount,Category,Description,Payment Owner,Payment Method,Transaction Type,Input Type,Status,Telegram Chat ID,Telegram Message ID
+Entry ID,Timestamp,Date,Month,Logged By,Raw Input,Amount,Category,Description,Payment Owner,Payment Method,Payment Channel,Transaction Type,Input Type,Status,Telegram Chat ID,Telegram Message ID
 ```
 
 `Timestamp` is time only, for example `21:34:12`. `Date` stores the transaction date.
@@ -61,6 +61,8 @@ Entry ID,Timestamp,Date,Month,Logged By,Raw Input,Amount,Category,Description,Pa
 `Payment Owner` identifies whose card or payment account was used. `Logged By` remains the person who submitted the expense, so personal history and sender-specific shopping categories remain accurate. If an old row has a `Payment Method` but no `Payment Owner`, the bot treats `Logged By` as the payment owner.
 
 `Payment Method` is selected in Telegram for new normal expenses. Historical rows may be blank; they remain valid for monthly summaries but are not included in card tracking.
+
+`Payment Channel` is how the payment was made, such as `Online`, `PayWave`, or `All`. The bot asks for this only when the selected card has channel-specific limits.
 
 `Transaction Type` is one of:
 
@@ -123,25 +125,29 @@ Use `Calendar` with a start day of `1` for a calendar-month cap. Use `Billing` a
 Create a `Card Limits` tab. Add a row only when a card has a cap you want to track. A card with no row here is still selectable and appears under `Uncapped` in the card summary. If you prefer to list every card here, leave `Limit Amount` blank for an uncapped card; it is treated the same as having no cap.
 
 ```text
-Payment Method,Owner,Category,Limit Amount,Active
-Example Rewards Card,Me,Food,750,TRUE
-Example Rewards Card,Me,Groceries,750,TRUE
-Example Rewards Card,My wife,All,1000,TRUE
+Payment Method,Owner,Category,Payment Channel,Limit Amount,Active,Notes
+Example Rewards Card,Me,Food,All,750,TRUE,
+Example Rewards Card,Me,Groceries,All,750,TRUE,
+Example Rewards Card,Me,All,Online,600,TRUE,
+Example Rewards Card,Me,All,PayWave,600,TRUE,
+Example Rewards Card,My wife,All,All,1000,TRUE,
 ```
 
-The `Payment Method` and `Owner` pair must match `Payment Methods` exactly. `Category` must be an existing expense category, or `All` for an overall cap. A transaction can count towards both an overall `All` cap and a category-specific cap where both are configured.
+The `Payment Method` and `Owner` pair must match `Payment Methods` exactly. `Category` must be an existing expense category, or `All` for an overall cap. `Payment Channel` should be `All` unless the card has separate caps for channels such as `Online` and `PayWave`. A transaction can count towards both an overall `All` cap and category/channel-specific caps where they are configured.
+
+If a card has multiple active non-`All` payment channels, the bot asks which channel was used after the payment method is selected. If there is only one non-`All` channel, the bot uses that channel automatically.
 
 ### Card Usage
 
 Create a `Card Usage` tab for claimable or card-only spend that should affect card limits but should not be counted as household expenses.
 
 ```text
-Entry ID,Timestamp,Date,Month,Logged By,Raw Input,Amount,Payment Owner,Payment Method,Description,Usage Type,Status,Telegram Chat ID,Telegram Message ID
+Entry ID,Timestamp,Date,Month,Logged By,Raw Input,Amount,Payment Owner,Payment Method,Payment Channel,Description,Usage Type,Status,Telegram Chat ID,Telegram Message ID
 ```
 
 Use this for entries such as insurance claims, reimbursable healthcare, or other card spend that should not affect `Monthly Summary`.
 
-Rows in `Card Usage` are not expense-categorised. They count toward total card spend and `All` card limits. They do not count toward category-specific limits such as `Food` or `Groceries`.
+Rows in `Card Usage` are not expense-categorised. They count toward total card spend and `All` category card limits. They can still count toward channel-specific limits when a `Payment Channel` is selected.
 
 If you manually delete a row from `Card Usage`, it is removed from card-limit calculations the next time you ask for card summary.
 
@@ -351,6 +357,8 @@ Commands:
 - `/pending` - show entries needing confirmation
 - `/summary` - show this month's checkpoint summary
 - `/cards` or `/cardlimits` - show your current card spending and limits
+- `/cards last month` - show your previous card cycle
+- `/cards July 2026` - show the card cycle containing that month
 - `/confirm <pending_id> <category>` - confirm a pending entry
 - `/undo` - delete your latest logged row from Google Sheets
 - `/fixed` - preview active fixed expenses
@@ -380,6 +388,9 @@ Plain-language shortcuts:
 - `summary this month`
 - `summary last month`
 - `card summary`
+- `card summary last month`
+- `cards last cycle`
+- `card summary july 2026`
 - `card limits`
 - `credit card limits`
 - `food for june`
@@ -430,6 +441,12 @@ If a duplicate is found while confirming a pending list, the bot stops at the fi
 ### Card Summary
 
 Use `card summary`, `card limits`, `/cards`, or `/cardlimits` to see only your own active credit cards. Capped cards are grouped under `Capped:` and uncapped cards under `Uncapped:`. Cards with one limit show card, spend, cap, and percentage on one line. Cards with multiple limits show their category lines below the card name. Card-cycle dates are used for calculation but omitted from the message.
+
+Use `card summary last month`, `cards last cycle`, or `card limits previous month` to see the previous card cycle. For cards using a billing-cycle reset day, this means the previous billing cycle, not the previous calendar month. For cards using `Calendar`, it naturally means the previous calendar month.
+
+You can also ask for a specific month or date, for example `card summary July 2026`, `card limits 2026-07`, or `cards 11 Aug`. The bot calculates the card cycle that contains that month or date.
+
+To split one card into sub-limits, add multiple active rows in `Card Limits` for the same `Payment Method` and `Owner`, using different categories, payment channels, or both.
 
 The cap marker is green below 60%, yellow from 60% to 79%, orange from 80% to 94%, and red at 95% or more.
 
@@ -501,6 +518,7 @@ The bot shows the full fixed expense list again after edits. Once you reply `con
 - Multiple undated expense lines default to today's date.
 - Category changes should be made in the `Categories` and `Category Keywords` Google Sheet tabs. After editing those tabs, send `/refreshcategories` in Telegram so the running Railway bot reloads the latest sheet values.
 - Payment methods and limits should be changed in `Payment Methods` and `Card Limits`. After editing either tab, send `/refreshpayments` to load the change immediately. Otherwise, the bot keeps the current payment configuration for up to one minute after a read.
+- Card sub-limits are configured by adding multiple `Card Limits` rows for the same owner/card. Each row tracks spending by category, payment channel, or both within the card cycle.
 - Each person sees their own active payment methods first. The partner-card button opens the other person's active credit cards. Choosing a partner's card changes `Payment Owner`, but does not change `Logged By` or the expense category.
 - Claimable or card-only spend goes to `Card Usage`, not `Raw Expenses`. Manually deleting a `Card Usage` row removes it from future card summary calculations.
 - Payment selection is temporary while the bot is running. If Railway restarts before you tap a payment button, resend the expense instead of assuming it was logged.

@@ -16,6 +16,7 @@ def record(
     expense_date: str = "2026-07-10",
     logged_by: str = "Me",
     payment_owner: str = "",
+    payment_channel: str = "",
 ) -> ExpenseRecord:
     return ExpenseRecord(
         row_number=2,
@@ -32,6 +33,7 @@ def record(
         status="Confirmed",
         payment_method=payment_method,
         payment_owner=payment_owner,
+        payment_channel=payment_channel,
     )
 
 
@@ -42,6 +44,7 @@ def card_usage(
     usage_date: str = "2026-07-10",
     logged_by: str = "Me",
     payment_owner: str = "",
+    payment_channel: str = "",
 ) -> CardUsageRecord:
     return CardUsageRecord(
         row_number=2,
@@ -57,6 +60,7 @@ def card_usage(
         usage_type="Claimable",
         status="Confirmed",
         payment_owner=payment_owner,
+        payment_channel=payment_channel,
     )
 
 
@@ -83,6 +87,73 @@ class TestCardTracking(unittest.TestCase):
         start, end = current_card_period(card, date(2026, 7, 10))
         self.assertEqual(start, date(2026, 6, 17))
         self.assertEqual(end, date(2026, 7, 16))
+
+    def test_previous_billing_cycle_uses_configured_reset_day(self):
+        config = parse_payment_config(
+            [
+                ["Payment Method", "Owner", "Type", "Cycle Type", "Cycle Start Day", "Active"],
+                ["Citi Rewards", "My wife", "Credit Card", "Billing", "14", "TRUE"],
+            ],
+            [
+                ["Payment Method", "Owner", "Category", "Limit Amount", "Active"],
+                ["Citi Rewards", "My wife", "Shopping - My wife", "1000", "TRUE"],
+            ],
+        )
+        card = config.method_for("My wife", "Citi Rewards")
+        start, end = current_card_period(card, date(2026, 8, 15), cycle_offset=-1)
+
+        self.assertEqual(start, date(2026, 7, 14))
+        self.assertEqual(end, date(2026, 8, 13))
+
+    def test_summary_can_count_previous_billing_cycle(self):
+        config = parse_payment_config(
+            [
+                ["Payment Method", "Owner", "Type", "Cycle Type", "Cycle Start Day", "Active"],
+                ["Citi Rewards", "My wife", "Credit Card", "Billing", "14", "TRUE"],
+            ],
+            [
+                ["Payment Method", "Owner", "Category", "Limit Amount", "Active"],
+                ["Citi Rewards", "My wife", "Shopping - My wife", "1000", "TRUE"],
+            ],
+        )
+
+        current_item = build_card_summary(
+            config,
+            [
+                record(
+                    "wife01",
+                    "399.25",
+                    "Shopping - My wife",
+                    "Citi Rewards",
+                    "2026-08-11",
+                    "My wife",
+                    payment_owner="My wife",
+                )
+            ],
+            "My wife",
+            date(2026, 8, 15),
+        )[0]
+        previous_item = build_card_summary(
+            config,
+            [
+                record(
+                    "wife01",
+                    "399.25",
+                    "Shopping - My wife",
+                    "Citi Rewards",
+                    "2026-08-11",
+                    "My wife",
+                    payment_owner="My wife",
+                )
+            ],
+            "My wife",
+            date(2026, 8, 15),
+            cycle_offset=-1,
+        )[0]
+
+        self.assertEqual(current_item.total_spend, Decimal("0"))
+        self.assertEqual(previous_item.total_spend, Decimal("399.25"))
+        self.assertEqual(previous_item.limits[0].spent, Decimal("399.25"))
 
     def test_summary_keeps_capped_and_uncapped_cards_separate(self):
         items = build_card_summary(
@@ -190,6 +261,62 @@ class TestCardTracking(unittest.TestCase):
         self.assertEqual(item.total_spend, Decimal("180"))
         self.assertEqual(item.limits[0].spent, Decimal("60"))
         self.assertEqual(item.limits[1].spent, Decimal("0"))
+
+    def test_channel_specific_limits_count_only_matching_channel(self):
+        config = parse_payment_config(
+            [
+                ["Payment Method", "Owner", "Type", "Cycle Type", "Cycle Start Day", "Active"],
+                ["UOB PP (Blue)", "Me", "Credit Card", "Calendar", "1", "TRUE"],
+            ],
+            [
+                ["Payment Method", "Owner", "Category", "Payment Channel", "Limit Amount", "Active"],
+                ["UOB PP (Blue)", "Me", "All", "PayWave", "600", "TRUE"],
+                ["UOB PP (Blue)", "Me", "All", "Online", "600", "TRUE"],
+            ],
+        )
+
+        item = build_card_summary(
+            config,
+            [
+                record("online", "120", "Food", "UOB PP (Blue)", payment_channel="Online"),
+                record("paywve", "80", "Groceries", "UOB PP (Blue)", payment_channel="PayWave"),
+                record("blank1", "50", "Food", "UOB PP (Blue)"),
+            ],
+            "Me",
+            date(2026, 7, 10),
+        )[0]
+
+        self.assertEqual(config.channel_options_for("Me", "UOB PP (Blue)"), ("PayWave", "Online"))
+        self.assertEqual(item.total_spend, Decimal("250"))
+        self.assertEqual(item.limits[0].spent, Decimal("80"))
+        self.assertEqual(item.limits[1].spent, Decimal("120"))
+        message = format_card_summary([item])
+        self.assertIn("PayWave - $80.00/$600.00", message)
+        self.assertIn("Online - $120.00/$600.00", message)
+
+    def test_all_channel_limit_counts_blank_and_specific_channels(self):
+        config = parse_payment_config(
+            [
+                ["Payment Method", "Owner", "Type", "Cycle Type", "Cycle Start Day", "Active"],
+                ["DBS' Womens", "Me", "Credit Card", "Calendar", "1", "TRUE"],
+            ],
+            [
+                ["Payment Method", "Owner", "Category", "Payment Channel", "Limit Amount", "Active"],
+                ["DBS' Womens", "Me", "All", "All", "1000", "TRUE"],
+            ],
+        )
+
+        item = build_card_summary(
+            config,
+            [
+                record("online", "120", "Food", "DBS' Womens", payment_channel="Online"),
+                record("blank1", "50", "Food", "DBS' Womens"),
+            ],
+            "Me",
+            date(2026, 7, 10),
+        )[0]
+
+        self.assertEqual(item.limits[0].spent, Decimal("170"))
 
     def test_spouse_logged_expense_counts_for_the_selected_card_owner(self):
         items = build_card_summary(

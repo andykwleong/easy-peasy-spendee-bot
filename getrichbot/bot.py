@@ -10,6 +10,7 @@ from dataclasses import dataclass, replace
 from decimal import Decimal, InvalidOperation
 from datetime import time
 from datetime import datetime
+from datetime import date
 from datetime import timedelta
 from time import perf_counter
 from zoneinfo import ZoneInfo
@@ -44,6 +45,7 @@ SINGAPORE_TZ = ZoneInfo("Asia/Singapore")
 RECENT_DUPLICATE_WINDOW = timedelta(minutes=1)
 INCOME_CATEGORY_CALLBACK = "income_category"
 PAYMENT_METHOD_CALLBACK = "payment_method"
+PAYMENT_CHANNEL_CALLBACK = "payment_channel"
 PAYMENT_CONFIG_CACHE_WINDOW = timedelta(minutes=1)
 HELP_TEXT = """Send expenses naturally:
 dinner 60
@@ -66,6 +68,8 @@ Useful commands:
 /refreshpayments - reload payment methods and card limits from Google Sheets
 /summary - show this month's checkpoint
 /cards or /cardlimits - show your card spending against current limits
+/cards last month - show the previous card cycle
+/cards July 2026 - show the card cycle containing that month
 /fixed - preview fixed expenses
 /confirmfixed - review fixed expenses
 /undo - delete your latest logged expense
@@ -73,6 +77,7 @@ Useful commands:
 Payment methods:
 Choose one of your methods, or use the partner-card button to choose one of their credit cards.
 The expense category and Logged By still follow the person who submitted the expense.
+Cards with channel-specific limits will ask for Online, PayWave, or the configured channel after card selection.
 
 Plain replies also work:
 confirm abc123 as Food
@@ -99,6 +104,16 @@ class PendingExpense:
     payment_options: tuple[str, ...] = ()
     payment_option_owners: tuple[str, ...] = ()
     payment_view_owner: str | None = None
+    selected_payment_method: str = ""
+    selected_payment_owner: str = ""
+    payment_channel_options: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class CardSummaryRequest:
+    reference_date: date
+    cycle_offset: int
+    title: str = "Card summary"
 
 
 @dataclass
@@ -616,8 +631,9 @@ class FinanceBot:
             await update.message.reply_text(HELP_TEXT)
             return True
 
-        if _is_card_summary_request(lowered):
-            await self._reply_with_card_summary(update)
+        card_summary_request = _parse_card_summary_request(text, datetime.now(SINGAPORE_TZ).date())
+        if card_summary_request is not None:
+            await self._reply_with_card_summary(update, card_summary_request)
             return True
 
         if await self._reply_with_category_breakdown(update, text):
@@ -1340,9 +1356,10 @@ class FinanceBot:
         summary = build_spending_summary(records, period)
         await update.message.reply_text(format_spending_summary(summary))
 
-    async def _reply_with_card_summary(self, update: Update) -> None:
+    async def _reply_with_card_summary(self, update: Update, request: CardSummaryRequest | None = None) -> None:
         if update.message is None or update.effective_user is None:
             return
+        request = request or CardSummaryRequest(datetime.now(SINGAPORE_TZ).date(), 0)
         logged_by = self.settings.label_for_user(update.effective_user.id)
         if logged_by is None:
             await update.message.reply_text("I do not recognize this Telegram user ID yet.")
@@ -1354,8 +1371,15 @@ class FinanceBot:
             return
         records = self.sheets.get_expense_records(self.settings.raw_expenses_sheet)
         card_usage_records = self.sheets.get_card_usage_records(self.settings.card_usage_sheet) if hasattr(self.sheets, "get_card_usage_records") else []
-        items = build_card_summary(config, records, logged_by, datetime.now(SINGAPORE_TZ).date(), card_usage_records)
-        await update.message.reply_text(format_card_summary(items), do_quote=False)
+        items = build_card_summary(
+            config,
+            records,
+            logged_by,
+            request.reference_date,
+            card_usage_records,
+            cycle_offset=request.cycle_offset,
+        )
+        await update.message.reply_text(format_card_summary(items, title=request.title), do_quote=False)
 
     async def _reply_with_category_breakdown(self, update: Update, text: str) -> bool:
         if update.message is None or update.effective_user is None:
@@ -2595,9 +2619,118 @@ class FinanceBot:
             await query.answer("That payment method is no longer active.", show_alert=True)
             return
 
+        channel_options = config.channel_options_for(payment_owner, payment_method)
+        if len(channel_options) > 1:
+            self.pending[pending_id] = replace(
+                pending,
+                selected_payment_method=payment_method,
+                selected_payment_owner=payment_owner,
+                payment_channel_options=channel_options,
+            )
+            await query.answer()
+            await self._request_payment_channel(update, pending_id, edit_existing=True)
+            return
+
         await query.answer()
+        payment_channel = channel_options[0] if channel_options else "All"
+        await self._finish_payment_choice(update, pending_id, pending, payment_method, payment_owner, payment_channel)
+
+    async def _request_payment_channel(
+        self,
+        update: Update,
+        pending_id: str,
+        edit_existing: bool = False,
+    ) -> bool:
+        pending = self.pending.get(pending_id)
+        if pending is None:
+            return False
+        date_value = pending.draft.expense_date or datetime.now(SINGAPORE_TZ).date()
+        method_text = f"{pending.selected_payment_method}"
         if pending.reason == "card_usage":
-            row = self._card_usage_row_from_pending(pending, payment_method, payment_owner)
+            message_text = (
+                "Which payment channel?\n\n"
+                + f"${pending.draft.amount:,.2f} card usage only - "
+                + f"{self._human_date(date_value)} - {pending.draft.description}\n\n"
+                + f"Payment method: {method_text}"
+            )
+        else:
+            message_text = (
+                "Which payment channel?\n\n"
+                + f"${pending.draft.amount:,.2f} to {pending.draft.category} - "
+                + f"{self._human_date(date_value)} - {pending.draft.description}\n\n"
+                + f"Payment method: {method_text}"
+            )
+        await self._show_payment_method_message(
+            update,
+            message_text,
+            self._payment_channel_keyboard(pending_id, pending.payment_channel_options),
+            edit_existing,
+        )
+        return True
+
+    def _payment_channel_keyboard(self, pending_id: str, options: tuple[str, ...]):
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+        buttons = [
+            InlineKeyboardButton(name, callback_data=f"{PAYMENT_CHANNEL_CALLBACK}|{pending_id}|{index}")
+            for index, name in enumerate(options)
+        ]
+        return InlineKeyboardMarkup([buttons[index:index + 2] for index in range(0, len(buttons), 2)])
+
+    async def handle_payment_channel_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        query = update.callback_query
+        if query is None or update.effective_user is None:
+            return
+        parts = (query.data or "").split("|")
+        if len(parts) != 3 or parts[0] != PAYMENT_CHANNEL_CALLBACK:
+            return
+        pending_id = parts[1]
+        try:
+            option_index = int(parts[2])
+        except ValueError:
+            await query.answer("That payment channel is invalid.", show_alert=True)
+            return
+        pending = self.pending.get(pending_id)
+        if pending is None:
+            await query.edit_message_reply_markup(reply_markup=None)
+            await query.answer("This payment choice is no longer available.", show_alert=True)
+            return
+        logged_by = self.settings.label_for_user(update.effective_user.id)
+        message_chat_id = query.message.chat_id if query.message is not None else None
+        if logged_by is None or logged_by != pending.logged_by or message_chat_id != pending.chat_id:
+            await query.answer("Only the person who submitted this expense can choose its payment channel.", show_alert=True)
+            return
+        if option_index < 0 or option_index >= len(pending.payment_channel_options):
+            await query.answer("That payment channel is no longer available.", show_alert=True)
+            return
+        payment_channel = pending.payment_channel_options[option_index]
+        if not pending.selected_payment_method or not pending.selected_payment_owner:
+            await query.answer("Please choose the payment method again.", show_alert=True)
+            return
+        await query.answer()
+        await self._finish_payment_choice(
+            update,
+            pending_id,
+            pending,
+            pending.selected_payment_method,
+            pending.selected_payment_owner,
+            payment_channel,
+        )
+
+    async def _finish_payment_choice(
+        self,
+        update: Update,
+        pending_id: str,
+        pending: PendingExpense,
+        payment_method: str,
+        payment_owner: str,
+        payment_channel: str,
+    ) -> None:
+        query = update.callback_query
+        if query is None:
+            return
+        if pending.reason == "card_usage":
+            row = self._card_usage_row_from_pending(pending, payment_method, payment_owner, payment_channel)
             self.sheets.append_card_usage(self.settings.card_usage_sheet, row)
             self.pending.pop(pending_id, None)
             await query.edit_message_reply_markup(reply_markup=None)
@@ -2617,6 +2750,7 @@ class FinanceBot:
             None,
             payment_method=payment_method,
             payment_owner=payment_owner,
+            payment_channel=payment_channel,
         )
         logged_line = await self._append_or_hold_duplicate(update, row, pending_id=pending_id)
         await query.edit_message_reply_markup(reply_markup=None)
@@ -2660,7 +2794,7 @@ class FinanceBot:
 
     def _payment_choice_is_active(self, update: Update) -> bool:
         matching = self._matching_pending(update, latest_batch_only=True) or self._matching_pending(update)
-        return any(pending.payment_options for _pending_id, pending in matching)
+        return any(pending.payment_options or pending.payment_channel_options for _pending_id, pending in matching)
 
     def _clear_payment_batch(self, update: Update) -> None:
         if update.effective_user is not None:
@@ -2690,6 +2824,7 @@ class FinanceBot:
         input_type: str,
         payment_method: str = "",
         payment_owner: str = "",
+        payment_channel: str = "",
     ) -> ExpenseRow:
         return ExpenseRow(
             entry_id=uuid.uuid4().hex[:6],
@@ -2706,6 +2841,7 @@ class FinanceBot:
             transaction_type=_transaction_type_for_category(category, input_type),
             payment_method=payment_method,
             payment_owner=payment_owner,
+            payment_channel=payment_channel,
         )
 
     def _row_timestamp(self, draft: ExpenseDraft) -> datetime:
@@ -2723,6 +2859,7 @@ class FinanceBot:
         date_override,
         payment_method: str = "",
         payment_owner: str = "",
+        payment_channel: str = "",
     ) -> ExpenseRow:
         draft = pending.draft
         if date_override is not None:
@@ -2750,6 +2887,7 @@ class FinanceBot:
             transaction_type=_transaction_type_for_category(category, input_type),
             payment_method=payment_method,
             payment_owner=payment_owner,
+            payment_channel=payment_channel,
         )
 
     def _card_usage_row_from_pending(
@@ -2757,6 +2895,7 @@ class FinanceBot:
         pending: PendingExpense,
         payment_method: str,
         payment_owner: str,
+        payment_channel: str,
     ) -> CardUsageRow:
         draft = pending.draft
         return CardUsageRow(
@@ -2767,6 +2906,7 @@ class FinanceBot:
             amount=draft.amount,
             payment_method=payment_method,
             payment_owner=payment_owner,
+            payment_channel=payment_channel,
             description=draft.description,
             usage_type=_card_usage_type(draft.raw_input),
             status="Confirmed",
@@ -2778,11 +2918,16 @@ class FinanceBot:
         if row.transaction_type.lower() == "income":
             return f"Logged income ${row.amount:.2f} to {row.category} - {self._human_date(row.timestamp.date())} [{row.entry_id}]"
         payment = f" via {row.payment_method}" if row.payment_method else ""
+        if row.payment_method and row.payment_channel and row.payment_channel.casefold() != "all":
+            payment = f" via {row.payment_method} ({row.payment_channel})"
         return f"Logged ${row.amount:.2f} to {row.category} - {self._human_date(row.timestamp.date())}{payment} [{row.entry_id}]"
 
     def _card_usage_logged_line(self, row: CardUsageRow) -> str:
+        payment = row.payment_method
+        if row.payment_channel and row.payment_channel.casefold() != "all":
+            payment = f"{payment} ({row.payment_channel})"
         return (
-            f"Tracked ${row.amount:.2f} on {row.payment_method} - "
+            f"Tracked ${row.amount:.2f} on {payment} - "
             f"{self._human_date(row.timestamp.date())} - card limit only, not added to expenses [{row.entry_id}]"
         )
 
@@ -2986,7 +3131,13 @@ def _normalize_lookup_text(value: str) -> str:
 
 
 def _is_card_summary_request(text: str) -> bool:
+    return _parse_card_summary_request(text, datetime.now(SINGAPORE_TZ).date()) is not None
+
+
+def _parse_card_summary_request(text: str, today: date) -> CardSummaryRequest | None:
     normalized = " ".join(text.lower().strip().split())
+    if normalized.startswith("/"):
+        normalized = normalized[1:]
     direct_matches = {
         "cards",
         "my cards",
@@ -3018,8 +3169,109 @@ def _is_card_summary_request(text: str) -> bool:
         "my credit cards limit",
     }
     if normalized in direct_matches:
-        return True
-    return re.fullmatch(r"(?:my\s+)?(?:credit\s+)?cards?\s+(?:summary|limits?)", normalized) is not None
+        return CardSummaryRequest(reference_date=today, cycle_offset=0)
+
+    if re.fullmatch(r"(?:my\s+)?(?:credit\s+)?cards?\s+(?:summary|limits?)", normalized) is not None:
+        return CardSummaryRequest(reference_date=today, cycle_offset=0)
+
+    if not _looks_like_card_summary_request(normalized):
+        return None
+
+    if re.search(r"\b(?:last|previous)\s+(?:month|cycle)\b", normalized):
+        return CardSummaryRequest(reference_date=today, cycle_offset=-1, title="Card summary - Last cycle")
+
+    reference_date = _parse_card_summary_reference_date(normalized, today)
+    if reference_date is None:
+        return CardSummaryRequest(reference_date=today, cycle_offset=0)
+    return CardSummaryRequest(
+        reference_date=reference_date,
+        cycle_offset=0,
+        title=f"Card summary - {reference_date.strftime('%B %Y')}",
+    )
+
+
+def _looks_like_card_summary_request(normalized: str) -> bool:
+    has_card_word = re.search(r"\b(?:card|cards|cardlimits|credit card|credit cards)\b", normalized) is not None
+    has_summary_word = re.search(r"\b(?:summary|summaries|limit|limits|spend|spending)\b", normalized) is not None
+    has_period_word = (
+        re.search(r"\b(?:last|previous|this)\s+(?:month|cycle)\b", normalized) is not None
+        or re.search(r"\b\d{4}-\d{1,2}\b", normalized) is not None
+        or re.search(
+            r"\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|"
+            r"sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b",
+            normalized,
+        )
+        is not None
+    )
+    return has_card_word and (has_summary_word or has_period_word)
+
+
+def _parse_card_summary_reference_date(normalized: str, today: date) -> date | None:
+    iso_match = re.search(r"\b(\d{4})-(\d{1,2})\b", normalized)
+    if iso_match is not None:
+        year = int(iso_match.group(1))
+        month = int(iso_match.group(2))
+        if 1 <= month <= 12:
+            return date(year, month, 1)
+
+    day_month_match = re.search(
+        r"\b(\d{1,2})(?:st|nd|rd|th)?\s+"
+        r"(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|"
+        r"sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)(?:\s+(\d{4}))?\b",
+        normalized,
+    )
+    if day_month_match is not None:
+        month = _card_summary_month_number(day_month_match.group(2))
+        year = int(day_month_match.group(3) or today.year)
+        day = int(day_month_match.group(1))
+        if month is not None:
+            try:
+                return date(year, month, day)
+            except ValueError:
+                return None
+
+    month_match = re.search(
+        r"\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|"
+        r"sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)(?:\s+(\d{4}))?\b",
+        normalized,
+    )
+    if month_match is not None:
+        month = _card_summary_month_number(month_match.group(1))
+        year = int(month_match.group(2) or today.year)
+        if month is not None:
+            return date(year, month, 1)
+
+    return None
+
+
+def _card_summary_month_number(value: str) -> int | None:
+    months = {
+        "jan": 1,
+        "january": 1,
+        "feb": 2,
+        "february": 2,
+        "mar": 3,
+        "march": 3,
+        "apr": 4,
+        "april": 4,
+        "may": 5,
+        "jun": 6,
+        "june": 6,
+        "jul": 7,
+        "july": 7,
+        "aug": 8,
+        "august": 8,
+        "sep": 9,
+        "sept": 9,
+        "september": 9,
+        "oct": 10,
+        "october": 10,
+        "nov": 11,
+        "november": 11,
+        "dec": 12,
+        "december": 12,
+    }
+    return months.get(value.lower())
 
 
 def load_category_config_from_sheets(settings: Settings, sheets: SheetsClient) -> dict:
@@ -3096,6 +3348,12 @@ def main() -> None:
         CallbackQueryHandler(
             finance_bot.handle_payment_method_callback,
             pattern=rf"^{PAYMENT_METHOD_CALLBACK}\|",
+        )
+    )
+    application.add_handler(
+        CallbackQueryHandler(
+            finance_bot.handle_payment_channel_callback,
+            pattern=rf"^{PAYMENT_CHANNEL_CALLBACK}\|",
         )
     )
     application.add_handler(MessageHandler(filters.PHOTO, finance_bot.handle_photo))

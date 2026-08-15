@@ -35,23 +35,25 @@ class SheetsClient:
 
     def append_expense(self, sheet_name: str, row: ExpenseRow) -> None:
         include_payment_owner = self.has_payment_owner_column(sheet_name)
+        include_payment_channel = self.has_payment_channel_column(sheet_name)
         self._service().spreadsheets().values().append(
             spreadsheetId=self.sheet_id,
-            range=f"{sheet_name}!A:P",
+            range=f"{sheet_name}!A:Q",
             valueInputOption="USER_ENTERED",
             insertDataOption="INSERT_ROWS",
-            body={"values": [row.to_sheet_row(include_payment_owner=include_payment_owner)]},
+            body={"values": [row.to_sheet_row(include_payment_owner=include_payment_owner, include_payment_channel=include_payment_channel)]},
         ).execute()
 
     def append_card_usage(self, sheet_name: str, row: CardUsageRow) -> None:
         self._ensure_sheet(sheet_name)
         include_payment_owner = self.has_payment_owner_column(sheet_name)
+        include_payment_channel = self.has_payment_channel_column(sheet_name)
         self._service().spreadsheets().values().append(
             spreadsheetId=self.sheet_id,
-            range=f"{sheet_name}!A:N",
+            range=f"{sheet_name}!A:O",
             valueInputOption="USER_ENTERED",
             insertDataOption="INSERT_ROWS",
-            body={"values": [row.to_sheet_row(include_payment_owner=include_payment_owner)]},
+            body={"values": [row.to_sheet_row(include_payment_owner=include_payment_owner, include_payment_channel=include_payment_channel)]},
         ).execute()
 
     def get_payment_config(self, payment_methods_sheet: str, card_limits_sheet: str) -> PaymentConfig:
@@ -184,7 +186,7 @@ class SheetsClient:
     def delete_entry_by_id(self, sheet_name: str, entry_id: str, logged_by: str | None = None) -> bool:
         result = self._service().spreadsheets().values().get(
             spreadsheetId=self.sheet_id,
-            range=f"{sheet_name}!A2:P",
+            range=f"{sheet_name}!A2:Q",
         ).execute()
         rows = result.get("values", [])
 
@@ -201,7 +203,7 @@ class SheetsClient:
     def delete_fixed_expenses_for_month(self, sheet_name: str, month: str) -> int:
         result = self._service().spreadsheets().values().get(
             spreadsheetId=self.sheet_id,
-            range=f"{sheet_name}!A2:P",
+            range=f"{sheet_name}!A2:Q",
         ).execute()
         rows = result.get("values", [])
         deleted_count = 0
@@ -252,12 +254,13 @@ class SheetsClient:
                     transaction_type=transaction_type,
                     payment_method=_record_payment_method(row),
                     payment_owner=_record_payment_owner(row),
+                    payment_channel=_record_payment_channel(row),
                 )
             )
         return records
 
     def get_card_usage_records(self, sheet_name: str) -> list[CardUsageRecord]:
-        source, rows = self._get_values_first_available([sheet_name], "A2:N")
+        source, rows = self._get_values_first_available([sheet_name], "A2:O")
         if source is None:
             return []
         records: list[CardUsageRecord] = []
@@ -268,12 +271,7 @@ class SheetsClient:
             amount = _parse_sheet_amount(_cell(row, 6))
             if amount is None:
                 continue
-            has_payment_owner = _cell(row, 11).casefold() in {"confirmed", "pending", "cancelled", "canceled"}
-            payment_method_index = 8 if has_payment_owner else 7
-            description_index = 9 if has_payment_owner else 8
-            usage_type_index = 10 if has_payment_owner else 9
-            status_index = 11 if has_payment_owner else 10
-            payment_owner = (_cell(row, 7) or _cell(row, 4)) if has_payment_owner else _cell(row, 4)
+            payment_method, payment_owner, payment_channel, description, usage_type, status = _card_usage_fields(row)
             records.append(
                 CardUsageRecord(
                     row_number=index,
@@ -284,11 +282,12 @@ class SheetsClient:
                     logged_by=_cell(row, 4),
                     raw_input=_cell(row, 5),
                     amount=amount,
-                    payment_method=_cell(row, payment_method_index),
-                    description=_cell(row, description_index),
-                    usage_type=_cell(row, usage_type_index),
-                    status=_cell(row, status_index),
+                    payment_method=payment_method,
+                    description=description,
+                    usage_type=usage_type,
+                    status=status,
                     payment_owner=payment_owner,
+                    payment_channel=payment_channel,
                 )
             )
         return records
@@ -392,7 +391,10 @@ class SheetsClient:
         if description is not None:
             updates.append({"range": f"{sheet_name}!I{row_number}", "values": [[description]]})
         if transaction_type is not None:
-            transaction_column = "L" if self.has_payment_owner_column(sheet_name) else "K"
+            if self.has_payment_channel_column(sheet_name):
+                transaction_column = "M"
+            else:
+                transaction_column = "L" if self.has_payment_owner_column(sheet_name) else "K"
             updates.append({"range": f"{sheet_name}!{transaction_column}{row_number}", "values": [[transaction_type]]})
         if not updates:
             return
@@ -428,12 +430,22 @@ class SheetsClient:
     def has_payment_owner_column(self, sheet_name: str) -> bool:
         result = self._service().spreadsheets().values().get(
             spreadsheetId=self.sheet_id,
-            range=f"{sheet_name}!A1:P1",
+            range=f"{sheet_name}!A1:Q1",
         ).execute()
         rows = result.get("values", [])
         if not rows:
             return False
         return any(_normalize_header(value) == "payment owner" for value in rows[0])
+
+    def has_payment_channel_column(self, sheet_name: str) -> bool:
+        result = self._service().spreadsheets().values().get(
+            spreadsheetId=self.sheet_id,
+            range=f"{sheet_name}!A1:Q1",
+        ).execute()
+        rows = result.get("values", [])
+        if not rows:
+            return False
+        return any(_normalize_header(value) == "payment channel" for value in rows[0])
 
     def _ensure_sheet(self, sheet_name: str) -> int:
         sheet_id = self._sheet_id(sheet_name)
@@ -480,6 +492,15 @@ def _cell(row: list[str], index: int) -> str:
 
 
 def _record_type_fields(row: list[str]) -> tuple[str, str, str]:
+    payment_channel_status = _cell(row, 14)
+    if payment_channel_status.casefold() in {"confirmed", "pending", "cancelled", "canceled"}:
+        transaction_type = _cell(row, 12)
+        input_type = _cell(row, 13)
+        status = payment_channel_status
+        if not transaction_type:
+            transaction_type = _infer_transaction_type(_cell(row, 7), input_type)
+        return transaction_type, input_type, status
+
     payment_owner_status = _cell(row, 13)
     if payment_owner_status.casefold() in {"confirmed", "pending", "cancelled", "canceled"}:
         transaction_type = _cell(row, 11)
@@ -504,6 +525,8 @@ def _record_type_fields(row: list[str]) -> tuple[str, str, str]:
 
 def _record_payment_method(row: list[str]) -> str:
     statuses = {"confirmed", "pending", "cancelled", "canceled"}
+    if _cell(row, 14).casefold() in statuses:
+        return _cell(row, 10)
     if _cell(row, 13).casefold() in statuses:
         return _cell(row, 10)
     if _cell(row, 12).casefold() in statuses:
@@ -513,11 +536,29 @@ def _record_payment_method(row: list[str]) -> str:
 
 def _record_payment_owner(row: list[str]) -> str:
     statuses = {"confirmed", "pending", "cancelled", "canceled"}
+    if _cell(row, 14).casefold() in statuses:
+        return _cell(row, 9) or _cell(row, 4)
     if _cell(row, 13).casefold() in statuses:
         return _cell(row, 9) or _cell(row, 4)
     if _cell(row, 12).casefold() in statuses and _cell(row, 9):
         return _cell(row, 4)
     return ""
+
+
+def _record_payment_channel(row: list[str]) -> str:
+    statuses = {"confirmed", "pending", "cancelled", "canceled"}
+    if _cell(row, 14).casefold() in statuses:
+        return _cell(row, 11)
+    return ""
+
+
+def _card_usage_fields(row: list[str]) -> tuple[str, str, str, str, str, str]:
+    statuses = {"confirmed", "pending", "cancelled", "canceled"}
+    if _cell(row, 12).casefold() in statuses:
+        return _cell(row, 8), _cell(row, 7) or _cell(row, 4), _cell(row, 9), _cell(row, 10), _cell(row, 11), _cell(row, 12)
+    if _cell(row, 11).casefold() in statuses:
+        return _cell(row, 8), _cell(row, 7) or _cell(row, 4), "", _cell(row, 9), _cell(row, 10), _cell(row, 11)
+    return _cell(row, 7), _cell(row, 4), "", _cell(row, 8), _cell(row, 9), _cell(row, 10)
 
 
 def _normalize_header(value: str) -> str:

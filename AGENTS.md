@@ -31,7 +31,7 @@ This file contains project-specific instructions for coding agents working on Ge
 - `Raw Expenses` contains all confirmed transaction rows.
 - `Fixed Expenses` contains active fixed expense setup.
 - `Monthly Summary` is generated as a P&L summary; rows include income categories, expense categories, total income, total expenses, and net P&L.
-- `Raw Expenses` includes `Payment Owner` and `Payment Method` after `Description`, followed by `Transaction Type`; valid transaction types are `Expense`, `Income`, and `Fixed`.
+- `Raw Expenses` includes `Payment Owner`, `Payment Method`, and `Payment Channel` after `Description`, followed by `Transaction Type`; valid transaction types are `Expense`, `Income`, and `Fixed`.
 - `Logged By` identifies who submitted the transaction. `Payment Owner` identifies whose card or payment account was used. Historical rows without `Payment Owner` fall back to `Logged By`.
 - Historical rows with a blank `Payment Method` are valid but must not be included in card tracking.
 - Old rows with blank `Transaction Type` are backward compatible: infer `Income` when the category starts with `Income -`, infer `Fixed` when input type is fixed, otherwise treat as `Expense`.
@@ -72,13 +72,17 @@ This file contains project-specific instructions for coding agents working on Ge
 - `Payment Methods` and `Card Limits` are user-managed Google Sheet tabs. A payment method is identified by its `Owner` and `Payment Method` pair; do not hardcode personal cards in source code.
 - Payment buttons show the Telegram sender's active methods first. A bottom partner-card button may show the other configured person's active credit cards. The submitting user remains the only person allowed to choose the payment method.
 - Choosing the other person's card must preserve the sender's `Logged By` value and expense category, while storing the selected card's owner in `Payment Owner`.
-- `Card Limits` and card summaries count confirmed normal expenses by `Payment Owner`, payment method, category, and card cycle. Historical rows without `Payment Owner` use `Logged By`.
-- `Card Usage` includes `Payment Owner`. Its rows are not normal expense-categorised. They count toward the selected owner's total card spend and `All` card limits only, not category-specific limits such as Food or Groceries.
+- `Card Limits` and card summaries count confirmed normal expenses by `Payment Owner`, payment method, category, payment channel, and card cycle. Historical rows without `Payment Owner` use `Logged By`.
+- `Payment Channel` is not an expense category. It describes how the card transaction happened, such as `Online`, `PayWave`, or `All`.
+- When a selected owner/card has multiple active non-`All` payment channels in `Card Limits`, ask for the channel after payment-method selection and before writing the row. If there is only one active non-`All` channel, use it automatically.
+- `Card Usage` includes `Payment Owner` and `Payment Channel`. Its rows are not normal expense-categorised. They count toward the selected owner's total card spend and `All` category card limits, and can count toward channel-specific limits.
 - Manual deletion from `Card Usage` should remove that spend from future card summaries because summaries read the current Google Sheet rows.
 - A card with no active `Card Limits` row, or with an active row whose `Limit Amount` is blank, is uncapped and must still appear in that owner's card summary with its period spend.
 - Use `/refreshpayments` after sheet edits to reload payment config immediately. Otherwise, payment config may remain in a one-minute in-memory cache; it is read only on demand and makes no background Google Sheets calls.
 - Payment-selection and screenshot/voice batch state are temporary in-memory state. Railway restarts clear them; the user must send the expense again if a restart happens before its payment button is tapped.
 - `card summary` and `/cards` show only the requesting person's active credit cards. Use green below 60%, yellow from 60% to 79%, orange from 80% to 94%, and red at 95% or above for configured caps.
+- `card summary last month`, `cards last cycle`, and similar previous-period card requests should use the previous card cycle for each card. Billing-cycle cards use their configured reset day; calendar cards use the previous calendar month.
+- Specific card-summary period requests such as `card summary July 2026`, `card limits 2026-07`, and `cards 11 Aug` should calculate the card cycle containing that requested month/date.
 - Personal history requests such as `expenses on 12 July`, `25th July entry`, `spend on 25th June`, and `expenses between 10-12 July` must only return normal expense rows logged by the requesting Telegram user.
 - If a message looks like a personal history request but the date/range cannot be parsed, reply with a clarification message instead of silently ignoring it.
 - Category breakdown requests such as `food for june` should show normal expense rows for that category from both configured users and include `Logged By` on each line. `shopping` defaults to the requester's own shopping category; `all shopping` combines both shopping categories.

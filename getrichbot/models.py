@@ -33,8 +33,9 @@ class ExpenseRow:
     transaction_type: str = "Expense"
     payment_method: str = ""
     payment_owner: str = ""
+    payment_channel: str = ""
 
-    def to_sheet_row(self, include_payment_owner: bool = True) -> list[str]:
+    def to_sheet_row(self, include_payment_owner: bool = True, include_payment_channel: bool = False) -> list[str]:
         expense_date = self.timestamp.strftime("%Y-%m-%d")
         month = self.timestamp.strftime("%Y-%m")
         values = [
@@ -53,6 +54,12 @@ class ExpenseRow:
         values.extend(
             [
                 self.payment_method,
+            ]
+        )
+        if include_payment_channel:
+            values.append(self.payment_channel if self.payment_method else "")
+        values.extend(
+            [
                 self.transaction_type,
                 self.input_type,
                 self.status,
@@ -80,6 +87,7 @@ class ExpenseRecord:
     transaction_type: str = "Expense"
     payment_method: str = ""
     payment_owner: str = ""
+    payment_channel: str = ""
 
     def compact(self) -> str:
         return (
@@ -102,8 +110,9 @@ class CardUsageRow:
     telegram_chat_id: int | str
     telegram_message_id: int | str
     payment_owner: str = ""
+    payment_channel: str = ""
 
-    def to_sheet_row(self, include_payment_owner: bool = True) -> list[str]:
+    def to_sheet_row(self, include_payment_owner: bool = True, include_payment_channel: bool = False) -> list[str]:
         usage_date = self.timestamp.strftime("%Y-%m-%d")
         month = self.timestamp.strftime("%Y-%m")
         values = [
@@ -120,6 +129,12 @@ class CardUsageRow:
         values.extend(
             [
                 self.payment_method,
+            ]
+        )
+        if include_payment_channel:
+            values.append(self.payment_channel if self.payment_method else "")
+        values.extend(
+            [
                 self.description,
                 self.usage_type,
                 self.status,
@@ -145,3 +160,4 @@ class CardUsageRecord:
     usage_type: str
     status: str
     payment_owner: str = ""
+    payment_channel: str = ""

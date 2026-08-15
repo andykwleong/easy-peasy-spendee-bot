@@ -82,6 +82,23 @@ class TestLegacyRows(unittest.TestCase):
         self.assertEqual(record.payment_owner, "Me")
         self.assertEqual(record.payment_method, "Citi Rewards")
 
+    def test_payment_channel_rows_parse_new_layout(self):
+        row = [
+            "aug001", "12:00:00", "2026-08-11", "2026-08", "Me", "food 20",
+            "20.00", "Food", "food", "Me", "UOB PP (Blue)", "Online", "Expense",
+            "Text", "Confirmed", "-100", "5",
+        ]
+        client = SheetsClient("test-sheet")
+        client.service = _Service([row])
+
+        record = client.get_expense_records("Raw Expenses")[0]
+
+        self.assertEqual(record.payment_owner, "Me")
+        self.assertEqual(record.payment_method, "UOB PP (Blue)")
+        self.assertEqual(record.payment_channel, "Online")
+        self.assertEqual(record.transaction_type, "Expense")
+        self.assertEqual(record.status, "Confirmed")
+
     def test_card_usage_payment_owner_rows_keep_logger_and_card_owner_separate(self):
         row = [
             "jul003", "12:00:00", "2026-07-20", "2026-07", "My wife", "doctor claim 120",
@@ -95,3 +112,19 @@ class TestLegacyRows(unittest.TestCase):
         self.assertEqual(record.logged_by, "My wife")
         self.assertEqual(record.payment_owner, "Me")
         self.assertEqual(record.payment_method, "Citi Rewards")
+
+    def test_card_usage_payment_channel_rows_parse_new_layout(self):
+        row = [
+            "aug002", "12:00:00", "2026-08-11", "2026-08", "Me", "doctor claim 120",
+            "120.00", "Me", "UOB PP (Blue)", "PayWave", "doctor claim", "Claimable",
+            "Confirmed", "-100", "6",
+        ]
+        client = SheetsClient("test-sheet")
+        client.service = _Service([row])
+
+        record = client.get_card_usage_records("Card Usage")[0]
+
+        self.assertEqual(record.payment_owner, "Me")
+        self.assertEqual(record.payment_method, "UOB PP (Blue)")
+        self.assertEqual(record.payment_channel, "PayWave")
+        self.assertEqual(record.status, "Confirmed")

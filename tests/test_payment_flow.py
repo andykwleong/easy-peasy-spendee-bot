@@ -174,6 +174,43 @@ class TestPaymentFlow(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(callback_update.callback_query.message.replies, [])
         self.assertIn("via Citi Rewards", callback_update.callback_query.edited_text)
 
+    async def test_channel_card_asks_for_channel_before_logging(self):
+        sheets = Sheets()
+        sheets.config = parse_payment_config(
+            [
+                ["Payment Method", "Owner", "Type", "Cycle Type", "Cycle Start Day", "Active"],
+                ["UOB PP (Blue)", "Me", "Credit Card", "Calendar", "1", "TRUE"],
+                ["Cash", "Me", "Cash", "Calendar", "1", "TRUE"],
+            ],
+            [
+                ["Payment Method", "Owner", "Category", "Payment Channel", "Limit Amount", "Active"],
+                ["UOB PP (Blue)", "Me", "All", "PayWave", "600", "TRUE"],
+                ["UOB PP (Blue)", "Me", "All", "Online", "600", "TRUE"],
+            ],
+        )
+        bot = TestFinanceBot(Settings(), sheets)
+        update = Update("food 20")
+
+        await bot.handle_text(update, None)
+        card_data = update.message.markups[0].inline_keyboard[0][0].callback_data
+        callback_update = CallbackUpdate(card_data)
+        await bot.handle_payment_method_callback(callback_update, None)
+
+        self.assertEqual(sheets.rows, [])
+        self.assertIn("Which payment channel?", callback_update.callback_query.edited_text)
+        channel_markup = callback_update.callback_query.message.markups[-1]
+        channel_names = [button.text for row in channel_markup.inline_keyboard for button in row]
+        self.assertEqual(channel_names, ["PayWave", "Online"])
+
+        callback_update.callback_query.data = channel_markup.inline_keyboard[0][1].callback_data
+        await bot.handle_payment_channel_callback(callback_update, None)
+
+        self.assertEqual(len(sheets.rows), 1)
+        self.assertEqual(sheets.rows[0].payment_method, "UOB PP (Blue)")
+        self.assertEqual(sheets.rows[0].payment_owner, "Me")
+        self.assertEqual(sheets.rows[0].payment_channel, "Online")
+        self.assertIn("via UOB PP (Blue) (Online)", callback_update.callback_query.edited_text)
+
     async def test_category_reply_only_shows_payment_selection_for_text_pending(self):
         sheets = Sheets()
         bot = TestFinanceBot(Settings(), sheets)
@@ -223,6 +260,27 @@ class TestPaymentFlow(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(handled)
                 self.assertEqual(update.message.replies[0], "Card summary\n\nUncapped:\n\nCiti Rewards - $0.00")
                 self.assertFalse(update.message.reply_kwargs[0]["do_quote"])
+
+    async def test_card_summary_last_month_uses_previous_cycle_title(self):
+        sheets = Sheets()
+        bot = TestFinanceBot(Settings(), sheets)
+        update = Update("cards last month")
+
+        handled = await bot.handle_plain_language_command(update)
+
+        self.assertTrue(handled)
+        self.assertEqual(update.message.replies[0], "Card summary - Last cycle\n\nUncapped:\n\nCiti Rewards - $0.00")
+        self.assertFalse(update.message.reply_kwargs[0]["do_quote"])
+
+    async def test_card_summary_named_month_is_handled(self):
+        sheets = Sheets()
+        bot = TestFinanceBot(Settings(), sheets)
+        update = Update("card summary july 2026")
+
+        handled = await bot.handle_plain_language_command(update)
+
+        self.assertTrue(handled)
+        self.assertEqual(update.message.replies[0], "Card summary - July 2026\n\nUncapped:\n\nCiti Rewards - $0.00")
 
     async def test_claimable_card_usage_waits_for_payment_and_skips_expenses(self):
         sheets = Sheets()

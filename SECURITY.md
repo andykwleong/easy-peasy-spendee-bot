@@ -41,6 +41,8 @@ Category setup should normally live in the private Google Sheet `Categories` and
 
 This bot is intended to be private. Configure only trusted Telegram user IDs in `ME_TELEGRAM_IDS` and `WIFE_TELEGRAM_IDS`.
 
+The dashboard uses those same two Telegram accounts. The server checks Telegram's signed login, either from the phone Mini App or from the computer "Log in with Telegram" button. A user id sent by the browser on its own is not accepted. After a successful computer login, that browser keeps a signed cookie for 30 days. Log out deletes the cookie. The cookie is signed with the existing bot token, so there is no extra password to store. On a shared computer, use Log out, because anyone using that browser can see the dashboard until the cookie is gone.
+
 For group chats, disable Telegram bot privacy mode only for the intended private household group. Do not add the bot to public groups.
 
 ## Data Handling

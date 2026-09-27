@@ -34,6 +34,7 @@ Telegram group chat
 - Shows category spending breakdowns by month, including who logged each row and category totals.
 - Supports undo for the last expense sent by a user.
 - Keeps the bot private to configured Telegram user IDs.
+- Shows a private read-only dashboard for those same two people. It reads the Google Sheet and does not change it.
 
 ## Requirements
 
@@ -268,15 +269,35 @@ BOT_STATE_SHEET=Bot State
 TELEGRAM_CHAT_ID=
 OPENAI_API_KEY=
 OPENAI_MODEL=gpt-5.4-mini
+DASHBOARD_PUBLIC_URL=
 ```
 
 Never commit real secrets. Keep them in Railway variables or your local `.env`.
+
+`DASHBOARD_PUBLIC_URL` is the public https address of this same app, once Railway gives you one. An example of the shape is `https://your-app.example.com`. Leave it blank until you have the real address. It is a web address, not a password. Until it is set, the Dashboard button in Telegram does nothing useful. You do not need to add `PORT` yourself. Railway already sets that, and the page listens on it. Opening the page reads the Google Sheet at that moment. It does not keep a second copy of the numbers, and it does not check the sheet in the background.
 
 For categories, set `CATEGORIES_SHEET` and `CATEGORY_KEYWORDS_SHEET`. The running bot expects active category rows in Google Sheets.
 
 Payment configuration is read only when you use the bot. It is cached in memory for one minute to keep payment buttons responsive. Use `/refreshpayments` after editing `Payment Methods` or `Card Limits` to apply a change immediately. No background payment-sheet polling occurs. Each confirmed expense also reads its transaction tab's header row so the bot can safely support both the old layout and the newer `Payment Owner` layout.
 
 `Card Usage` rows are read when card summary is requested. Manual deletion from that tab removes the card-only spend from future card summaries.
+
+## Private dashboard
+
+The dashboard is a window onto the same Google Sheet. It does not add a second set of numbers, and it cannot change a row. Typing a new expense still happens in Telegram.
+
+Two ways to open it, and only for the two Telegram accounts already allowed to use the bot:
+
+1. On a phone, tap the bot's menu button named Dashboard, or send `/dashboard` and tap the button under that message. That button is not a reply-keyboard button. Telegram passes who you are, and the server checks it. Anyone else sees a lock.
+2. On a computer, open the same address in a browser. The first screen is a lock with **Log in with Telegram**. After you confirm, that browser remembers you for 30 days, so a bookmark does not ask every time. **Log out** forgets it immediately. On a shared computer, log out when you are done, because someone else using that browser could see the page until then. This memory stays in that browser. It is not written into the Google Sheet. If you change the Telegram bot token later, those remembered logins stop working and the person logs in again.
+
+The page rearranges itself. A narrow window uses the phone layout. A wide window uses the desktop layout.
+
+It shows recent transactions (yours, or both), your own card summary with the same colours as Telegram (green under 60%, yellow from 60% to 79%, orange from 80% to 94%, red at 95% or more, and uncapped cards still show), the household monthly income, expenses, and net, the raw rows, and card-only rows that stay out of household spending. Income is for the household, not split by person. A later "Agent eval" space is labelled and has no score. The "Fix tagging" control is switched off and does not write anything.
+
+Before the computer login can finish, tell BotFather that this website belongs to your bot. Open BotFather, choose your bot, and use Login Widget or `/setdomain`. Add the dashboard address. Until that is done, the computer button may open and then stop. Until `DASHBOARD_PUBLIC_URL` is set on Railway, the button in the chat does nothing useful. The expense chat keeps working either way.
+
+The page is served by the same Python process that already runs the bot (`python -u -m getrichbot.bot`). It is not a second Railway service. It only reads the sheet when someone opens the page.
 
 ## Telegram Usage
 
@@ -367,6 +388,7 @@ Commands:
 - `/category` - same as `/categories`
 - `/refreshcategories` - reload `Categories` and `Category Keywords` from Google Sheets after you edit them
 - `/refreshpayments` - reload `Payment Methods` and `Card Limits` from Google Sheets after you edit them
+- `/dashboard` - open the private household dashboard, or show the computer link
 
 Plain-language shortcuts:
 

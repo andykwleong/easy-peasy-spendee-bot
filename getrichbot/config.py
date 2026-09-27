@@ -41,6 +41,7 @@ class Settings:
     telegram_chat_id: int | None
     openai_api_key: str | None
     openai_model: str
+    dashboard_public_url: str | None
 
     @classmethod
     def load(cls) -> "Settings":
@@ -76,6 +77,7 @@ class Settings:
             telegram_chat_id=_optional_int("TELEGRAM_CHAT_ID"),
             openai_api_key=os.getenv("OPENAI_API_KEY") or None,
             openai_model=os.getenv("OPENAI_MODEL", "gpt-5.4-mini"),
+            dashboard_public_url=_optional_text("DASHBOARD_PUBLIC_URL"),
         )
 
     def label_for_user(self, telegram_user_id: int) -> str | None:
@@ -84,6 +86,11 @@ class Settings:
         if telegram_user_id in self.wife_telegram_ids:
             return self.wife_label
         return None
+
+
+def _optional_text(name: str) -> str | None:
+    raw = os.getenv(name, "").strip()
+    return raw or None
 
 
 def _optional_int(name: str) -> int | None:

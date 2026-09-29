@@ -19,6 +19,8 @@ Depending on how you use it, the bot may process:
 
 Confirmed expense entries are written to your configured Google Sheet.
 
+The private dashboard reads that same Google Sheet and shows it in the browser. It does not write, edit, or delete rows. On a computer, after you log in with Telegram, that browser keeps a login cookie for 30 days. Log out deletes the cookie. The cookie is not written into the Google Sheet.
+
 Payment method and card limit setup is read from your configured Google Sheet to show payment buttons, card summaries, and card-limit usage. Category breakdown and personal history requests read confirmed rows from `Raw Expenses` and reply in Telegram.
 
 When `OPENAI_API_KEY` is configured:

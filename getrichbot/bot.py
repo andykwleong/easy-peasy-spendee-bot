@@ -73,6 +73,7 @@ Useful commands:
 /fixed - preview fixed expenses
 /confirmfixed - review fixed expenses
 /undo - delete your latest logged expense
+/dashboard - open the private household dashboard
 
 Payment methods:
 Choose one of your methods, or use the partner-card button to choose one of their credit cards.
@@ -3309,7 +3310,13 @@ def main() -> None:
     from telegram import Update
     from telegram.error import TelegramError
     from telegram.ext import Application, CallbackQueryHandler, CommandHandler, MessageHandler, filters
+    # Kept with the delayed Telegram import so loading the bot module does not
+    # start a web server or pull in Telegram before this startup message.
+    from getrichbot.dashboard_bot import configure_dashboard_menu, dashboard_command
+    from getrichbot.dashboard_http import start_dashboard_server
     print("Telegram library loaded.", flush=True)
+
+    dashboard_server = start_dashboard_server(settings, sheets)
 
     async def post_init(application: Application) -> None:
         try:
@@ -3318,6 +3325,7 @@ def main() -> None:
             LOGGER.exception("Telegram startup check failed. Check TELEGRAM_BOT_TOKEN and internet access.")
             raise
         LOGGER.info("Connected to Telegram as @%s. Send /whoami in the group chat.", bot_user.username)
+        await configure_dashboard_menu(application, settings, dashboard_server, bot_user.username)
         if settings.telegram_chat_id is None:
             LOGGER.warning("TELEGRAM_CHAT_ID is not set. Monthly reminder messages will not be sent.")
         else:
@@ -3338,6 +3346,8 @@ def main() -> None:
     application.add_handler(CommandHandler("undo", finance_bot.undo_command))
     application.add_handler(CommandHandler("fixed", finance_bot.fixed_command))
     application.add_handler(CommandHandler("confirmfixed", finance_bot.confirm_fixed_command))
+    application.bot_data["dashboard_settings"] = settings
+    application.add_handler(CommandHandler("dashboard", dashboard_command))
     application.add_handler(
         CallbackQueryHandler(
             finance_bot.handle_income_category_callback,

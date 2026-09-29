@@ -288,7 +288,7 @@ The dashboard is a window onto the same Google Sheet. It does not add a second s
 
 Two ways to open it, and only for the two Telegram accounts already allowed to use the bot:
 
-1. On a phone, tap the bot's menu button named Dashboard, or send `/dashboard` and tap the button under that message. That button is not a reply-keyboard button. Telegram passes who you are, and the server checks it. Anyone else sees a lock.
+1. On a phone, tap the bot's menu button named Dashboard. In a private chat, `/dashboard` also shows an Open dashboard button under the message. In the household group, `/dashboard` replies with the link and does not put that button under the message, because Telegram only allows that kind of button in a private chat. The link is still checked on the server. Anyone else sees a lock.
 2. On a computer, open the same address in a browser. The first screen is a lock with **Log in with Telegram**. After you confirm, that browser remembers you for 30 days, so a bookmark does not ask every time. **Log out** forgets it immediately. On a shared computer, log out when you are done, because someone else using that browser could see the page until then. This memory stays in that browser. It is not written into the Google Sheet. If you change the Telegram bot token later, those remembered logins stop working and the person logs in again.
 
 The page rearranges itself. A narrow window uses the phone layout. A wide window uses the desktop layout.

@@ -11,6 +11,8 @@ from decimal import Decimal
 from http.client import HTTPConnection
 from urllib.parse import urlencode
 
+from telegram.error import TelegramError
+
 from getrichbot.cards import parse_payment_config
 from getrichbot.dashboard_auth import issue_session_token
 from getrichbot.dashboard_bot import configure_dashboard_menu, dashboard_prompt, reply_with_dashboard
@@ -341,7 +343,7 @@ class DashboardPromptTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("30 days", text)
         self.assertIn("Log out", text)
 
-    async def test_dashboard_message_uses_a_mini_app_button(self):
+    async def test_private_chat_includes_the_link_and_a_mini_app_button(self):
         sent = []
 
         class Message:
@@ -349,9 +351,10 @@ class DashboardPromptTests(unittest.IsolatedAsyncioTestCase):
                 sent.append((text, reply_markup))
 
         class Update:
-            def __init__(self, user_id):
+            def __init__(self, user_id, chat_type="private"):
                 self.message = Message()
                 self.effective_user = type("User", (), {"id": user_id})()
+                self.effective_chat = type("Chat", (), {"type": chat_type})()
 
         class Settings:
             dashboard_public_url = "https://your-app.example.com"
@@ -365,10 +368,70 @@ class DashboardPromptTests(unittest.IsolatedAsyncioTestCase):
         text, markup = sent[0]
         button = markup.inline_keyboard[0][0]
         self.assertIn("https://your-app.example.com", text)
+        self.assertEqual(button.text, "Open dashboard")
         self.assertEqual(button.web_app.url, "https://your-app.example.com")
         self.assertNotIn("reply_keyboard", markup.to_dict())
         self.assertIn("do not recognize", sent[1][0])
         self.assertIsNone(sent[1][1])
+
+    async def test_group_reply_includes_the_link_and_no_web_app_button(self):
+        sent = []
+
+        class Message:
+            async def reply_text(self, text, reply_markup=None):
+                sent.append((text, reply_markup))
+
+        class Update:
+            def __init__(self, chat_type):
+                self.message = Message()
+                self.effective_user = type("User", (), {"id": 111})()
+                self.effective_chat = type("Chat", (), {"type": chat_type})()
+
+        class Settings:
+            dashboard_public_url = "https://your-app.example.com"
+
+            def label_for_user(self, user_id):
+                return "Alex"
+
+        for chat_type in ("group", "supergroup"):
+            await reply_with_dashboard(Update(chat_type), Settings())
+
+        self.assertEqual(len(sent), 2)
+        for text, markup in sent:
+            self.assertIn("https://your-app.example.com", text)
+            self.assertIn("Open the household dashboard.", text)
+            self.assertIsNone(markup)
+
+    async def test_rejected_private_button_still_sends_the_link(self):
+        sent = []
+
+        class Message:
+            async def reply_text(self, text, reply_markup=None):
+                if reply_markup is not None:
+                    raise TelegramError("web_app buttons are only allowed in private chats")
+                sent.append(text)
+
+        class Update:
+            message = Message()
+            effective_user = type("User", (), {"id": 111})()
+            effective_chat = type("Chat", (), {"type": "private"})()
+
+        class Settings:
+            dashboard_public_url = "https://your-app.example.com"
+
+            def label_for_user(self, user_id):
+                return "Alex"
+
+        await reply_with_dashboard(Update(), Settings())
+
+        self.assertEqual(sent, [
+            "Open the household dashboard.\n\n"
+            "On a computer, open this link in a browser and tap Log in with Telegram:\n"
+            "https://your-app.example.com\n\n"
+            "On your phone, tap Dashboard in the bot menu. It opens inside Telegram and already knows who you are.\n\n"
+            "After you confirm, that browser remembers you for 30 days so you do not confirm every time. "
+            "Use Log out on a shared computer. Log out forgets it immediately."
+        ])
 
     async def test_menu_button_is_not_set_without_https(self):
         calls = []
@@ -398,6 +461,24 @@ class DashboardPromptTests(unittest.IsolatedAsyncioTestCase):
         await configure_dashboard_menu(Application(), settings, server, "sample_bot")
         self.assertEqual(calls[0].text, "Dashboard")
         self.assertEqual(calls[0].web_app.url, "https://your-app.example.com")
+
+    async def test_menu_button_failure_does_not_stop_startup(self):
+        class Bot:
+            async def set_chat_menu_button(self, menu_button=None):
+                raise TelegramError("menu button failed")
+
+        class Application:
+            bot = Bot()
+
+        class Dashboard:
+            def set_bot_username(self, username):
+                self.username = username
+
+        class Server:
+            dashboard_app = Dashboard()
+
+        settings = type("Settings", (), {"dashboard_public_url": "https://your-app.example.com"})()
+        await configure_dashboard_menu(Application(), settings, Server(), "sample_bot")
 
 
 if __name__ == "__main__":

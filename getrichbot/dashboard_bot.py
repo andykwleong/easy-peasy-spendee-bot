@@ -21,13 +21,18 @@ def dashboard_prompt(public_url: str | None) -> tuple[str, str | None]:
         )
     return (
         "Open the household dashboard.\n\n"
-        "On your phone, tap the button below. It opens inside Telegram and already knows who you are.\n\n"
         "On a computer, open this link in a browser and tap Log in with Telegram:\n"
         f"{url}\n\n"
+        "On your phone, tap Dashboard in the bot menu. It opens inside Telegram and already knows who you are.\n\n"
         "After you confirm, that browser remembers you for 30 days so you do not confirm every time. "
         "Use Log out on a shared computer. Log out forgets it immediately.",
         url,
     )
+
+
+def _is_private_chat(update: Update) -> bool:
+    chat = update.effective_chat
+    return chat is not None and getattr(chat, "type", None) == "private"
 
 
 async def reply_with_dashboard(update: Update, settings) -> None:
@@ -37,12 +42,24 @@ async def reply_with_dashboard(update: Update, settings) -> None:
         await update.message.reply_text("I do not recognize this Telegram user ID yet.")
         return
     text, url = dashboard_prompt(getattr(settings, "dashboard_public_url", None))
+    # Telegram only accepts a web_app button in a private chat. In the household
+    # group that button rejects the whole message, so the link is sent as text.
     reply_markup = None
-    if url is not None:
+    if url is not None and _is_private_chat(update):
         reply_markup = InlineKeyboardMarkup(
             [[InlineKeyboardButton("Open dashboard", web_app=WebAppInfo(url=url))]]
         )
-    await update.message.reply_text(text, reply_markup=reply_markup)
+    try:
+        await update.message.reply_text(text, reply_markup=reply_markup)
+    except TelegramError:
+        if reply_markup is None:
+            LOGGER.exception("Could not send the dashboard link. Expense chat is unchanged.")
+            return
+        LOGGER.exception("Telegram rejected the dashboard button. Sending the link as text.")
+        try:
+            await update.message.reply_text(text)
+        except TelegramError:
+            LOGGER.exception("Could not send the dashboard link. Expense chat is unchanged.")
 
 
 async def configure_dashboard_menu(application, settings, dashboard_server, username: str) -> None:

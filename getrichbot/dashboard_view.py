@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
-from decimal import Decimal
+from decimal import ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_UP, Decimal
 
 from getrichbot.cards import CardLimit, PaymentConfig, build_card_summary
 from getrichbot.categories import ALL_CATEGORIES
@@ -22,6 +22,23 @@ def limit_band(percent: Decimal) -> str:
     return "red"
 
 
+def percent_display(percent: Decimal) -> str:
+    """Whole percent that stays in the same colour band.
+
+    Ordinary rounding can print 80 while the bar is still yellow, because
+    yellow runs up to but not including 80. The colour cutoffs stay put.
+    """
+    band = limit_band(percent)
+    rounded = percent.quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+    if limit_band(rounded) == band:
+        shown = rounded
+    else:
+        shown = percent.to_integral_value(rounding=ROUND_FLOOR)
+        if limit_band(shown) != band:
+            shown = percent.to_integral_value(rounding=ROUND_CEILING)
+    return f"{shown:.0f}"
+
+
 def build_dashboard_payload(
     *,
     viewer_label: str,
@@ -36,8 +53,8 @@ def build_dashboard_payload(
         raise ValueError("scope must be mine or both")
 
     months = [
-        _month_snapshot(records, _previous_month_period(today)),
-        _month_snapshot(records, _current_month_period(today)),
+        _month_snapshot(records, _previous_month_period(today), so_far=False),
+        _month_snapshot(records, _current_month_period(today), so_far=True),
     ]
     raw_expenses = _raw_expenses(records)
     usage_rows = _raw_card_usage(card_usage)
@@ -71,7 +88,7 @@ def _previous_month_period(today: date) -> SummaryPeriod:
     return SummaryPeriod(start=start, end=end, label=start.strftime("%B %Y"))
 
 
-def _month_snapshot(records: list[ExpenseRecord], period: SummaryPeriod) -> dict:
+def _month_snapshot(records: list[ExpenseRecord], period: SummaryPeriod, *, so_far: bool) -> dict:
     summary = build_spending_summary(records, period)
     totals = {item.category: item.total for item in summary.categories if item.category in ALL_CATEGORIES}
     income = [
@@ -95,6 +112,7 @@ def _month_snapshot(records: list[ExpenseRecord], period: SummaryPeriod) -> dict
         "total_income": _money(total_income),
         "total_expenses": _money(total_expenses),
         "net": _money(total_income - total_expenses),
+        "so_far": so_far,
     }
 
 
@@ -132,7 +150,7 @@ def _limit_usage(limit: CardLimit, spent: Decimal, percent: Decimal) -> dict:
         "spent": _money(spent),
         "limit": _money(limit.amount),
         "percent": f"{percent:.4f}",
-        "percent_label": f"{percent:.0f}",
+        "percent_label": percent_display(percent),
         "band": limit_band(percent),
     }
 

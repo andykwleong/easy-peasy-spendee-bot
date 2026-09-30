@@ -7,7 +7,7 @@ from decimal import Decimal
 from getrichbot import categories
 from getrichbot.cards import parse_payment_config
 from getrichbot.categories import configure_category_config
-from getrichbot.dashboard_view import build_dashboard_payload, limit_band
+from getrichbot.dashboard_view import build_dashboard_payload, limit_band, percent_display
 from getrichbot.models import CardUsageRecord, ExpenseRecord
 
 
@@ -138,6 +138,21 @@ class DashboardViewTests(unittest.TestCase):
         self.assertEqual(limit_band(Decimal("94.99")), "orange")
         self.assertEqual(limit_band(Decimal("95")), "red")
 
+    def test_printed_percent_stays_inside_its_colour(self):
+        samples = [
+            (Decimal("59.6"), "59", "green"),
+            (Decimal("60"), "60", "yellow"),
+            (Decimal("79.6"), "79", "yellow"),
+            (Decimal("80"), "80", "orange"),
+            (Decimal("94.6"), "94", "orange"),
+            (Decimal("95"), "95", "red"),
+        ]
+        for percent, label, band in samples:
+            with self.subTest(percent=str(percent)):
+                self.assertEqual(percent_display(percent), label)
+                self.assertEqual(limit_band(Decimal(label)), band)
+                self.assertEqual(limit_band(percent), band)
+
     def test_dashboard_shapes_sheet_rows_without_a_second_copy(self):
         records = [
             expense("aa1001", "60.00", "Food", payment_method="Sample Visa", payment_owner="", description="Sample cafe"),
@@ -193,6 +208,8 @@ class DashboardViewTests(unittest.TestCase):
 
         september = mine["months"][1]
         self.assertEqual(september["label"], "September 2026")
+        self.assertTrue(september["so_far"])
+        self.assertFalse(mine["months"][0]["so_far"])
         self.assertEqual(september["total_income"], "140.00")
         self.assertEqual(september["income"], [{"category": "Income - Sample Pay", "amount": "140.00"}])
         self.assertNotIn("logged_by", september["income"][0])
@@ -235,6 +252,30 @@ class DashboardViewTests(unittest.TestCase):
 
         self.assertEqual(len(payload["recent"]), 40)
         self.assertTrue(payload["recent_truncated"])
+
+    def test_card_percent_label_matches_the_yellow_band(self):
+        payload = build_dashboard_payload(
+            viewer_label="Alex",
+            scope="mine",
+            records=[
+                expense(
+                    "aa2060",
+                    "79.60",
+                    "Food",
+                    payment_method="Sample Visa",
+                    payment_owner="Alex",
+                    description="Sample yellow",
+                )
+            ],
+            card_usage=[],
+            payment_config=payment_config(),
+            today=date(2026, 9, 26),
+        )
+
+        limit = payload["cards"]["capped"][0]["limits"][0]
+        self.assertEqual(limit["band"], "yellow")
+        self.assertEqual(limit["percent_label"], "79")
+        self.assertEqual(payload["raw_expenses_limit"], 200)
 
 
 if __name__ == "__main__":

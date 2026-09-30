@@ -23,10 +23,38 @@ window.onTelegramAuth = function (user) {
 };
 
 window.addEventListener("load", boot);
+window.addEventListener("resize", () => {
+  if (document.querySelector(".nav-row")) syncNavPin();
+  else document.body.classList.remove("nav-at-bottom", "nav-under-name");
+});
 
 function telegramInitData() {
   const telegram = window.Telegram && window.Telegram.WebApp;
   return telegram && telegram.initData ? telegram.initData : "";
+}
+
+function telegramBottomWouldCoverNav() {
+  const telegram = window.Telegram && window.Telegram.WebApp;
+  if (!telegram || !telegram.initData) return false;
+  const insets = [telegram.safeAreaInset, telegram.contentSafeAreaInset];
+  for (let index = 0; index < insets.length; index += 1) {
+    const inset = insets[index];
+    if (inset && Number(inset.bottom) >= 20) return true;
+  }
+  if (telegram.MainButton && telegram.MainButton.isVisible) return true;
+  if (telegram.SecondaryButton && telegram.SecondaryButton.isVisible) return true;
+  return false;
+}
+
+function syncNavPin() {
+  const phone = window.matchMedia("(max-width: 720px)").matches;
+  const underName = phone && telegramBottomWouldCoverNav();
+  document.body.classList.toggle("nav-at-bottom", phone && !underName);
+  document.body.classList.toggle("nav-under-name", underName);
+}
+
+function clearNavPin() {
+  document.body.classList.remove("nav-at-bottom", "nav-under-name");
 }
 
 async function boot() {
@@ -34,6 +62,7 @@ async function boot() {
   if (telegram && telegram.ready) {
     telegram.ready();
     if (telegram.expand) telegram.expand();
+    if (telegram.onEvent) telegram.onEvent("viewportChanged", syncNavPin);
   }
   try {
     const config = await fetch("/api/config", { credentials: "same-origin" }).then((response) => response.json());
@@ -116,19 +145,21 @@ async function postJson(path, payload) {
 }
 
 function renderLoading() {
+  clearNavPin();
   app.replaceChildren();
   const screen = el("div", "login-screen");
   const card = el("section", "login-card");
-  card.append(mark(), el("h1", "", "Household money"), el("p", "lede", "Reading the sheet..."));
+  card.append(mark(false), el("h1", "", "Household money"), el("p", "lede", "Reading the sheet..."));
   screen.append(card);
   app.append(screen);
 }
 
 function renderMessage(text) {
+  clearNavPin();
   app.replaceChildren();
   const screen = el("div", "login-screen");
   const card = el("section", "login-card");
-  card.append(mark(), el("h1", "", "Household money"), el("p", "notice", text));
+  card.append(mark(false), el("h1", "", "Household money"), el("p", "notice", text));
   const retry = el("button", "primary", "Try again");
   retry.type = "button";
   retry.addEventListener("click", () => loadDashboard());
@@ -138,10 +169,11 @@ function renderMessage(text) {
 }
 
 function renderLogin() {
+  clearNavPin();
   app.replaceChildren();
   const screen = el("div", "login-screen");
   const card = el("section", "login-card");
-  card.append(mark());
+  card.append(mark(false));
   card.append(el("h1", "", "Household money"));
   card.append(el("p", "lede", "A private page for the two people who already use the Telegram bot."));
   const notice = el("div", "notice");
@@ -166,9 +198,9 @@ function renderLogin() {
   slot.id = "telegram-login";
   card.append(slot);
   if (!state.botUsername) {
-    card.append(el("p", "sub", "Log in with Telegram will show here after the bot has connected. On a phone, use the Dashboard button in the chat."));
+    card.append(el("p", "sub", "Log in with Telegram will show here after the bot has connected. You can also open this page from the Dashboard button in the chat."));
   }
-  card.append(el("p", "fine", "On a computer, use Log in with Telegram. After it works, this browser remembers you for 30 days. Log out forgets it immediately. On a shared computer, log out when you are done."));
+  card.append(el("p", "fine", "This browser remembers you for 30 days, and Log out forgets it."));
   screen.append(card);
   app.append(screen);
   mountWidget();
@@ -190,18 +222,21 @@ function mountWidget() {
 
 function render() {
   app.replaceChildren();
-  const shell = el("div");
-  shell.append(renderTop());
+  const shell = el("div", "shell");
+  const stack = el("div", "top-stack");
+  stack.append(renderTop());
+  stack.append(renderNav());
+  shell.append(stack);
   const main = el("main");
   const wrap = el("div", "wrap");
-  if (state.view === "recent") wrap.append(renderRecent());
-  else if (state.view === "cards") wrap.append(renderCards());
+  if (state.view === "cards") wrap.append(renderCards());
   else if (state.view === "month") wrap.append(renderMonth());
   else if (state.view === "raw") wrap.append(renderRaw());
-  else wrap.append(renderLater());
+  else wrap.append(renderRecent());
   main.append(wrap);
   shell.append(main);
   app.append(shell);
+  syncNavPin();
 }
 
 function renderTop() {
@@ -209,22 +244,32 @@ function renderTop() {
   const wrap = el("div", "wrap");
   const row = el("div", "top-row");
   const brand = el("div");
-  brand.append(mark());
+  brand.append(mark(true));
   brand.append(el("div", "who", "Signed in as " + state.payload.viewer_label));
+  const actions = el("div", "top-actions");
+  const refresh = el("button", "signout", "Refresh");
+  refresh.type = "button";
+  refresh.addEventListener("click", () => loadDashboard());
   const out = el("button", "signout", "Log out");
   out.type = "button";
   out.addEventListener("click", logout);
-  row.append(brand, out);
+  actions.append(refresh, out);
+  row.append(brand, actions);
+  wrap.append(row);
+  header.append(wrap);
+  return header;
+}
+
+function renderNav() {
   const nav = el("nav", "nav-row");
   nav.setAttribute("aria-label", "Dashboard sections");
   [
     ["recent", "Recent"],
     ["cards", "Cards"],
     ["month", "Month"],
-    ["raw", "Raw entries"],
-    ["later", "Agent eval"]
+    ["raw", "Entries"]
   ].forEach(([id, label]) => {
-    const button = el("button", "nav-btn" + (id === "later" ? " later" : ""), label);
+    const button = el("button", "nav-btn", label);
     button.type = "button";
     if (state.view === id) button.setAttribute("aria-current", "page");
     button.addEventListener("click", () => {
@@ -233,16 +278,14 @@ function renderTop() {
     });
     nav.append(button);
   });
-  wrap.append(row, nav);
-  header.append(wrap);
-  return header;
+  return nav;
 }
 
 function renderRecent() {
   const section = el("section");
   const head = pageHead(
-    "Recent transactions",
-    "Switch between your own rows and both of you. This follows who logged the row, not whose card paid."
+    "Recent",
+    "This follows who logged the row, not whose card paid."
   );
   const filters = el("div", "filters");
   [
@@ -261,7 +304,7 @@ function renderRecent() {
   });
   head.append(filters);
   section.append(head);
-  section.append(el("p", "sub", "Fixing a category or a card from this page comes later. The button below does not change the sheet."));
+  section.append(el("p", "sub", "This page cannot edit the sheet, and changes stay in the Telegram chat."));
   if (state.payload.recent_truncated) {
     section.append(el("p", "sub", "Showing the latest " + state.payload.recent_limit + " confirmed rows."));
   }
@@ -282,31 +325,21 @@ function renderTransaction(row) {
   if (row.kind === "income") meta.append(el("span", "", "No card · income is household"));
   else meta.append(el("span", "", cardLine(row)));
   article.append(top, meta);
-  const actions = el("div", "tx-actions");
-  const fix = el("button", "text-btn", "Fix tagging");
-  fix.type = "button";
-  fix.disabled = true;
-  fix.title = "Fixing tags comes later. This does not change anything.";
-  actions.append(el("span", "later-note", "Comes later"), fix);
-  article.append(actions);
   return article;
 }
 
 function renderCards() {
   const section = el("section");
   const cards = state.payload.cards;
-  section.append(pageHead(
-    "Card summary",
-    "Credit cards for " + cards.owner + " only, the same idea as the card summary in Telegram. Colours match the bot."
-  ));
-  section.append(legend());
+  section.append(pageHead("Cards", "Only your cards."));
   if (cards.error) section.append(el("p", "banner", cards.error));
-  section.append(el("p", "group-label", "Capped"));
-  if (!cards.capped.length) section.append(el("p", "sub", "No capped cards."));
+  section.append(el("p", "group-label", "With a limit"));
+  if (!cards.capped.length) section.append(el("p", "sub", "No cards with a limit."));
   else section.append(cardGrid(cards.capped));
-  section.append(el("p", "group-label", "Uncapped"));
-  if (!cards.uncapped.length) section.append(el("p", "sub", "No uncapped cards. A card with no limit still shows here when one exists."));
+  section.append(el("p", "group-label", "No limit"));
+  if (!cards.uncapped.length) section.append(el("p", "sub", "No cards without a limit."));
   else section.append(cardGrid(cards.uncapped));
+  section.append(legend());
   return section;
 }
 
@@ -320,32 +353,33 @@ function renderCard(card) {
   const article = el("article", "money-card");
   const header = el("header");
   header.append(el("h3", "", card.name));
-  if (!card.limits.length) header.append(el("strong", "", "No cap"));
+  if (!card.limits.length) header.append(el("strong", "", money(card.spent)));
   article.append(header);
   article.append(el("div", "sub", prettyDate(card.period_start) + " to " + prettyDate(card.period_end)));
   if (!card.limits.length) {
-    const bar = el("div", "bar");
-    const fill = el("span", "fill-neutral");
-    fill.style.width = "100%";
-    bar.append(fill);
-    article.append(bar);
-    article.append(el("div", "", money(card.spent) + " this period"));
-    article.append(el("div", "sub", "No limit set · still shown"));
+    article.append(el("p", "no-limit", "No limit"));
     return article;
   }
   card.limits.forEach((limit) => {
     const block = el("div", "limit-block");
     const title = el("div", "tx-top");
+    const printed = shownPercent(limit);
     title.append(el("span", "", limit.label));
-    title.append(el("strong", "", limit.percent_label + "%"));
+    title.append(el("strong", "", printed + "%"));
     const bar = el("div", "bar");
+    bar.setAttribute("role", "img");
+    bar.setAttribute("aria-label", bandText(limit.band) + ", " + printed + " percent");
     const fill = el("span", "fill-" + limit.band);
+    fill.setAttribute("aria-hidden", "true");
     const width = Math.min(Number(limit.percent) || 0, 100);
     fill.style.width = width + "%";
     bar.append(fill);
     block.append(title, bar);
     block.append(el("div", "", money(limit.spent) + " of " + money(limit.limit)));
-    block.append(el("div", "sub", bandText(limit.band)));
+    block.append(el("div", "sub band-label", bandText(limit.band)));
+    if (limit.band === "orange" || limit.band === "red") {
+      block.append(el("p", "look-note", "This page only looks, and the sheet is still the record."));
+    }
     article.append(block);
   });
   return article;
@@ -353,18 +387,18 @@ function renderCard(card) {
 
 function renderMonth() {
   const section = el("section");
-  section.append(pageHead(
-    "Monthly summary",
-    "Household income, expenses, and what is left. Income is not split between the two of you. Card-only rows are left out."
-  ));
   const months = state.payload.months;
+  const current = months.find((month) => month.so_far) || months[months.length - 1];
+  section.append(renderLeft(current));
   const panel = el("div", "panel scroll");
-  panel.append(el("h3", "", "From the raw rows"));
+  panel.append(el("h3", "", "Last month and this month"));
   const table = el("table");
+  const caption = el("caption", "sr-only", "Household month. Income is shared. Card-only spend is left out.");
+  table.append(caption);
   const head = el("thead");
   const headRow = el("tr");
-  headRow.append(el("th", "", ""));
-  months.forEach((month) => headRow.append(el("th", "num", month.label)));
+  headRow.append(el("th", "", "What"));
+  months.forEach((month) => headRow.append(el("th", "num", monthHeading(month))));
   head.append(headRow);
   table.append(head);
   const body = el("tbody");
@@ -376,6 +410,19 @@ function renderMonth() {
   return section;
 }
 
+function renderLeft(month) {
+  const block = el("div", "left-block");
+  block.append(el("h2", "", "Left this month"));
+  const figure = el("p", "left-figure" + (isUp(month.net) ? " up" : ""), money(month.net));
+  block.append(figure);
+  block.append(el("p", "sub", monthHeading(month) + ". Income is shared. Card-only spend is left out."));
+  return block;
+}
+
+function monthHeading(month) {
+  return month.so_far ? month.label + " so far" : month.label;
+}
+
 function monthRows(months) {
   const rows = [];
   const incomeNames = uniqueNames(months, "income");
@@ -384,7 +431,7 @@ function monthRows(months) {
   rows.push(totalRow("Total income", months, "total_income", "total"));
   expenseNames.forEach((name) => rows.push(amountRow(name, months, "expenses", "")));
   rows.push(totalRow("Total expenses", months, "total_expenses", "total"));
-  rows.push(totalRow("Net", months, "net", "net"));
+  rows.push(totalRow("Left", months, "net", "net"));
   return rows;
 }
 
@@ -401,68 +448,127 @@ function amountRow(name, months, key, kind) {
 function totalRow(name, months, key, kind) {
   const row = el("tr", kind);
   row.append(el("td", "", name));
-  months.forEach((month) => row.append(el("td", "num", money(month[key]))));
+  months.forEach((month) => {
+    const amount = month[key];
+    const up = kind === "net" && isUp(amount);
+    row.append(el("td", "num" + (up ? " up" : ""), money(amount)));
+  });
   return row;
 }
 
 function renderRaw() {
   const section = el("section");
   section.append(pageHead(
-    "Raw entries",
-    "The same rows as the record book, plus card-only rows that stay out of household spending."
+    "Entries",
+    "The same rows as the sheet. Card-only rows stay out of household spending."
   ));
   if (state.payload.raw_expenses_truncated) {
     section.append(el("p", "sub", "Showing the latest " + state.payload.raw_expenses_limit + " raw expense rows."));
   }
-  section.append(rawTable(
+  section.append(rawBlock(
     "Raw Expenses",
     ["Entry ID", "Date", "Logged by", "Amount", "Category", "Description", "Payment owner", "Payment method", "Channel", "Type", "Status"],
-    state.payload.raw_expenses.map((row) => [
+    state.payload.raw_expenses,
+    (row) => [
       row.id, prettyDate(row.date), row.logged_by, money(row.amount), row.category, row.description,
       row.payment_owner || "—", row.payment_method || "—", row.payment_channel || "—", row.type, row.status
-    ])
+    ],
+    (row) => row.category || "—",
+    (row) => [
+      ["Entry id", row.id],
+      ["Card", cardField(row)],
+      ["Channel", row.payment_channel || "—"],
+      ["Payment owner", row.payment_owner || "—"],
+      ["Type", row.type || "—"],
+      ["Status", row.status || "—"],
+      ["Time", row.time || "—"]
+    ]
   ));
   if (state.payload.card_usage_truncated) {
     section.append(el("p", "sub", "Showing the latest " + state.payload.card_usage_limit + " card-only rows."));
   }
-  section.append(rawTable(
+  section.append(rawBlock(
     "Card Usage",
     ["Entry ID", "Date", "Logged by", "Amount", "Payment owner", "Payment method", "Channel", "Description", "Type", "Status"],
-    state.payload.card_usage.map((row) => [
+    state.payload.card_usage,
+    (row) => [
       row.id, prettyDate(row.date), row.logged_by, money(row.amount), row.payment_owner || "—",
       row.payment_method || "—", row.payment_channel || "—", row.description, row.type, row.status
-    ])
+    ],
+    () => "Card only · not an expense",
+    (row) => [
+      ["Entry id", row.id],
+      ["Card", cardField(row)],
+      ["Channel", row.payment_channel || "—"],
+      ["Payment owner", row.payment_owner || "—"],
+      ["Type", row.type || "—"],
+      ["Status", row.status || "—"],
+      ["Time", row.time || "—"]
+    ]
   ));
-  section.append(el("p", "sub", "Card Usage counts toward the card, and not toward household expenses or the monthly net figure."));
+  section.append(el("p", "sub", "Card Usage counts toward the card, and not toward household expenses or what is left this month."));
   return section;
 }
 
-function renderLater() {
-  const section = el("section");
-  const box = el("div", "later-box");
-  box.append(el("p", "kicker", "Later · not built"));
-  box.append(el("h2", "", "Agent eval"));
-  box.append(el("p", "sub", "This is a space for later. It would eventually show whether guesses were right or wrong. There is no score, and there is nothing to turn on."));
-  section.append(box);
-  return section;
+function rawBlock(title, headers, rows, toCells, category, fields) {
+  const block = el("div", "raw-block");
+  block.append(rawTable(title, headers, rows.map(toCells)));
+  block.append(rawCards(title, rows, category, fields));
+  return block;
+}
+
+function rawCards(title, rows, category, fields) {
+  const list = el("div", "raw-cards");
+  list.append(el("h3", "", title));
+  if (!rows.length) {
+    list.append(el("p", "empty", "No rows."));
+    return list;
+  }
+  rows.forEach((row) => list.append(renderRawCard(row, category, fields)));
+  return list;
+}
+
+function renderRawCard(row, category, fields) {
+  const details = el("details", "tx raw-card");
+  const summary = document.createElement("summary");
+  const top = el("div", "tx-top");
+  top.append(el("div", "merchant", row.description || "No description"));
+  top.append(el("div", "amount", money(row.amount)));
+  const meta = el("div", "tx-meta");
+  meta.append(el("span", "", prettyDate(row.date)));
+  meta.append(el("span", "", "Logged by " + (row.logged_by || "—")));
+  meta.append(el("span", "tag", category(row)));
+  const hint = el("div", "more-hint", "Details");
+  summary.append(top, meta, hint);
+  const extra = el("div", "raw-extra");
+  fields(row).forEach(([label, value]) => {
+    const line = el("div", "extra-line");
+    const name = el("span", "extra-label", label);
+    line.append(name, document.createTextNode(" " + (value || "—")));
+    extra.append(line);
+  });
+  details.append(summary, extra);
+  details.addEventListener("toggle", () => {
+    hint.textContent = details.open ? "Hide" : "Details";
+  });
+  return details;
 }
 
 function legend() {
-  const box = el("div", "legend");
+  const line = el("p", "colour-key");
   [
-    ["green", "Green", "Under 60%"],
-    ["yellow", "Yellow", "60% to 79%"],
-    ["orange", "Orange", "80% to 94%"],
-    ["red", "Red", "95% or more"]
-  ].forEach(([key, name, range]) => {
-    const item = el("div");
-    const title = el("strong", "");
-    title.append(el("i", "swatch band-" + key));
-    title.append(document.createTextNode(name));
-    item.append(title, el("div", "sub", range));
-    box.append(item);
+    ["green", "Under 60%"],
+    ["yellow", "60–79%"],
+    ["orange", "80–94%"],
+    ["red", "95%+"]
+  ].forEach(([key, range]) => {
+    const item = el("span", "colour-key-item");
+    const dot = el("i", "swatch band-" + key);
+    dot.setAttribute("aria-hidden", "true");
+    item.append(dot, document.createTextNode(range));
+    line.append(item);
   });
-  return box;
+  return line;
 }
 
 function pageHead(title, subtitle) {
@@ -474,21 +580,25 @@ function pageHead(title, subtitle) {
   return head;
 }
 
-function mark() {
+function mark(labeled) {
   const node = el("div", "mark");
-  node.append(el("i"));
-  node.append(document.createTextNode("Household money"));
+  const swatch = el("i");
+  swatch.setAttribute("aria-hidden", "true");
+  node.append(swatch);
+  if (labeled) node.append(document.createTextNode("Household money"));
   return node;
 }
 
 function rawTable(title, headers, records) {
-  const panel = el("div", "panel scroll");
+  const panel = el("div", "panel scroll raw-desktop");
   panel.append(el("h3", "", title));
   if (!records.length) {
     panel.append(el("p", "empty", "No rows."));
     return panel;
   }
   const table = el("table");
+  const caption = el("caption", "sr-only", title);
+  table.append(caption);
   const head = el("tr");
   headers.forEach((header, index) => head.append(el("th", index === 3 ? "num" : "", header)));
   const thead = el("thead");
@@ -505,6 +615,14 @@ function rawTable(title, headers, records) {
   return panel;
 }
 
+function cardField(row) {
+  const type = String(row.type || "").toLowerCase();
+  if (type === "income") return "No card";
+  if (!row.payment_method) return "—";
+  const owner = row.payment_owner ? " · " + row.payment_owner + "’s" : "";
+  return row.payment_method + owner;
+}
+
 function cardLine(row) {
   if (!row.payment_method) return "No card";
   const owner = row.payment_owner ? " · " + row.payment_owner + "’s" : "";
@@ -518,6 +636,24 @@ function bandText(band) {
   return "Red · 95% or more";
 }
 
+function shownPercent(limit) {
+  const precise = Number(limit.percent);
+  const label = Number(limit.percent_label);
+  if (Number.isFinite(label) && bandForPercent(label) === limit.band) return String(limit.percent_label);
+  if (!Number.isFinite(precise)) return String(limit.percent_label || "");
+  let shown = Math.round(precise);
+  if (bandForPercent(shown) !== limit.band) shown = Math.floor(precise);
+  if (bandForPercent(shown) !== limit.band) shown = Math.ceil(precise);
+  return String(shown);
+}
+
+function bandForPercent(value) {
+  if (value < 60) return "green";
+  if (value < 80) return "yellow";
+  if (value < 95) return "orange";
+  return "red";
+}
+
 function uniqueNames(months, key) {
   const names = [];
   months.forEach((month) => {
@@ -526,6 +662,11 @@ function uniqueNames(months, key) {
     });
   });
   return names;
+}
+
+function isUp(amount) {
+  const value = Number(String(amount).replace(/,/g, ""));
+  return Number.isFinite(value) && value >= 0;
 }
 
 function money(text) {

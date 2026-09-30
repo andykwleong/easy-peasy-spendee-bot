@@ -159,6 +159,22 @@ h2 { font-size: 1.45rem; letter-spacing: -0.03em; }
 .merchant { font-weight: 700; font-size: 1.05rem; }
 .amount { font-variant-numeric: tabular-nums; font-weight: 750; font-size: 1.35rem; letter-spacing: -0.03em; }
 .tx-meta { color: var(--muted); font-size: 0.92rem; margin-top: 4px; flex-wrap: wrap; }
+@media (min-width: 721px) {
+  .tx-meta {
+    display: grid;
+    grid-template-columns: 8.5rem minmax(10rem, 1.4fr) minmax(9rem, 1fr) minmax(10rem, 1.3fr);
+    justify-content: start;
+    align-items: center;
+    column-gap: 12px;
+    row-gap: 4px;
+  }
+  .raw-desktop table {
+    width: max-content;
+    min-width: 100%;
+  }
+  .raw-desktop th,
+  .raw-desktop td { white-space: nowrap; }
+}
 .tag {
   display: inline-flex;
   align-items: center;

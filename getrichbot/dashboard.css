@@ -275,27 +275,41 @@ td.num.up { background: var(--green-soft); font-weight: 750; }
   .tx-top, .tx-meta { align-items: flex-start; }
   th, td { padding: 8px 6px; }
   th.num { white-space: normal; }
+  body.nav-at-bottom {
+    height: 100dvh;
+    overflow: hidden;
+  }
+  body.nav-at-bottom .shell {
+    display: flex;
+    flex-direction: column;
+    height: 100dvh;
+    min-height: 0;
+    overflow: hidden;
+  }
   body.nav-at-bottom .top-stack {
-    position: static;
-    background: transparent;
-    border-bottom: 0;
+    display: contents;
   }
   body.nav-at-bottom .top {
+    order: 1;
+    flex: 0 0 auto;
     background: rgba(243, 239, 230, 0.96);
     border-bottom: 1px solid var(--line);
   }
+  body.nav-at-bottom main {
+    order: 2;
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    padding-bottom: 36px;
+    scroll-padding-bottom: 36px;
+  }
   body.nav-at-bottom .nav-row {
-    position: fixed;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    z-index: 20;
+    order: 3;
+    position: static;
+    flex: 0 0 auto;
     background: rgba(243, 239, 230, 0.97);
     border-top: 1px solid var(--line);
     padding: 8px 10px calc(8px + env(safe-area-inset-bottom));
-  }
-  body.nav-at-bottom main {
-    padding-bottom: calc(88px + env(safe-area-inset-bottom));
   }
   body.nav-under-name .top-stack {
     position: sticky;

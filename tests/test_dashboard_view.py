@@ -236,6 +236,66 @@ class DashboardViewTests(unittest.TestCase):
         self.assertEqual(len(payload["recent"]), 40)
         self.assertTrue(payload["recent_truncated"])
 
+    def test_cards_toggle_shows_the_other_persons_cards(self):
+        records = [
+            expense("aa1001", "60.00", "Food", payment_method="Sample Visa", payment_owner="Alex"),
+            expense("aa1002", "190.00", "Transport", logged_by="Sam", payment_method="Sample Mastercard", payment_owner="Sam"),
+            expense("aa1003", "12.00", "Food", logged_by="Sam", payment_method="Sample Spare", payment_owner="Sam"),
+        ]
+        config = parse_payment_config(
+            [
+                ["Payment Method", "Owner", "Type", "Cycle Type", "Cycle Start Day", "Active"],
+                ["Sample Visa", "Alex", "Credit Card", "Calendar", "1", "TRUE"],
+                ["Sample Mastercard", "Sam", "Credit Card", "Calendar", "1", "TRUE"],
+                ["Sample Spare", "Sam", "Credit Card", "Calendar", "1", "TRUE"],
+            ],
+            [
+                ["Payment Method", "Owner", "Category", "Limit Amount", "Active"],
+                ["Sample Visa", "Alex", "All", "100", "TRUE"],
+                ["Sample Mastercard", "Sam", "All", "200", "TRUE"],
+                ["Sample Spare", "Sam", "All", "", "TRUE"],
+            ],
+        )
+
+        mine = build_dashboard_payload(
+            viewer_label="Alex",
+            scope="both",
+            records=records,
+            card_usage=[],
+            payment_config=config,
+            today=date(2026, 9, 26),
+            cards_scope="mine",
+            household_labels=("Alex", "Sam"),
+        )
+        other = build_dashboard_payload(
+            viewer_label="Alex",
+            scope="both",
+            records=records,
+            card_usage=[],
+            payment_config=config,
+            today=date(2026, 9, 26),
+            cards_scope="other",
+            household_labels=("Alex", "Sam"),
+        )
+
+        self.assertEqual(mine["cards"]["owner"], "Alex")
+        self.assertEqual(mine["cards"]["other_label"], "Sam")
+        self.assertIn("Sample Visa", {card["name"] for card in mine["cards"]["capped"]})
+        self.assertNotIn("Sample Mastercard", {card["name"] for card in mine["cards"]["capped"]})
+
+        self.assertEqual(other["cards"]["owner"], "Sam")
+        self.assertEqual(other["cards"]["showing"], "other")
+        capped = {card["name"]: card for card in other["cards"]["capped"]}
+        uncapped = {card["name"]: card for card in other["cards"]["uncapped"]}
+        self.assertEqual(capped["Sample Mastercard"]["limits"][0]["band"], "red")
+        self.assertEqual(capped["Sample Mastercard"]["limits"][0]["spent"], "190.00")
+        self.assertEqual(uncapped["Sample Spare"]["spent"], "12.00")
+        self.assertEqual(uncapped["Sample Spare"]["limits"], [])
+        self.assertNotIn("Sample Visa", {**capped, **uncapped})
+        self.assertEqual(other["months"][1]["total_expenses"], mine["months"][1]["total_expenses"])
+        self.assertIn("Food", other["edit_choices"]["expense_categories"])
+        self.assertTrue(any(card["name"] == "Sample Mastercard" and card["owner"] == "Sam" for card in other["edit_choices"]["cards"]))
+
 
 if __name__ == "__main__":
     unittest.main()

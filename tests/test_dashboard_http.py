@@ -6,6 +6,7 @@ import json
 import threading
 import time
 import unittest
+from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 from http.client import HTTPConnection
@@ -32,12 +33,12 @@ def sign_webapp(user_id: int, token: str = TOKEN, auth_date: int = NOW) -> str:
     return urlencode({**fields, "hash": digest})
 
 
-def sign_widget(user_id: int, auth_date: int = NOW) -> dict:
-    fields = {"auth_date": str(auth_date), "first_name": "Alex", "id": str(user_id)}
+def sign_widget(user_id: int, auth_date: int = NOW, first_name: str = "Alex") -> dict:
+    fields = {"auth_date": str(auth_date), "first_name": first_name, "id": str(user_id)}
     data_check = "\n".join(f"{key}={value}" for key, value in sorted(fields.items()))
     secret = hashlib.sha256(TOKEN.encode()).digest()
     digest = hmac.new(secret, data_check.encode(), hashlib.sha256).hexdigest()
-    return {"auth_date": auth_date, "first_name": "Alex", "id": user_id, "hash": digest}
+    return {"auth_date": auth_date, "first_name": first_name, "id": user_id, "hash": digest}
 
 
 class FakeSheets:
@@ -96,6 +97,40 @@ class FakeSheets:
 
     def delete_entry_by_id(self, *args, **kwargs):
         raise AssertionError("dashboard must not write")
+
+
+class EditableSheets(FakeSheets):
+    def __init__(self):
+        super().__init__()
+        self.writes = []
+        self.config = parse_payment_config(
+            [
+                ["Payment Method", "Owner", "Type", "Cycle Type", "Cycle Start Day", "Active"],
+                ["Sample Visa", "Alex", "Credit Card", "Calendar", "1", "TRUE"],
+                ["Sample Mastercard", "Sam", "Credit Card", "Calendar", "1", "TRUE"],
+            ],
+            [
+                ["Payment Method", "Owner", "Category", "Payment Channel", "Limit Amount", "Active"],
+                ["Sample Visa", "Alex", "All", "All", "100", "TRUE"],
+                ["Sample Mastercard", "Sam", "All", "PayWave", "200", "TRUE"],
+            ],
+        )
+
+    def update_expense_record(self, sheet_name, row_number, **kwargs):
+        self.writes.append(("expense", row_number, kwargs))
+        updated = []
+        for record in self.records:
+            if record.row_number == row_number:
+                changes = {key: value for key, value in kwargs.items() if value is not None and key in record.__dataclass_fields__}
+                record = replace(record, **changes)
+            updated.append(record)
+        self.records = updated
+
+    def update_card_usage_record(self, sheet_name, row_number, **kwargs):
+        self.writes.append(("card_usage", row_number, kwargs))
+
+    def update_monthly_summary(self, sheet_name, rows):
+        self.summary_rows = rows
 
 
 def labels(user_id: int) -> str | None:
@@ -465,6 +500,96 @@ class DashboardPromptTests(unittest.IsolatedAsyncioTestCase):
         await configure_dashboard_menu(Application(), settings, server, "sample_bot")
         self.assertEqual(calls[0].text, "Dashboard")
         self.assertEqual(calls[0].web_app.url, "https://your-app.example.com")
+
+    def test_either_person_can_fix_a_row_and_a_locked_visit_cannot(self):
+        sheets = EditableSheets()
+        app, _sheets = app_for(sheets)
+        _status, headers, _payload = app.handle(
+            "POST",
+            "/api/session/widget",
+            {"Content-Type": "application/json"},
+            json.dumps(sign_widget(111)).encode(),
+            secure=True,
+        )
+        cookie = dict(headers)["Set-Cookie"].split(";", 1)[0]
+
+        locked, _, locked_body = app.handle(
+            "POST",
+            "/api/dashboard/edit",
+            {"Content-Type": "application/json"},
+            json.dumps({"id": "aa1001", "source": "expense", "field": "amount", "value": "9.00"}).encode(),
+            secure=True,
+        )
+        self.assertEqual(locked, 401)
+        self.assertEqual(sheets.writes, [])
+        self.assertNotIn(b"Sample cafe", locked_body)
+
+        saved_status, _, saved_body = app.handle(
+            "POST",
+            "/api/dashboard/edit",
+            {"Content-Type": "application/json", "Cookie": cookie},
+            json.dumps({
+                "id": "aa1001",
+                "source": "expense",
+                "field": "card",
+                "value": "Sample Mastercard",
+                "owner": "Sam",
+                "scope": "both",
+                "cards": "other",
+            }).encode(),
+            secure=True,
+        )
+
+        self.assertEqual(saved_status, 200)
+        saved = body_json(saved_body)
+        self.assertTrue(saved["ok"])
+        self.assertEqual(saved["cards"]["owner"], "Sam")
+        self.assertEqual(sheets.writes[0][2]["payment_owner"], "Sam")
+        self.assertEqual(sheets.writes[0][2]["payment_method"], "Sample Mastercard")
+        self.assertNotIn("logged_by", sheets.writes[0][2])
+        self.assertEqual(sheets.records[0].logged_by, "Alex")
+        self.assertEqual(sheets.records[0].payment_owner, "Sam")
+
+    def test_income_card_edit_does_not_write(self):
+        sheets = EditableSheets()
+        sheets.records.append(
+            ExpenseRecord(
+                row_number=3,
+                entry_id="aa1005",
+                timestamp="13:00:00",
+                expense_date="2026-09-20",
+                month="2026-09",
+                logged_by="Alex",
+                raw_input="sample pay",
+                amount=Decimal("100.00"),
+                category="Income - Sample Pay",
+                description="Sample pay",
+                input_type="text",
+                status="Confirmed",
+                transaction_type="Income",
+            )
+        )
+        app, _sheets = app_for(sheets)
+        _status, headers, _payload = app.handle(
+            "POST",
+            "/api/session/widget",
+            {"Content-Type": "application/json"},
+            json.dumps(sign_widget(111)).encode(),
+            secure=True,
+        )
+        cookie = dict(headers)["Set-Cookie"].split(";", 1)[0]
+
+        status, _, payload = app.handle(
+            "POST",
+            "/api/dashboard/edit",
+            {"Content-Type": "application/json", "Cookie": cookie},
+            json.dumps({"id": "aa1005", "source": "expense", "field": "card", "value": "Sample Visa", "owner": "Alex"}).encode(),
+            secure=True,
+        )
+
+        self.assertEqual(status, 400)
+        self.assertEqual(body_json(payload)["message"], "Income has no card.")
+        self.assertEqual(sheets.writes, [])
 
     async def test_menu_button_failure_does_not_stop_startup(self):
         class Bot:

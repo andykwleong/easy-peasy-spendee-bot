@@ -24,6 +24,8 @@ from getrichbot.dashboard_auth import (
     verify_webapp_init_data,
 )
 from getrichbot.dashboard_view import build_dashboard_payload
+from getrichbot.row_edits import expense_kind, format_saved_row, plan_edit
+from getrichbot.summary import build_monthly_summary_table
 
 LOGGER = logging.getLogger(__name__)
 SINGAPORE_TZ = ZoneInfo("Asia/Singapore")
@@ -46,11 +48,12 @@ class DashboardContext:
     payment_methods_sheet: str
     card_limits_sheet: str
     sheets: object
+    monthly_summary_sheet: str = "Monthly Summary"
     today: Callable[[], date] | None = None
 
 
 class DashboardApp:
-    """Read-only page. It never calls a Google Sheets write method."""
+    """Private page. Reading does not write. A finished row correction writes that row back to the sheet."""
 
     def __init__(self, context: DashboardContext):
         self.context = context
@@ -89,6 +92,8 @@ class DashboardApp:
             return self._login_widget(body, secure)
         if method == "GET" and path == "/api/dashboard":
             return self._dashboard(normalized, query)
+        if method == "POST" and path == "/api/dashboard/edit":
+            return self._edit(normalized, body)
         if method not in {"GET", "POST"}:
             return _json(405, {"ok": False, "error": "locked"})
         return _json(404, {"ok": False, "error": "locked"})
@@ -148,27 +153,192 @@ class DashboardApp:
         scope = query.get("scope", "mine")
         if scope not in {"mine", "both"}:
             return _json(400, {"ok": False, "error": "scope"})
+        cards_scope = query.get("cards", "mine")
+        if cards_scope not in {"mine", "other"}:
+            return _json(400, {"ok": False, "error": "cards"})
         try:
-            payload = self._read_sheet(label, scope)
+            payload = self._read_sheet(label, scope, cards_scope)
+        except ValueError:
+            return _json(400, {"ok": False, "error": "cards"})
         except Exception:
             LOGGER.error("Dashboard could not read the Google Sheet. Nothing was changed.")
             return _json(500, {"ok": False, "error": "sheet"})
         return _json(200, payload)
 
-    def _read_sheet(self, label: str, scope: str) -> dict:
+    def _edit(self, headers: dict[str, str], body: bytes) -> tuple[int, list[tuple[str, str]], bytes]:
+        identity = self._identity_from_headers(headers)
+        if identity is None:
+            return _json(401, {"ok": False, "error": "locked"})
+        label = self.context.label_for_user(identity.user_id)
+        if label is None:
+            return _json(401, {"ok": False, "error": "not_allowed"})
+        payload = _json_object(body)
+        if payload is None:
+            return _json(400, {"ok": False, "error": "invalid"})
+        entry_id = payload.get("id")
+        source = payload.get("source")
+        field = payload.get("field")
+        value = payload.get("value")
+        owner = payload.get("owner")
+        scope = payload.get("scope", "mine")
+        cards_scope = payload.get("cards", "mine")
+        if not isinstance(entry_id, str) or not entry_id.strip() or len(entry_id) > 40:
+            return _json(400, {"ok": False, "error": "invalid"})
+        if source not in {"expense", "card_usage"} or field not in {"category", "amount", "card", "channel"}:
+            return _json(400, {"ok": False, "error": "invalid"})
+        if not isinstance(value, str) or not isinstance(scope, str) or not isinstance(cards_scope, str):
+            return _json(400, {"ok": False, "error": "invalid"})
+        if owner is not None and not isinstance(owner, str):
+            return _json(400, {"ok": False, "error": "invalid"})
+        if scope not in {"mine", "both"} or cards_scope not in {"mine", "other"}:
+            return _json(400, {"ok": False, "error": "scope"})
+        try:
+            result = self._write_edit(
+                label,
+                entry_id.strip(),
+                source,
+                field,
+                value,
+                owner.strip() if isinstance(owner, str) and owner.strip() else None,
+                scope,
+                cards_scope,
+            )
+        except ValueError:
+            return _json(400, {"ok": False, "error": "cards"})
+        except Exception:
+            LOGGER.exception("Dashboard could not update the Google Sheet.")
+            return _json(500, {"ok": False, "error": "sheet", "message": "I could not update the Google Sheet just now. Try again in a moment."})
+        if result is None:
+            return _json(404, {"ok": False, "error": "not_found", "message": "I could not find that row."})
+        status, body_payload = result
+        if not body_payload.get("ok"):
+            return _json(status, body_payload)
+        return _json(200, body_payload)
+
+    def _write_edit(
+        self,
+        label: str,
+        entry_id: str,
+        source: str,
+        field: str,
+        value: str,
+        owner: str | None,
+        scope: str,
+        cards_scope: str,
+    ) -> tuple[int, dict] | None:
         with self._sheet_lock:
             records = self.context.sheets.get_expense_records(self.context.raw_sheet)
             card_usage = self.context.sheets.get_card_usage_records(self.context.card_usage_sheet)
             payment_config = None
-            cards_error = None
             try:
                 payment_config = self.context.sheets.get_payment_config(
                     self.context.payment_methods_sheet,
                     self.context.card_limits_sheet,
                 )
             except (RuntimeError, ValueError):
-                LOGGER.warning("Dashboard could not read payment setup. Other sections are still shown.")
-                cards_error = "Card setup could not be read. Nothing was changed."
+                LOGGER.warning("Dashboard could not read payment setup.")
+            if source == "expense":
+                record = next((item for item in reversed(records) if item.entry_id.lower() == entry_id.lower()), None)
+                if record is None:
+                    return None
+                kind = expense_kind(record.transaction_type, record.input_type)
+                current_method = "" if kind == "income" else record.payment_method
+                current_owner = "" if kind == "income" else (record.payment_owner or record.logged_by)
+                current_channel = "" if kind == "income" else record.payment_channel
+                current_amount = record.amount
+                current_category = record.category
+                current_date = record.expense_date
+                row_number = record.row_number
+            else:
+                record = next((item for item in reversed(card_usage) if item.entry_id.lower() == entry_id.lower()), None)
+                if record is None:
+                    return None
+                kind = "card_only"
+                current_method = record.payment_method
+                current_owner = record.payment_owner or record.logged_by
+                current_channel = record.payment_channel
+                current_amount = record.amount
+                current_category = ""
+                current_date = record.usage_date
+                row_number = record.row_number
+            if field in {"card", "channel"} and payment_config is None:
+                return 400, {
+                    "ok": False,
+                    "error": "sheet",
+                    "message": "I could not read the card list just now. Nothing was changed.",
+                }
+            planned = plan_edit(
+                kind=kind,
+                field=field,
+                value=value,
+                owner=owner,
+                current_method=current_method,
+                current_owner=current_owner,
+                current_channel=current_channel,
+                payment_config=payment_config,
+            )
+            if not planned.ok:
+                return 400, {"ok": False, "error": planned.error, "message": planned.message}
+            if source == "expense":
+                self.context.sheets.update_expense_record(
+                    self.context.raw_sheet,
+                    row_number,
+                    amount=planned.amount,
+                    category=planned.category,
+                    transaction_type=planned.transaction_type,
+                    payment_method=planned.payment_method if planned.touch_payment else None,
+                    payment_owner=planned.payment_owner if planned.touch_payment else None,
+                    payment_channel=planned.payment_channel if planned.touch_payment else None,
+                )
+                if planned.amount is not None or planned.category is not None:
+                    self._refresh_monthly_summary()
+            else:
+                self.context.sheets.update_card_usage_record(
+                    self.context.card_usage_sheet,
+                    row_number,
+                    amount=planned.amount,
+                    payment_method=planned.payment_method if planned.touch_payment else None,
+                    payment_owner=planned.payment_owner if planned.touch_payment else None,
+                    payment_channel=planned.payment_channel if planned.touch_payment else None,
+                )
+            saved = format_saved_row(
+                amount=planned.amount if planned.amount is not None else current_amount,
+                category=planned.category if planned.category is not None else current_category,
+                expense_date=current_date,
+                entry_id=entry_id,
+                kind=kind,
+                payment_method=planned.payment_method if planned.touch_payment else current_method,
+                payment_owner=planned.payment_owner if planned.touch_payment else current_owner,
+                payment_channel=planned.payment_channel if planned.touch_payment else current_channel,
+                showed_payment=planned.touch_payment,
+            )
+            dashboard = self._read_sheet_unlocked(label, scope, cards_scope)
+        dashboard["ok"] = True
+        dashboard["message"] = saved
+        return 200, dashboard
+
+    def _refresh_monthly_summary(self) -> None:
+        records = self.context.sheets.get_expense_records(self.context.raw_sheet)
+        table = build_monthly_summary_table(records)
+        self.context.sheets.update_monthly_summary(self.context.monthly_summary_sheet, table)
+
+    def _read_sheet(self, label: str, scope: str, cards_scope: str = "mine") -> dict:
+        with self._sheet_lock:
+            return self._read_sheet_unlocked(label, scope, cards_scope)
+
+    def _read_sheet_unlocked(self, label: str, scope: str, cards_scope: str) -> dict:
+        records = self.context.sheets.get_expense_records(self.context.raw_sheet)
+        card_usage = self.context.sheets.get_card_usage_records(self.context.card_usage_sheet)
+        payment_config = None
+        cards_error = None
+        try:
+            payment_config = self.context.sheets.get_payment_config(
+                self.context.payment_methods_sheet,
+                self.context.card_limits_sheet,
+            )
+        except (RuntimeError, ValueError):
+            LOGGER.warning("Dashboard could not read payment setup. Other sections are still shown.")
+            cards_error = "Card setup could not be read. Nothing was changed."
         today = self.context.today() if self.context.today is not None else datetime.now(SINGAPORE_TZ).date()
         return build_dashboard_payload(
             viewer_label=label,
@@ -178,7 +348,17 @@ class DashboardApp:
             payment_config=payment_config,
             today=today,
             cards_error=cards_error,
+            cards_scope=cards_scope,
+            household_labels=self._household_labels(),
         )
+
+    def _household_labels(self) -> tuple[str, ...]:
+        labels: list[str] = []
+        for user_id in sorted(self.context.allowed_user_ids):
+            label = self.context.label_for_user(user_id)
+            if label and label not in labels:
+                labels.append(label)
+        return tuple(labels)
 
     def _identity_from_headers(self, headers: dict[str, str]) -> TelegramIdentity | None:
         init_data = headers.get("x-telegram-init-data", "").strip()
@@ -259,6 +439,7 @@ def context_from_settings(settings, sheets) -> DashboardContext:
         payment_methods_sheet=settings.payment_methods_sheet,
         card_limits_sheet=settings.card_limits_sheet,
         sheets=sheets,
+        monthly_summary_sheet=settings.monthly_summary_sheet,
     )
 
 

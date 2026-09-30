@@ -34,7 +34,7 @@ Telegram group chat
 - Shows category spending breakdowns by month, including who logged each row and category totals.
 - Supports undo for the last expense sent by a user.
 - Keeps the bot private to configured Telegram user IDs.
-- Shows a private read-only dashboard for those same two people. It reads the Google Sheet and does not change it.
+- Shows a private dashboard for those same two people. It reads the Google Sheet. Fix tagging can correct a saved row's category, amount, card, or channel, and that correction is written back to the same row.
 
 ## Requirements
 
@@ -284,7 +284,7 @@ Payment configuration is read only when you use the bot. It is cached in memory 
 
 ## Private dashboard
 
-The dashboard is a window onto the same Google Sheet. It does not add a second set of numbers, and it cannot change a row. Typing a new expense still happens in Telegram.
+The dashboard is a window onto the same Google Sheet. It does not add a second set of numbers. Typing a new expense still happens in Telegram. Fix tagging can correct a row that is already there.
 
 Two ways to open it, and only for the two Telegram accounts already allowed to use the bot:
 
@@ -293,7 +293,9 @@ Two ways to open it, and only for the two Telegram accounts already allowed to u
 
 The page rearranges itself. A narrow window uses the phone layout. A wide window uses the desktop layout.
 
-It shows recent transactions (yours, or both), your own card summary with the same colours as Telegram (green under 60%, yellow from 60% to 79%, orange from 80% to 94%, red at 95% or more, and uncapped cards still show), the household monthly income, expenses, and net, the raw rows, and card-only rows that stay out of household spending. Income is for the household, not split by person. A later "Agent eval" space is labelled and has no score. The "Fix tagging" control is switched off and does not write anything.
+It shows recent transactions (yours, or both), card summary, the household monthly income, expenses, and net, the raw rows, and card-only rows that stay out of household spending. Income is for the household, not split by person. On Cards, a toggle switches between your credit cards and the other person's. The colours stay the same as Telegram: green under 60%, yellow from 60% to 79%, orange from 80% to 94%, red at 95% or more. A card with no limit still shows.
+
+Fix tagging, on a recent row, is how you correct that row. Either of you can change the category, the amount, the card, or the payment channel when that field applies. Income has no card. Card-only spend has no expense category. The sheet updates when you pick a category, card, or channel, or when you finish the amount. It does not ask "are you sure", and it does not save on every keystroke. Payment owner follows the card you pick. Logged by stays the person who logged the row. If a card has only one channel that is not All, that channel stays. If it has no channel choice, the page does not invent one. Monthly totals and card totals are calculated again from the rows. A later "Agent eval" space is labelled and has no score.
 
 Before the computer login can finish, tell BotFather that this website belongs to your bot. Open BotFather, choose your bot, and use Login Widget or `/setdomain`. Add the dashboard address. Until that is done, the computer button may open and then stop. Until `DASHBOARD_PUBLIC_URL` is set on Railway, the button in the chat does nothing useful. The expense chat keeps working either way.
 
@@ -405,6 +407,9 @@ Plain-language shortcuts:
 - `gift`
 - `change to Travel`
 - `change category to Travel`
+- `change amount to 23.20`
+- `change card to Sample Visa`
+- `change channel to Online`
 - `change spend date to 21 May`
 - `summary`
 - `summary this month`
@@ -440,7 +445,9 @@ The bot still validates actions against real `Entry ID` rows in Google Sheets be
 
 Delete requests ask for confirmation before removing a row. Reply `yes` to delete, or `cancel`.
 
-Edit requests for already logged Google Sheet rows also ask for confirmation before changing the row. The narrow shortcut `change to Travel` or `change category to Travel` is treated as an immediate category correction for your latest logged expense only. If a date edit needs the new date, the bot remembers the matched row while it waits for your next reply, such as `30 June 2026`. Reply `cancel` to discard that date change. This temporary state is cleared after the confirmation prompt or a Railway restart. Reply `yes` to the before/after confirmation to update the row.
+A correction to the category, amount, card, or payment channel of your latest logged row updates the Google Sheet immediately. There is no extra confirmation. The same four corrections on the dashboard do the same thing. `change to Travel`, `change it to Travel`, and `change category to Travel` are still the category shortcut. `change amount to 23.20`, `change card to Sample Visa`, and `change channel to Online` work the same way. Payment owner follows the card. Logged by does not change. Income has no card. Card-only spend has no expense category. If the card has only one channel that is not All, that channel is used. If it has no channel choice, the bot does not invent one.
+
+Other edits, such as a date change, still ask for confirmation before the row changes. If a date edit needs the new date, the bot remembers the matched row while it waits for your next reply, such as `30 June 2026`. Reply `cancel` to discard that date change. This temporary state is cleared after the confirmation prompt or a Railway restart. Reply `yes` to the before/after confirmation to update the row.
 
 If the bot asks for a missing category on a normal typed expense, reply with the category name. For example, if the bot asks about `durian 12`, replying `Food` logs it immediately.
 
@@ -546,7 +553,7 @@ The bot shows the full fixed expense list again after edits. Once you reply `con
 - Payment selection is temporary while the bot is running. If Railway restarts before you tap a payment button, resend the expense instead of assuming it was logged.
 - Follow-up replies can update pending entries, for example `gift` or `confirm 2 as Gifts`.
 - `change spend date to 21 May` updates the latest logged expense for that sender.
-- `change to Travel` updates the latest logged expense category for that sender immediately.
+- `change to Travel`, `change amount to 23.20`, `change card to Sample Visa`, and `change channel to Online` update the latest logged row for that sender immediately.
 - A bare entry ID like `1d9c9a` opens the delete confirmation for that expense, so it will not be mistaken for a $9 expense.
 - Telegram summaries and the `Monthly Summary` tab are recalculated from `Raw Expenses`.
 - If a wrong month appears in `Monthly Summary`, correct the relevant `Date` and `Month` cells in `Raw Expenses`, then let the bot refresh the summary.

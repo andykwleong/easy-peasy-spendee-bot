@@ -133,6 +133,26 @@ h2 { font-size: 1.7rem; letter-spacing: -0.03em; }
 .merchant { font-weight: 700; font-size: 1.05rem; }
 .amount { font-variant-numeric: tabular-nums; font-weight: 750; font-size: 1.15rem; }
 .tx-meta { color: var(--muted); font-size: 0.92rem; margin-top: 4px; flex-wrap: wrap; }
+@media (min-width: 721px) {
+  .tx-meta {
+    display: grid;
+    grid-template-columns: 8.75rem 17rem 12rem minmax(0, 1fr);
+    align-items: center;
+    column-gap: 16px;
+    row-gap: 4px;
+  }
+  .tx-meta > * { min-width: 0; }
+  .tx-date { grid-column: 1; }
+  .tx-meta .tag {
+    grid-column: 2;
+    display: inline-block;
+    justify-self: start;
+    max-width: 100%;
+    white-space: normal;
+  }
+  .tx-logged { grid-column: 3; }
+  .tx-note { grid-column: 4; }
+}
 .tag {
   display: inline-flex;
   align-items: center;
@@ -186,7 +206,24 @@ th { color: var(--muted); font-size: 0.82rem; font-weight: 700; }
 .total td { font-weight: 750; }
 .net td { background: var(--green-soft); font-weight: 750; }
 .scroll { overflow-x: auto; }
-.panel { margin-bottom: 14px; box-shadow: var(--shadow); }
+.table-scroll {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+}
+.table-scroll table {
+  width: max-content;
+  min-width: 100%;
+}
+.table-scroll th,
+.table-scroll td {
+  white-space: nowrap;
+}
+.table-scroll th:last-child,
+.table-scroll td:last-child {
+  padding-right: 16px;
+}
+.panel { margin-bottom: 14px; box-shadow: var(--shadow); min-width: 0; max-width: 100%; }
 .panel h3 { margin-bottom: 8px; }
 .later-box {
   border: 1.5px dashed #c3b8a4;

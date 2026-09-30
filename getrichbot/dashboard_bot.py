@@ -7,6 +7,8 @@ from telegram.error import TelegramError
 from telegram.ext import ContextTypes
 
 LOGGER = logging.getLogger(__name__)
+# Telegram requires message text. This one character is invisible, so only the button shows.
+_BUTTON_ONLY_TEXT = "\u200b"
 
 
 def dashboard_prompt(public_url: str | None) -> tuple[str, str | None]:
@@ -19,7 +21,7 @@ def dashboard_prompt(public_url: str | None) -> tuple[str, str | None]:
             "Expenses in this chat are unchanged.",
             None,
         )
-    return ("Dashboard", url)
+    return (_BUTTON_ONLY_TEXT, url)
 
 
 def _is_private_chat(update: Update) -> bool:

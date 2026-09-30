@@ -340,8 +340,9 @@ class DashboardPromptTests(unittest.IsolatedAsyncioTestCase):
 
         text, url = dashboard_prompt("https://your-app.example.com")
         self.assertEqual(url, "https://your-app.example.com")
-        self.assertIn("30 days", text)
-        self.assertIn("Log out", text)
+        self.assertEqual(text, "Dashboard")
+        self.assertNotIn("30 days", text)
+        self.assertNotIn("Log out", text)
 
     async def test_private_chat_includes_the_link_and_a_mini_app_button(self):
         sent = []
@@ -366,15 +367,18 @@ class DashboardPromptTests(unittest.IsolatedAsyncioTestCase):
         await reply_with_dashboard(Update(333), Settings())
 
         text, markup = sent[0]
+        self.assertEqual(text, "Dashboard")
+        self.assertEqual(len(markup.inline_keyboard), 1)
+        self.assertEqual(len(markup.inline_keyboard[0]), 1)
         button = markup.inline_keyboard[0][0]
-        self.assertIn("https://your-app.example.com", text)
         self.assertEqual(button.text, "Open dashboard")
         self.assertEqual(button.web_app.url, "https://your-app.example.com")
+        self.assertIsNone(button.url)
         self.assertNotIn("reply_keyboard", markup.to_dict())
         self.assertIn("do not recognize", sent[1][0])
         self.assertIsNone(sent[1][1])
 
-    async def test_group_reply_includes_the_link_and_no_web_app_button(self):
+    async def test_group_reply_is_one_browser_link_button(self):
         sent = []
 
         class Message:
@@ -398,9 +402,13 @@ class DashboardPromptTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(sent), 2)
         for text, markup in sent:
-            self.assertIn("https://your-app.example.com", text)
-            self.assertIn("Open the household dashboard.", text)
-            self.assertIsNone(markup)
+            self.assertEqual(text, "Dashboard")
+            self.assertEqual(len(markup.inline_keyboard), 1)
+            self.assertEqual(len(markup.inline_keyboard[0]), 1)
+            button = markup.inline_keyboard[0][0]
+            self.assertEqual(button.text, "Open dashboard")
+            self.assertEqual(button.url, "https://your-app.example.com")
+            self.assertIsNone(button.web_app)
 
     async def test_rejected_private_button_still_sends_the_link(self):
         sent = []
@@ -424,14 +432,7 @@ class DashboardPromptTests(unittest.IsolatedAsyncioTestCase):
 
         await reply_with_dashboard(Update(), Settings())
 
-        self.assertEqual(sent, [
-            "Open the household dashboard.\n\n"
-            "On a computer, open this link in a browser and tap Log in with Telegram:\n"
-            "https://your-app.example.com\n\n"
-            "On your phone, tap Dashboard in the bot menu. It opens inside Telegram and already knows who you are.\n\n"
-            "After you confirm, that browser remembers you for 30 days so you do not confirm every time. "
-            "Use Log out on a shared computer. Log out forgets it immediately."
-        ])
+        self.assertEqual(sent, ["Dashboard"])
 
     async def test_menu_button_is_not_set_without_https(self):
         calls = []

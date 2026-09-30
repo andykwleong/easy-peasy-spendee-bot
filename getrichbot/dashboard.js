@@ -510,9 +510,9 @@ function renderRaw() {
   return section;
 }
 
-function rawBlock(title, headers, rows, tableRows, category, fields) {
+function rawBlock(title, headers, rows, toCells, category, fields) {
   const block = el("div", "raw-block");
-  block.append(rawTable(title, headers, tableRows));
+  block.append(rawTable(title, headers, rows.map(toCells)));
   block.append(rawCards(title, rows, category, fields));
   return block;
 }

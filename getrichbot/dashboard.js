@@ -4,12 +4,16 @@ const ERROR_TEXT = {
   not_allowed: "This Telegram account is not allowed to open the dashboard.",
   locked: "This page is locked.",
   sheet: "I could not read the Google Sheet just now. Nothing was changed. Try again in a moment.",
-  scope: "Choose your own spending, or both."
+  scope: "Choose your own spending, or both.",
+  cards: "Choose your own cards, or the other person's."
 };
 
 const state = {
   view: "recent",
   scope: "mine",
+  cards: "mine",
+  editingId: "",
+  savedNote: "",
   payload: null,
   message: "",
   loggedOut: false,
@@ -62,7 +66,7 @@ async function boot() {
 async function loadDashboard() {
   state.message = "";
   renderLoading();
-  const response = await fetch("/api/dashboard?scope=" + encodeURIComponent(state.scope), {
+  const response = await fetch("/api/dashboard?scope=" + encodeURIComponent(state.scope) + "&cards=" + encodeURIComponent(state.cards), {
     credentials: "same-origin",
     headers: telegramInitData() && !state.loggedOut ? { "X-Telegram-Init-Data": telegramInitData() } : {}
   });
@@ -87,6 +91,8 @@ async function loginWithWidget(user) {
   }
   state.loggedOut = false;
   state.scope = "mine";
+  state.cards = "mine";
+  state.editingId = "";
   state.view = "recent";
   await loadDashboard();
 }
@@ -261,7 +267,7 @@ function renderRecent() {
   });
   head.append(filters);
   section.append(head);
-  section.append(el("p", "sub", "Fixing a category or a card from this page comes later. The button below does not change the sheet."));
+  section.append(el("p", "sub", "Fix tagging writes to the sheet when you pick a category, card, or channel, or when you finish the amount. It does not ask again, and it does not save each keystroke. Logged by stays the person who logged the row. Payment owner follows the card."));
   if (state.payload.recent_truncated) {
     section.append(el("p", "sub", "Showing the latest " + state.payload.recent_limit + " confirmed rows."));
   }
@@ -283,22 +289,196 @@ function renderTransaction(row) {
   else meta.append(el("span", "", cardLine(row)));
   article.append(top, meta);
   const actions = el("div", "tx-actions");
-  const fix = el("button", "text-btn", "Fix tagging");
+  const open = state.editingId === row.id;
+  const fix = el("button", "text-btn", open ? "Close" : "Fix tagging");
   fix.type = "button";
-  fix.disabled = true;
-  fix.title = "Fixing tags comes later. This does not change anything.";
-  actions.append(el("span", "later-note", "Comes later"), fix);
+  fix.setAttribute("aria-expanded", String(open));
+  fix.addEventListener("click", () => {
+    state.editingId = open ? "" : row.id;
+    state.savedNote = "";
+    render();
+  });
+  actions.append(fix);
   article.append(actions);
+  if (open) article.append(renderEditor(row));
   return article;
+}
+
+function renderEditor(row) {
+  const box = el("div", "edit-box");
+  const fields = fieldsFor(row);
+  if (fields.indexOf("category") !== -1) {
+    box.append(editSelect("Category", categoryChoices(row), row.category, (value) => {
+      if (value !== row.category) saveEdit(row, "category", value);
+    }));
+  }
+  if (fields.indexOf("amount") !== -1) box.append(editAmount(row));
+  if (fields.indexOf("card") !== -1) box.append(editCard(row));
+  if (fields.indexOf("channel") !== -1) {
+    const channel = editChannel(row);
+    if (channel) box.append(channel);
+  }
+  if (state.savedNote) box.append(el("p", "saved-note", state.savedNote));
+  return box;
+}
+
+function fieldsFor(row) {
+  if (row.kind === "card_only") return ["amount", "card", "channel"];
+  if (row.kind === "income" || row.kind === "fixed") return ["category", "amount"];
+  return ["category", "amount", "card", "channel"];
+}
+
+function categoryChoices(row) {
+  const choices = state.payload.edit_choices || {};
+  if (row.kind === "income") return choices.income_categories || [];
+  if (row.kind === "fixed") return choices.fixed_categories || [];
+  return choices.expense_categories || [];
+}
+
+function editCard(row) {
+  const cards = (state.payload.edit_choices && state.payload.edit_choices.cards) || [];
+  const current = cardKey(row.payment_owner, row.payment_method);
+  return editSelect("Card", cards.map((card) => ({
+    value: cardKey(card.owner, card.name),
+    label: card.owner + " · " + card.name
+  })), current, (value) => {
+    const picked = cards.find((card) => cardKey(card.owner, card.name) === value);
+    if (!picked || (picked.name === row.payment_method && picked.owner === row.payment_owner)) return;
+    saveEdit(row, "card", picked.name, picked.owner);
+  });
+}
+
+function editChannel(row) {
+  const cards = (state.payload.edit_choices && state.payload.edit_choices.cards) || [];
+  const card = cards.find((item) => item.name === row.payment_method && item.owner === row.payment_owner);
+  const channels = card ? card.channels : [];
+  if (!channels.length) return null;
+  if (channels.length === 1) return editField("Channel", el("span", "", channels[0]));
+  return editSelect("Channel", channels, row.payment_channel, (value) => {
+    if (value && value !== row.payment_channel) saveEdit(row, "channel", value);
+  });
+}
+
+function editAmount(row) {
+  const input = document.createElement("input");
+  input.type = "text";
+  input.inputMode = "decimal";
+  input.value = row.amount;
+  input.setAttribute("aria-label", "Amount");
+  const commit = () => {
+    const cleaned = input.value.trim().replace(/[$,]/g, "");
+    if (cleaned === String(row.amount) || Number(cleaned).toFixed(2) === Number(row.amount).toFixed(2)) return;
+    if (!/^\d+(?:\.\d{1,2})?$/.test(cleaned) || Number(cleaned) <= 0) {
+      state.savedNote = "Finish the amount, such as 23.20. Nothing was saved yet.";
+      render();
+      return;
+    }
+    saveEdit(row, "amount", cleaned);
+  };
+  input.addEventListener("change", commit);
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      input.blur();
+    }
+  });
+  return editField("Amount", input);
+}
+
+function editSelect(label, choices, current, onPick) {
+  const select = document.createElement("select");
+  select.setAttribute("aria-label", label);
+  const items = choices.map((choice) => (typeof choice === "string" ? { value: choice, label: choice } : choice));
+  if (!items.some((item) => item.value === current)) {
+    const blank = document.createElement("option");
+    blank.value = "";
+    blank.textContent = "Choose";
+    blank.selected = true;
+    select.append(blank);
+  }
+  items.forEach((item) => {
+    const option = document.createElement("option");
+    option.value = item.value;
+    option.textContent = item.label;
+    if (item.value === current) option.selected = true;
+    select.append(option);
+  });
+  select.addEventListener("change", () => {
+    if (select.value) onPick(select.value);
+  });
+  return editField(label, select);
+}
+
+function editField(label, control) {
+  const field = el("label", "edit-row");
+  field.append(el("span", "", label), control);
+  return field;
+}
+
+function cardKey(owner, name) {
+  return (owner || "") + "\n" + (name || "");
+}
+
+async function saveEdit(row, field, value, owner) {
+  const payload = {
+    id: row.id,
+    source: row.source,
+    field: field,
+    value: value,
+    scope: state.scope,
+    cards: state.cards
+  };
+  if (owner) payload.owner = owner;
+  const headers = { "Content-Type": "application/json" };
+  if (telegramInitData() && !state.loggedOut) headers["X-Telegram-Init-Data"] = telegramInitData();
+  try {
+    const response = await fetch("/api/dashboard/edit", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: headers,
+      body: JSON.stringify(payload)
+    });
+    const body = await response.json();
+    if (!response.ok || !body.ok) {
+      state.savedNote = body.message || ERROR_TEXT.sheet;
+      render();
+      return;
+    }
+    state.payload = body;
+    state.savedNote = body.message || "Saved.";
+    render();
+  } catch (error) {
+    state.savedNote = ERROR_TEXT.sheet;
+    render();
+  }
 }
 
 function renderCards() {
   const section = el("section");
   const cards = state.payload.cards;
-  section.append(pageHead(
+  const head = pageHead(
     "Card summary",
-    "Credit cards for " + cards.owner + " only, the same idea as the card summary in Telegram. Colours match the bot."
-  ));
+    "Credit cards for " + cards.owner + ". Switch between the two of you. Colours match the bot. A card with no limit still shows."
+  );
+  if (cards.other_label) {
+    const filters = el("div", "filters");
+    [
+      ["mine", cards.viewer_label],
+      ["other", cards.other_label]
+    ].forEach(([id, label]) => {
+      const chip = el("button", "chip", label);
+      chip.type = "button";
+      chip.setAttribute("aria-pressed", String(state.cards === id));
+      chip.addEventListener("click", () => {
+        if (state.cards === id) return;
+        state.cards = id;
+        loadDashboard();
+      });
+      filters.append(chip);
+    });
+    head.append(filters);
+  }
+  section.append(head);
   section.append(legend());
   if (cards.error) section.append(el("p", "banner", cards.error));
   section.append(el("p", "group-label", "Capped"));

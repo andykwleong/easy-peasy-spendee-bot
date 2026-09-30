@@ -6,6 +6,7 @@ from decimal import Decimal
 from getrichbot.cards import CardLimit, PaymentConfig, build_card_summary
 from getrichbot.categories import ALL_CATEGORIES
 from getrichbot.models import CardUsageRecord, ExpenseRecord
+from getrichbot.row_edits import edit_choices
 from getrichbot.summary import SummaryPeriod, _is_income_category, build_spending_summary
 
 RECENT_LIMIT = 40
@@ -31,9 +32,18 @@ def build_dashboard_payload(
     payment_config: PaymentConfig | None,
     today: date,
     cards_error: str | None = None,
+    cards_scope: str = "mine",
+    household_labels: tuple[str, ...] = (),
 ) -> dict:
     if scope not in {"mine", "both"}:
         raise ValueError("scope must be mine or both")
+    if cards_scope not in {"mine", "other"}:
+        raise ValueError("cards scope must be mine or other")
+
+    other_label = next((label for label in household_labels if label and label != viewer_label), "")
+    if cards_scope == "other" and not other_label:
+        raise ValueError("cards scope")
+    card_owner = other_label if cards_scope == "other" else viewer_label
 
     months = [
         _month_snapshot(records, _previous_month_period(today)),
@@ -42,13 +52,18 @@ def build_dashboard_payload(
     raw_expenses = _raw_expenses(records)
     usage_rows = _raw_card_usage(card_usage)
     recent = _recent_items(records, card_usage, viewer_label, scope)
+    cards = _cards_snapshot(card_owner, records, card_usage, payment_config, today, cards_error)
+    cards["showing"] = cards_scope
+    cards["viewer_label"] = viewer_label
+    cards["other_label"] = other_label
     return {
         "viewer_label": viewer_label,
         "scope": scope,
+        "cards_scope": cards_scope,
         "recent": recent[:RECENT_LIMIT],
         "recent_limit": RECENT_LIMIT,
         "recent_truncated": len(recent) > RECENT_LIMIT,
-        "cards": _cards_snapshot(viewer_label, records, card_usage, payment_config, today, cards_error),
+        "cards": cards,
         "months": months,
         "raw_expenses": raw_expenses[:RAW_LIMIT],
         "raw_expenses_limit": RAW_LIMIT,
@@ -56,6 +71,7 @@ def build_dashboard_payload(
         "card_usage": usage_rows[:RAW_LIMIT],
         "card_usage_limit": RAW_LIMIT,
         "card_usage_truncated": len(usage_rows) > RAW_LIMIT,
+        "edit_choices": edit_choices(payment_config),
         "agent_eval": {"status": "later", "scoring": False},
     }
 
@@ -177,6 +193,7 @@ def _recent_expense(record: ExpenseRecord) -> dict:
         "payment_method": "" if kind == "income" else record.payment_method,
         "payment_channel": "" if kind == "income" else record.payment_channel,
         "kind": kind,
+        "source": "expense",
     }
 
 
@@ -193,6 +210,7 @@ def _recent_card_usage(record: CardUsageRecord) -> dict:
         "payment_method": record.payment_method,
         "payment_channel": record.payment_channel,
         "kind": "card_only",
+        "source": "card_usage",
     }
 
 

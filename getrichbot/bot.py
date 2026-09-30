@@ -22,6 +22,7 @@ from getrichbot.image_utils import prepare_image_for_vision
 from getrichbot.logging_utils import configure_logging
 from getrichbot.models import CardUsageRow, ExpenseDraft, ExpenseRecord, ExpenseRow
 from getrichbot.parser import categorize_description, extract_date_phrase, extract_standalone_date, parse_expense, parse_expenses
+from getrichbot.row_edits import expense_kind, format_saved_row, latest_logged_row, parse_immediate_edit, plan_edit
 from getrichbot.sheets import SheetsClient
 from getrichbot.summary import (
     build_category_breakdown,
@@ -86,6 +87,10 @@ confirm abc123
 delete last
 undo last
 delete e1a2b3
+change to Travel
+change amount to 23.20
+change card to Sample Visa
+change channel to Online
 
 Screenshots and voice notes work too when OpenAI is configured. I will ask before logging them.
 """
@@ -654,7 +659,7 @@ class FinanceBot:
             await self._start_fixed_review(update, text)
             return True
 
-        if await self._change_latest_logged_category(update, text):
+        if await self._apply_immediate_edit(update, text):
             return True
 
         if any(phrase in lowered for phrase in ["change spend date", "change spending date", "change logged date", "change expense date"]):
@@ -1450,39 +1455,113 @@ class FinanceBot:
             [PendingEditChange(record=record, expense_date=parsed_date.isoformat())],
         )
 
-    async def _change_latest_logged_category(self, update: Update, text: str) -> bool:
-        if update.message is None or update.effective_user is None:
+    async def _apply_immediate_edit(self, update: Update, text: str) -> bool:
+        parsed = parse_immediate_edit(text)
+        if parsed is None or update.message is None or update.effective_user is None:
             return False
-        category_raw = _latest_category_change_target(text)
-        if category_raw is None:
-            return False
-
-        category = _normalize_category(category_raw)
-        if category not in VARIABLE_CATEGORIES or category.lower().startswith("income -"):
-            await update.message.reply_text("I do not recognize this category. Send: categories")
-            return True
 
         logged_by = self.settings.label_for_user(update.effective_user.id)
         if logged_by is None:
             await update.message.reply_text("I do not recognize this Telegram user ID yet.")
             return True
 
-        record = self.sheets.get_last_matching_record(self.settings.raw_expenses_sheet, logged_by)
-        if record is None:
-            await update.message.reply_text("I could not find a recent logged expense to update.")
-            return True
-        if record.transaction_type.casefold() != "expense" or record.input_type.casefold() == "fixed":
-            await update.message.reply_text("I could not find a recent normal expense to update.")
+        records = self.sheets.get_expense_records(self.settings.raw_expenses_sheet)
+        usages = []
+        if hasattr(self.sheets, "get_card_usage_records"):
+            usages = self.sheets.get_card_usage_records(getattr(self.settings, "card_usage_sheet", "Card Usage"))
+        found = latest_logged_row(records, usages, logged_by)
+        if found is None:
+            await update.message.reply_text("I could not find a recent logged row to update.")
             return True
 
-        self.sheets.update_expense_record(
-            self.settings.raw_expenses_sheet,
-            record.row_number,
-            category=category,
-            transaction_type=_transaction_type_for_category(category, record.input_type),
+        source, record = found
+        if source == "card_usage":
+            kind = "card_only"
+            current_method = record.payment_method
+            current_owner = record.payment_owner or record.logged_by
+            current_channel = record.payment_channel
+            current_category = ""
+            current_date = record.usage_date
+            sheet_name = getattr(self.settings, "card_usage_sheet", "Card Usage")
+        else:
+            kind = expense_kind(record.transaction_type, record.input_type)
+            current_method = "" if kind == "income" else record.payment_method
+            current_owner = "" if kind == "income" else (record.payment_owner or record.logged_by)
+            current_channel = "" if kind == "income" else record.payment_channel
+            current_category = record.category
+            current_date = record.expense_date
+            sheet_name = self.settings.raw_expenses_sheet
+
+        payment_config = None
+        if parsed.field in {"card", "channel"}:
+            if not self._payment_tracking_enabled():
+                await update.message.reply_text("I could not read the card list just now. Nothing was changed.")
+                return True
+            try:
+                payment_config = self._load_payment_config()
+            except Exception:
+                LOGGER.exception("Could not read payment setup for an immediate edit. Nothing was changed.")
+                await update.message.reply_text("I could not read the card list just now. Nothing was changed.")
+                return True
+
+        planned = plan_edit(
+            kind=kind,
+            field=parsed.field,
+            value=parsed.value,
+            current_method=current_method,
+            current_owner=current_owner,
+            current_channel=current_channel,
+            payment_config=payment_config,
         )
-        self._refresh_monthly_summary()
-        await update.message.reply_text(self._latest_category_update_line(record, category))
+        if not planned.ok:
+            await update.message.reply_text(planned.message)
+            return True
+
+        if source == "card_usage":
+            usage_updates = {}
+            if planned.amount is not None:
+                usage_updates["amount"] = planned.amount
+            if planned.touch_payment:
+                usage_updates["payment_method"] = planned.payment_method
+                usage_updates["payment_owner"] = planned.payment_owner
+                usage_updates["payment_channel"] = planned.payment_channel
+            self.sheets.update_card_usage_record(sheet_name, record.row_number, **usage_updates)
+        else:
+            updates = {}
+            if planned.amount is not None:
+                updates["amount"] = planned.amount
+            if planned.category is not None:
+                updates["category"] = planned.category
+                updates["transaction_type"] = planned.transaction_type
+            if planned.touch_payment:
+                updates["payment_method"] = planned.payment_method
+                updates["payment_owner"] = planned.payment_owner
+                updates["payment_channel"] = planned.payment_channel
+            self.sheets.update_expense_record(sheet_name, record.row_number, **updates)
+            if planned.amount is not None or planned.category is not None:
+                self._refresh_monthly_summary()
+
+        message = format_saved_row(
+            amount=planned.amount if planned.amount is not None else record.amount,
+            category=planned.category if planned.category is not None else current_category,
+            expense_date=current_date,
+            entry_id=record.entry_id,
+            kind=kind,
+            payment_method=planned.payment_method if planned.touch_payment else current_method,
+            payment_owner=planned.payment_owner if planned.touch_payment else current_owner,
+            payment_channel=planned.payment_channel if planned.touch_payment else current_channel,
+            showed_payment=planned.touch_payment,
+        )
+        if (
+            planned.touch_payment
+            and planned.payment_channel == ""
+            and payment_config is not None
+            and planned.payment_method
+            and planned.payment_owner
+            and len(payment_config.channel_options_for(planned.payment_owner, planned.payment_method)) > 1
+        ):
+            message += " This card has more than one channel, so I left the channel blank."
+        await update.message.reply_text(message)
         return True
 
     async def _ask_edit_confirmation(self, update: Update, changes: list[PendingEditChange]) -> None:
@@ -1597,13 +1676,6 @@ class FinanceBot:
         except ValueError:
             date_text = date_value
         return f"${amount:.2f} logged as {category} - {date_text} [{change.record.entry_id}]"
-
-    def _latest_category_update_line(self, record: ExpenseRecord, category: str) -> str:
-        try:
-            date_text = datetime.fromisoformat(record.expense_date).strftime("%-d %B %Y")
-        except ValueError:
-            date_text = record.expense_date
-        return f"Updated ${record.amount:.2f} to {category} - {date_text} [{record.entry_id}]"
 
     async def _ask_delete_confirmation(
         self,
@@ -2947,22 +3019,6 @@ def _normalize_category(raw: str) -> str:
         if category.lower().startswith(lowered):
             return category
     return raw
-
-
-def _latest_category_change_target(text: str) -> str | None:
-    cleaned = " ".join(text.strip().split()).strip(" .")
-    if re.search(r"\b(date|amount|price|cost)\b", cleaned, flags=re.IGNORECASE):
-        return None
-    match = re.fullmatch(
-        r"(?:change|changed|update|set|make)"
-        r"(?:\s+(?:it|this|that|category|the category|expense category|spend category))?"
-        r"\s+(?:to|as)\s+(.+)",
-        cleaned,
-        flags=re.IGNORECASE,
-    )
-    if match is None:
-        return None
-    return match.group(1).strip(" .")
 
 
 def _is_card_usage_only_text(text: str) -> bool:

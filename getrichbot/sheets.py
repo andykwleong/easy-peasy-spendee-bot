@@ -375,6 +375,9 @@ class SheetsClient:
         description: str | None = None,
         expense_date: str | None = None,
         transaction_type: str | None = None,
+        payment_method: str | None = None,
+        payment_owner: str | None = None,
+        payment_channel: str | None = None,
     ) -> None:
         updates = []
         if expense_date is not None:
@@ -390,19 +393,69 @@ class SheetsClient:
             updates.append({"range": f"{sheet_name}!H{row_number}", "values": [[category]]})
         if description is not None:
             updates.append({"range": f"{sheet_name}!I{row_number}", "values": [[description]]})
+        if payment_method is not None or payment_owner is not None or payment_channel is not None:
+            owner_column, method_column, channel_column = self._expense_payment_columns(sheet_name)
+            if payment_owner is not None and owner_column is not None:
+                updates.append({"range": f"{sheet_name}!{owner_column}{row_number}", "values": [[payment_owner]]})
+            if payment_method is not None:
+                updates.append({"range": f"{sheet_name}!{method_column}{row_number}", "values": [[payment_method]]})
+            if payment_channel is not None and channel_column is not None:
+                updates.append({"range": f"{sheet_name}!{channel_column}{row_number}", "values": [[payment_channel]]})
         if transaction_type is not None:
             if self.has_payment_channel_column(sheet_name):
                 transaction_column = "M"
             else:
                 transaction_column = "L" if self.has_payment_owner_column(sheet_name) else "K"
             updates.append({"range": f"{sheet_name}!{transaction_column}{row_number}", "values": [[transaction_type]]})
+        self._batch_update_cells(updates)
+
+    def update_card_usage_record(
+        self,
+        sheet_name: str,
+        row_number: int,
+        amount: Decimal | None = None,
+        payment_method: str | None = None,
+        payment_owner: str | None = None,
+        payment_channel: str | None = None,
+    ) -> None:
+        updates = []
+        if amount is not None:
+            updates.append({"range": f"{sheet_name}!G{row_number}", "values": [[f"{amount:.2f}"]]})
+        if payment_method is not None or payment_owner is not None or payment_channel is not None:
+            owner_column, method_column, channel_column = self._card_usage_payment_columns(sheet_name)
+            if payment_owner is not None and owner_column is not None:
+                updates.append({"range": f"{sheet_name}!{owner_column}{row_number}", "values": [[payment_owner]]})
+            if payment_method is not None:
+                updates.append({"range": f"{sheet_name}!{method_column}{row_number}", "values": [[payment_method]]})
+            if payment_channel is not None and channel_column is not None:
+                updates.append({"range": f"{sheet_name}!{channel_column}{row_number}", "values": [[payment_channel]]})
+        self._batch_update_cells(updates)
+
+    def _batch_update_cells(self, updates: list[dict]) -> None:
         if not updates:
             return
-
         self._service().spreadsheets().values().batchUpdate(
             spreadsheetId=self.sheet_id,
             body={"valueInputOption": "USER_ENTERED", "data": updates},
         ).execute()
+
+    def _expense_payment_columns(self, sheet_name: str) -> tuple[str | None, str, str | None]:
+        has_owner = self.has_payment_owner_column(sheet_name)
+        has_channel = self.has_payment_channel_column(sheet_name)
+        if has_owner and has_channel:
+            return "J", "K", "L"
+        if has_owner:
+            return "J", "K", None
+        return None, "J", None
+
+    def _card_usage_payment_columns(self, sheet_name: str) -> tuple[str | None, str, str | None]:
+        has_owner = self.has_payment_owner_column(sheet_name)
+        has_channel = self.has_payment_channel_column(sheet_name)
+        if has_owner and has_channel:
+            return "H", "I", "J"
+        if has_owner:
+            return "H", "I", None
+        return None, "H", None
 
     def _delete_sheet_row(self, sheet_name: str, one_based_row_number: int) -> None:
         sheet_id = self._sheet_id(sheet_name)

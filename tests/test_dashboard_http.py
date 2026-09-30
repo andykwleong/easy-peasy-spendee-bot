@@ -15,7 +15,7 @@ from telegram.error import TelegramError
 
 from getrichbot.cards import parse_payment_config
 from getrichbot.dashboard_auth import issue_session_token
-from getrichbot.dashboard_bot import _BUTTON_ONLY_TEXT, configure_dashboard_menu, dashboard_prompt, reply_with_dashboard
+from getrichbot.dashboard_bot import _DASHBOARD_REPLY_TEXT, configure_dashboard_menu, dashboard_prompt, reply_with_dashboard
 from getrichbot.dashboard_http import DashboardApp, DashboardContext, DashboardHTTPServer
 from getrichbot.models import ExpenseRecord
 
@@ -340,10 +340,10 @@ class DashboardPromptTests(unittest.IsolatedAsyncioTestCase):
 
         text, url = dashboard_prompt("https://your-app.example.com")
         self.assertEqual(url, "https://your-app.example.com")
-        self.assertEqual(text, "\u200b")
-        self.assertEqual(text, _BUTTON_ONLY_TEXT)
+        self.assertEqual(text, "open the dashboard here:")
+        self.assertEqual(text, _DASHBOARD_REPLY_TEXT)
+        self.assertNotIn("\u200b", text)
         self.assertNotEqual(text, "Dashboard")
-        self.assertNotIn(" ", text)
         self.assertNotIn("30 days", text)
         self.assertNotIn("Log out", text)
 
@@ -370,7 +370,7 @@ class DashboardPromptTests(unittest.IsolatedAsyncioTestCase):
         await reply_with_dashboard(Update(333), Settings())
 
         text, markup = sent[0]
-        self.assertEqual(text, "\u200b")
+        self.assertEqual(text, "open the dashboard here:")
         self.assertEqual(len(markup.inline_keyboard), 1)
         self.assertEqual(len(markup.inline_keyboard[0]), 1)
         button = markup.inline_keyboard[0][0]
@@ -405,7 +405,7 @@ class DashboardPromptTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(sent), 2)
         for text, markup in sent:
-            self.assertEqual(text, "\u200b")
+            self.assertEqual(text, "open the dashboard here:")
             self.assertEqual(len(markup.inline_keyboard), 1)
             self.assertEqual(len(markup.inline_keyboard[0]), 1)
             button = markup.inline_keyboard[0][0]
@@ -435,7 +435,7 @@ class DashboardPromptTests(unittest.IsolatedAsyncioTestCase):
 
         await reply_with_dashboard(Update(), Settings())
 
-        self.assertEqual(sent, ["\u200b"])
+        self.assertEqual(sent, ["open the dashboard here:"])
 
     async def test_menu_button_is_not_set_without_https(self):
         calls = []

@@ -7,6 +7,7 @@ import threading
 import time
 import unittest
 from datetime import date
+from pathlib import Path
 from decimal import Decimal
 from http.client import HTTPConnection
 from urllib.parse import urlencode
@@ -139,6 +140,27 @@ class DashboardHttpTests(unittest.TestCase):
         self.assertEqual(page_status, 200)
         self.assertIn(b"Household money", page)
         self.assertNotIn(b"Sample cafe", page)
+
+    def test_dashboard_assets_match_the_phone_layout(self):
+        root = Path(__file__).resolve().parents[1] / "getrichbot"
+        js = (root / "dashboard.js").read_text(encoding="utf-8")
+        css = (root / "dashboard.css").read_text(encoding="utf-8")
+
+        self.assertNotIn("Fix tagging", js)
+        self.assertNotIn("Agent eval", js)
+        self.assertNotIn("Comes later", js)
+        self.assertNotIn("setInterval", js)
+        self.assertNotIn("On a computer, use Log in with Telegram", js)
+        self.assertIn("Left this month", js)
+        self.assertIn("No limit", js)
+        self.assertIn('["raw", "Entries"]', js)
+        self.assertIn("This browser remembers you for 30 days, and Log out forgets it.", js)
+        self.assertIn("This page cannot edit the sheet, and changes stay in the Telegram chat.", js)
+        self.assertIn("This page only looks, and the sheet is still the record.", js)
+        self.assertIn("--paper: #f3efe6", css)
+        self.assertIn("radial-gradient", css)
+        self.assertIn(".raw-cards", css)
+        self.assertIn("nav-at-bottom", css)
 
     def test_user_id_alone_does_not_open_the_page(self):
         app, _sheets = app_for()

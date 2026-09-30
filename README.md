@@ -274,7 +274,7 @@ DASHBOARD_PUBLIC_URL=
 
 Never commit real secrets. Keep them in Railway variables or your local `.env`.
 
-`DASHBOARD_PUBLIC_URL` is the public https address of this same app, once Railway gives you one. An example of the shape is `https://your-app.example.com`. Leave it blank until you have the real address. It is a web address, not a password. Until it is set, the Dashboard button in Telegram does nothing useful. You do not need to add `PORT` yourself. Railway already sets that, and the page listens on it. Opening the page reads the Google Sheet at that moment. It does not keep a second copy of the numbers, and it does not check the sheet in the background.
+`DASHBOARD_PUBLIC_URL` is the public https address of this same app, once Railway gives you one. An example of the shape is `https://your-app.example.com`. Leave it blank until you have the real address. It is a web address, not a password. Until it is set, the Dashboard button in Telegram does nothing useful. You do not need to add `PORT` yourself. Railway already sets that, and the page listens on it. Opening the page reads the Google Sheet at that moment. Refresh reads it again only when you tap it. Switching between your own rows and both reads it again too. It does not keep a second copy of the numbers, and it does not check the sheet in the background.
 
 For categories, set `CATEGORIES_SHEET` and `CATEGORY_KEYWORDS_SHEET`. The running bot expects active category rows in Google Sheets.
 
@@ -289,15 +289,19 @@ The dashboard is a window onto the same Google Sheet. It does not add a second s
 Two ways to open it, and only for the two Telegram accounts already allowed to use the bot:
 
 1. On a phone, in the household group, send `/dashboard`. The reply says `open the dashboard here:` and shows one button, Open dashboard. That button opens the page in the phone browser. In a private chat with the bot, the same words appear and the button opens the page inside Telegram. Anyone else sees a lock.
-2. On a computer, open the same address in a browser. The first screen is a lock with **Log in with Telegram**. After you confirm, that browser remembers you for 30 days, so a bookmark does not ask every time. **Log out** forgets it immediately. On a shared computer, log out when you are done, because someone else using that browser could see the page until then. This memory stays in that browser. It is not written into the Google Sheet. If you change the Telegram bot token later, those remembered logins stop working and the person logs in again.
+2. On a computer, open the same address in a browser. The first screen is a lock with **Log in with Telegram**. The phone browser and the computer use the same sentence: this browser remembers you for 30 days, and Log out forgets it. On a shared computer, log out when you are done, because someone else using that browser could see the page until then. This memory stays in that browser. It is not written into the Google Sheet. If you change the Telegram bot token later, those remembered logins stop working and the person logs in again.
 
 The page rearranges itself. A narrow window uses the phone layout. A wide window uses the desktop layout.
 
-It shows recent transactions (yours, or both), your own card summary with the same colours as Telegram (green under 60%, yellow from 60% to 79%, orange from 80% to 94%, red at 95% or more, and uncapped cards still show), the household monthly income, expenses, and net, the raw rows, and card-only rows that stay out of household spending. Income is for the household, not split by person. A later "Agent eval" space is labelled and has no score. The "Fix tagging" control is switched off and does not write anything.
+It shows four sections: Recent, Cards, Month, and Entries. On a phone those four sit on one line and stay on screen, pinned to the bottom. If you opened the page inside Telegram and that bottom row would sit on Telegram’s own bar, it stays under your name instead, still on one line. A wide window keeps the same four sections under your name.
+
+Recent lists the latest purchases. This page cannot edit the sheet, and changes stay in the Telegram chat. Cards shows only the signed-in person’s cards, with the same colours as Telegram: green under 60%, yellow from 60% to 79%, orange from 80% to 94%, and red at 95% or more. The printed percent uses those same cutoffs, so a card does not read 80% while the bar is still yellow. A card with no limit shows the amount and the words “No limit”, with no bar. Month puts what is left at the top, in the words “Left this month”, and turns that figure green only when it is zero or above. The current month is labelled “so far”. Entries on a phone are short cards; tap one to see the entry id, the card, and the channel. A wide window keeps the full table. The latest 200 rows are the cap. Income is for the household, not split by person. Income has no card. Card-only spend counts on the card and stays out of the month.
+
+**Refresh** sits next to **Log out**. It reads the sheet only when you tap it.
 
 Before the computer login can finish, tell BotFather that this website belongs to your bot. Open BotFather, choose your bot, and use Login Widget or `/setdomain`. Add the dashboard address. Until that is done, the computer button may open and then stop. Until `DASHBOARD_PUBLIC_URL` is set on Railway, the button in the chat does nothing useful. The expense chat keeps working either way.
 
-The page is served by the same Python process that already runs the bot (`python -u -m getrichbot.bot`). It is not a second Railway service. It only reads the sheet when someone opens the page.
+The page is served by the same Python process that already runs the bot (`python -u -m getrichbot.bot`). It is not a second Railway service. It reads the sheet when someone opens the page, when they switch between their own rows and both, and when they tap Refresh. It does not check the sheet by itself in the background.
 
 ## Telegram Usage
 

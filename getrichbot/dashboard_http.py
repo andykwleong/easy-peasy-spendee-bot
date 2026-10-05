@@ -60,6 +60,7 @@ class DashboardApp:
         self._username_lock = threading.Lock()
         self._sheet_lock = threading.Lock()
         self._bot_username: str | None = None
+        self.gmail_push = None
         self._static = {
             path: (content_type, file_path.read_bytes())
             for path, (content_type, file_path) in _STATIC.items()
@@ -94,6 +95,11 @@ class DashboardApp:
             return self._dashboard(normalized, query)
         if method == "POST" and path == "/api/dashboard/edit":
             return self._edit(normalized, body)
+        if path == "/gmail/push":
+            if self.gmail_push is None:
+                return _json(200, {"ok": True})
+            status, payload = self.gmail_push(method, normalized, body)
+            return _json(status, payload if isinstance(payload, dict) else {"ok": False})
         if method not in {"GET", "POST"}:
             return _json(405, {"ok": False, "error": "locked"})
         return _json(404, {"ok": False, "error": "locked"})

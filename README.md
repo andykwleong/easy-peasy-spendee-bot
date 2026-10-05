@@ -35,6 +35,7 @@ Telegram group chat
 - Supports undo for the last expense sent by a user.
 - Keeps the bot private to configured Telegram user IDs.
 - Shows a private dashboard for those same two people. It reads the Google Sheet. Fix tagging can correct a saved row's category, amount, card, or channel, and that correction is written back to the same row.
+- Can log a clear bank email when email logging is turned on. A purchase is written immediately. A refund, PayNow, dividend, or interest is written as household income. A statement stays quiet. Unclear mail asks and is not written.
 
 ## Requirements
 
@@ -105,7 +106,7 @@ If an unexpected month appears, for example `2023-05`, check `Raw Expenses` for 
 
 ### Bot State
 
-The bot creates this tab automatically when needed. It stores small markers so Railway restarts do not resend the same month-end reminder or final summary.
+The bot creates this tab automatically when needed. It stores small markers so Railway restarts do not resend the same month-end reminder or final summary. When email logging is on, it also stores the Gmail place marker, whether email is paused, and a marker for each mail already handled. Those markers stay in the sheet until you delete them. A Railway restart does not log the same mail again.
 
 ### Payment Methods
 
@@ -118,6 +119,8 @@ Example Rewards Card,My wife,Credit Card,Calendar,1,TRUE,
 Cash,Me,Cash,Calendar,1,TRUE,
 PayNow,My wife,PayNow,Calendar,1,TRUE,
 ```
+
+You can add a column headed exactly `Last 4`. Put only the last four digits, for example `1234`. Leave it blank for Cash or PayNow. Cards that do not have this column still work. An emailed purchase matches the card by those four digits. The bank name in the card name is not required.
 
 Use `Calendar` with a start day of `1` for a calendar-month cap. Use `Billing` and the day the rewards cap resets for statement-cycle cards. For example, `17` means the cycle runs from the 17th to the 16th. `Notes` is optional and ignored by the bot.
 
@@ -197,6 +200,8 @@ The category names in `Raw Expenses`, `Fixed Expenses`, `Categories`, and `Categ
 
 Income category names should start with `Income -`. The bot uses that prefix to separate income from expenses in `Monthly Summary`.
 
+Emailed refunds, PayNow, dividends, and interest look for a category named exactly `Income - misc`, including the small m. That is a different name from the sample `Income - Misc` above. Add that exact name on the Categories tab if you want those emails written. If it is missing, the bot asks in Telegram and does not invent `Income - A` or `Income - fx`, and it does not write the row. The monthly summary only shows categories that are on that list, which is why a missing name means nothing is written.
+
 If a typed entry says only `income` and does not identify a specific income category, the bot shows buttons for the active `Income -` categories. Tapping a button logs the pending income immediately. Only the person who submitted the entry can choose its category.
 
 Production category loading:
@@ -270,6 +275,15 @@ TELEGRAM_CHAT_ID=
 OPENAI_API_KEY=
 OPENAI_MODEL=gpt-5.4-mini
 DASHBOARD_PUBLIC_URL=
+EMAIL_LOGGING_ENABLED=false
+GMAIL_OAUTH_CLIENT_ID=
+GMAIL_OAUTH_CLIENT_SECRET=
+GMAIL_OAUTH_REFRESH_TOKEN=
+GMAIL_PUBSUB_TOPIC=
+GMAIL_PUBSUB_AUDIENCE=
+GMAIL_PUBSUB_SERVICE_ACCOUNT=
+ME_FORWARDER_EMAIL=
+WIFE_FORWARDER_EMAIL=
 ```
 
 Never commit real secrets. Keep them in Railway variables or your local `.env`.
@@ -299,7 +313,33 @@ Fix tagging, on a recent row, is how you correct that row. Either of you can cha
 
 Before the computer login can finish, tell BotFather that this website belongs to your bot. Open BotFather, choose your bot, and use Login Widget or `/setdomain`. Add the dashboard address. Until that is done, the computer button may open and then stop. Until `DASHBOARD_PUBLIC_URL` is set on Railway, the button in the chat does nothing useful. The expense chat keeps working either way.
 
-The page is served by the same Python process that already runs the bot (`python -u -m getrichbot.bot`). It is not a second Railway service. It only reads the sheet when someone opens the page.
+The page is served by the same Python process that already runs the bot (`python -u -m getrichbot.bot`). It is not a second Railway service. Opening the page reads the sheet. Fix tagging writes the correction back to the same row. When email logging is on, Google’s mail tap arrives on this same process.
+
+## Email logging
+
+Email logging is off until you turn it on. If the Gmail settings are missing, the bot still starts and the chat works as before. Nothing is read from a mailbox.
+
+When it is on, Google taps the bot as soon as new mail arrives. The tap is not the mail. The bot then fetches that message. It can only read mail. It does not send mail, and it does not use your bank login. The Gmail sign-in is separate from the Google Sheets key. Bank mail is not sent to OpenAI.
+
+What gets written:
+
+- A UOB purchase whose subject is `UOB - Transaction Alert` is written immediately. The amount, shop, date, and last 4 digits come from the mail. The last 4 digits match the `Last 4` column. The category comes from the same sheet keyword list used for typed expenses. A shop such as `fp*Food Panda` lands on the food category when that list contains the word `food`. Who forwarded the mail is Logged By. The card’s owner is Payment Owner. The last 4 digits are not written on the expense row.
+- A refund whose subject is `Your transaction has been refunded` is written immediately as `Income - misc`. It does not change or remove the original purchase. There is no card on that income row. Income is household income. The card total still includes the original purchase, because the refund is income and not a reversal.
+- Dividends and interest are written the same way, immediately, as `Income - misc`.
+- PayNow whose subject is `UOB-PayNow transfer received` is written immediately as `Income - misc`. Transfers between your own accounts are kept out by the Gmail filter, not by the bot.
+- A statement whose subject is `Your eStatement/eAdvice is ready for viewing` is ignored. Telegram is not pinged.
+- Unclear mail, including salary, asks in Telegram and is not written.
+- If `Income - misc` is missing from the sheet, the bot asks and does not write.
+
+Channel rules are the same as a typed card expense. Foodpanda-style delivery is Online. A restaurant is PayWave. If the card has only one channel that is not All, that channel is used. If it has both and the shop is neither, the bot asks and does not write. Reply `email channel Online` or `email channel PayWave`. That unanswered question is saved in Bot State, without the mail body and without the last 4 digits, until you reply or you clear the marker. A Railway restart asks again. It does not log the purchase by itself.
+
+After a purchase is written, Telegram gets the usual logged message, with the amount, shop, category, card, and channel. A purchase that matches a row already logged still asks you to confirm or cancel, so the same coffee is not written twice. Income from email does not ask that question. The mail’s own marker in Bot State is what stops the same income mail from being written twice.
+
+The first time email logging starts, or if mail piled up while it was paused, the bot asks before logging that pile. Reply `log email backlog` to log it, or `skip email backlog` to leave it. `pause email` tells Gmail to stop tapping. Mail already in the mailbox stays, and rows already in the sheet stay. `resume email` starts the tap again.
+
+Once a day, while email logging is on and not paused, the bot renews the tap. Google stops tapping after 7 days, which is why this daily job exists. The job only renews the tap. It does not read the mailbox when there is nothing new. It does not run when email logging is off, and it does not run while email is paused, because renewing while paused would turn the tap back on. You turn the whole thing off with `pause email` or by setting `EMAIL_LOGGING_ENABLED` to false. There is no separate switch for only the daily renewal.
+
+`GMAIL_PUBSUB_AUDIENCE` is the address Google uses for the tap. If you leave it blank, the bot uses `DASHBOARD_PUBLIC_URL` with `/gmail/push` on the end. If both are blank, the bot still starts, and taps are refused until one of them is set.
 
 ## Telegram Usage
 

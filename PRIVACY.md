@@ -14,12 +14,15 @@ Depending on how you use it, the bot may process:
 - Screenshots you upload for expense extraction
 - Voice notes you upload for transcription and extraction
 - Fixed expense categories and default amounts from your Google Sheet
+- Bank email that you forward into a mailbox the bot is allowed to read, when email logging is turned on
 
 ## Where Data Goes
 
 Confirmed expense entries are written to your configured Google Sheet.
 
-The private dashboard reads that same Google Sheet and shows it in the browser. It does not write, edit, or delete rows. On a computer, after you log in with Telegram, that browser keeps a login cookie for 30 days. Log out deletes the cookie. The cookie is not written into the Google Sheet.
+The private dashboard reads that same Google Sheet and shows it in the browser. Fix tagging writes a category, amount, card, or channel correction back to the same row. On a computer, after you log in with Telegram, that browser keeps a login cookie for 30 days. Log out deletes the cookie. The cookie is not written into the Google Sheet.
+
+When email logging is turned on, the bot reads messages from a mailbox you choose. It uses a Gmail read-only sign-in that is separate from the Google Sheets key. It writes a purchase or an income row to the sheet. It does not send the mail to OpenAI. The last four digits of a card are used only to match a card name, and they are not written on the expense row.
 
 Payment method and card limit setup is read from your configured Google Sheet to show payment buttons, card summaries, and card-limit usage. Category breakdown and personal history requests read confirmed rows from `Raw Expenses` and reply in Telegram.
 
@@ -40,6 +43,7 @@ Your private category configuration usually lives in the Google Sheet `Categorie
 - It does not publish your expenses publicly.
 - It does not need bank login access.
 - It does not scrape your bank account automatically.
+- It does not send bank email to OpenAI.
 - It does not store or require full card numbers.
 - It does not intentionally store screenshots or voice notes after processing.
 - It does not make background OpenAI calls unless handling a message, media upload, natural-language action, or scheduled summary/reminder logic that needs bot processing.

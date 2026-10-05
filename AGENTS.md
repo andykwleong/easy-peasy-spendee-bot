@@ -97,6 +97,15 @@ This file contains project-specific instructions for coding agents working on Ge
 - If a duplicate is found during pending batch confirmation, stop at the first duplicate and wait for `confirm` or `cancel`. Do not continue through the batch and do not remove the pending item until it is actually logged or cancelled.
 - Duplicate checks should include a one-minute recently logged in-memory window so immediately repeated confirmations are caught even before Google Sheets read-back reflects the append.
 - A bare 6-character entry ID should be treated as a delete lookup, not parsed as an expense amount.
+- Email logging stays off unless `EMAIL_LOGGING_ENABLED` is on and the Gmail OAuth and Pub/Sub topic settings are present. Missing settings must not crash startup. The Gmail refresh token is separate from the Sheets service account. Do not send mail to OpenAI. Do not commit the mailbox address, refresh token, or real card digits.
+- A UOB purchase subject `UOB - Transaction Alert` is written immediately. Match the card by the last 4 digits to the Payment Methods `Last 4` column only. Category comes from the sheet keyword matcher, not a hardcoded personal list. `fp*Food Panda` must land on the food category when the food keyword is `food`.
+- A refund subject `Your transaction has been refunded`, PayNow subject `UOB-PayNow transfer received`, and dividend or interest mail are written immediately as the sheet category named exactly `Income - misc`. Do not reverse or edit the original purchase. Do not ask for approval. Income is household income and has no card. The card total still includes the original purchase because the refund is income, not a reversal. Own-account PayNow transfers are kept out by the Gmail filter, not by the bot.
+- Do not invent `Income - A` or `Income - fx` for email. If `Income - misc` is missing from the configured category list, ask in Telegram and do not write.
+- Statement subject `Your eStatement/eAdvice is ready for viewing` stays quiet. Unclear mail, including salary, asks and does not write.
+- Email channel rules match card channels: Foodpanda-style delivery is Online, a restaurant is PayWave, one non-All channel is used automatically, and both channels with neither shop type asks and does not write. Reply `email channel Online` or `email channel PayWave`.
+- `pause email` calls Gmail users.stop. `resume email` starts the watch again. First start and mail that piled up while paused ask before logging. Replies are `log email backlog` and `skip email backlog`.
+- Bot State stores `gmail_history_id`, pause, backlog ids, and `gmail_message_id:<id>` so a restart does not log the same mail twice. A pending channel question is also stored there, without the mail body or last 4, and is re-asked after a restart instead of logged.
+- A daily job renews the Gmail watch once a day because Google stops tapping after 7 days. It only renews the tap. It does not read the mailbox when there is nothing new. Skip it when email logging is off or paused.
 
 ## Deployment
 

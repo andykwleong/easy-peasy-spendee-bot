@@ -15,6 +15,7 @@ class PaymentMethod:
     payment_type: str
     cycle_type: str
     cycle_start_day: int
+    last4: str = ""
 
     @property
     def is_credit_card(self) -> bool:
@@ -220,6 +221,7 @@ def _parse_payment_methods(rows: list[list[str]]) -> list[PaymentMethod]:
         },
         "Payment Methods",
     )
+    last4_index = headers.get("last 4", -1)
     methods: list[PaymentMethod] = []
     seen: set[tuple[str, str]] = set()
     for row in data_rows:
@@ -245,7 +247,8 @@ def _parse_payment_methods(rows: list[list[str]]) -> list[PaymentMethod]:
         if key in seen:
             raise ValueError(f"Payment Methods has a duplicate active row for {name} / {owner}.")
         seen.add(key)
-        methods.append(PaymentMethod(name, owner, payment_type, cycle_type, start_day))
+        last4 = _last4_digits(_value(row, last4_index)) if last4_index >= 0 else ""
+        methods.append(PaymentMethod(name, owner, payment_type, cycle_type, start_day, last4))
     return methods
 
 
@@ -321,6 +324,13 @@ def _required_indexes(
 
 def _normalize_header(value: str) -> str:
     return " ".join(str(value).strip().casefold().split())
+
+
+def _last4_digits(value: str) -> str:
+    digits = "".join(char for char in value if char.isdigit())
+    if len(digits) < 4:
+        return ""
+    return digits[-4:]
 
 
 def _value(row: list[str], index: int) -> str:

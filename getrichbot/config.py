@@ -42,6 +42,15 @@ class Settings:
     openai_api_key: str | None
     openai_model: str
     dashboard_public_url: str | None
+    email_logging_enabled: bool
+    gmail_oauth_client_id: str | None
+    gmail_oauth_client_secret: str | None
+    gmail_oauth_refresh_token: str | None
+    gmail_pubsub_topic: str | None
+    gmail_pubsub_audience: str | None
+    gmail_pubsub_service_account: str | None
+    me_forwarder_email: str | None
+    wife_forwarder_email: str | None
 
     @classmethod
     def load(cls) -> "Settings":
@@ -78,6 +87,15 @@ class Settings:
             openai_api_key=os.getenv("OPENAI_API_KEY") or None,
             openai_model=os.getenv("OPENAI_MODEL", "gpt-5.4-mini"),
             dashboard_public_url=_optional_text("DASHBOARD_PUBLIC_URL"),
+            email_logging_enabled=_optional_bool("EMAIL_LOGGING_ENABLED"),
+            gmail_oauth_client_id=_optional_text("GMAIL_OAUTH_CLIENT_ID"),
+            gmail_oauth_client_secret=_optional_text("GMAIL_OAUTH_CLIENT_SECRET"),
+            gmail_oauth_refresh_token=_optional_text("GMAIL_OAUTH_REFRESH_TOKEN"),
+            gmail_pubsub_topic=_optional_text("GMAIL_PUBSUB_TOPIC"),
+            gmail_pubsub_audience=_optional_text("GMAIL_PUBSUB_AUDIENCE"),
+            gmail_pubsub_service_account=_optional_text("GMAIL_PUBSUB_SERVICE_ACCOUNT"),
+            me_forwarder_email=_optional_text("ME_FORWARDER_EMAIL"),
+            wife_forwarder_email=_optional_text("WIFE_FORWARDER_EMAIL"),
         )
 
     def label_for_user(self, telegram_user_id: int) -> str | None:
@@ -86,6 +104,11 @@ class Settings:
         if telegram_user_id in self.wife_telegram_ids:
             return self.wife_label
         return None
+
+
+def _optional_bool(name: str) -> bool:
+    raw = os.getenv(name, "").strip().casefold()
+    return raw in {"1", "true", "yes", "y", "on"}
 
 
 def _optional_text(name: str) -> str | None:

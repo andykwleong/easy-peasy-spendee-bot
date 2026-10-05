@@ -17,6 +17,7 @@ from zoneinfo import ZoneInfo
 
 from getrichbot.categories import ALL_CATEGORIES, CATEGORY_ALIASES, FIXED_CATEGORIES, VARIABLE_CATEGORIES, category_config_status, configure_category_config
 from getrichbot.config import Settings
+from getrichbot.gmail_watch import WriteOutcome, attach_email, is_email_command
 from getrichbot.cards import PaymentConfig, build_card_summary, format_card_summary
 from getrichbot.image_utils import prepare_image_for_vision
 from getrichbot.logging_utils import configure_logging
@@ -75,6 +76,8 @@ Useful commands:
 /confirmfixed - review fixed expenses
 /undo - delete your latest logged expense
 /dashboard - open the private household dashboard
+pause email - stop reading new bank mail
+resume email - start reading new bank mail again
 
 Payment methods:
 Choose one of your methods, or use the partner-card button to choose one of their credit cards.
@@ -212,6 +215,7 @@ class FinanceBot:
         self.pending_payment_batches: dict[tuple[int, int], PendingPaymentBatch] = {}
         self.payment_config_cache: CachedPaymentConfig | None = None
         self.recent_logged: list[RecentLoggedExpense] = []
+        self.email_service = None
         self.ai = None
 
     def _ai(self):
@@ -631,6 +635,10 @@ class FinanceBot:
             return True
 
         if await self._handle_pending_duplicate_reply(update, lowered):
+            return True
+
+        if is_email_command(text):
+            await self._handle_email_command(update, text)
             return True
 
         if lowered in {"help", "what can you do", "commands"}:
@@ -1767,7 +1775,7 @@ class FinanceBot:
             return False
 
         if lowered in {"cancel", "no", "discard", "delete", "delete duplicate"}:
-            self.pending_duplicates.pop(key, None)
+            self._drop_duplicate_copies(pending)
             if pending.pending_id is not None:
                 self.pending.pop(pending.pending_id, None)
             if key in self.pending_payment_batches:
@@ -1788,7 +1796,7 @@ class FinanceBot:
             await update.message.reply_text(self._duplicate_prompt(pending.row, pending.existing_record))
             return True
 
-        self.pending_duplicates.pop(key, None)
+        self._drop_duplicate_copies(pending)
         self._append_expense(pending.row)
         self._remember_logged(pending.row)
         if pending.pending_id is not None:
@@ -1907,6 +1915,59 @@ class FinanceBot:
             self.sheets.append_expense(self.settings.raw_expenses_sheet, row)
             added_count += 1
         return FixedAddResult(added_count)
+
+    async def _handle_email_command(self, update: Update, text: str) -> None:
+        if update.message is None or update.effective_user is None:
+            return
+        if self.settings.label_for_user(update.effective_user.id) is None:
+            await update.message.reply_text("I do not recognize this Telegram user ID yet.")
+            return
+        service = self.email_service
+        if service is None:
+            await update.message.reply_text("Email logging is off.")
+            return
+        for reply in service.handle_command(text):
+            await update.message.reply_text(reply)
+
+    def log_email_row(self, row: ExpenseRow) -> WriteOutcome:
+        if row.transaction_type.lower() != "income":
+            duplicate = self._find_duplicate(row)
+            chat_id = getattr(self.settings, "telegram_chat_id", None)
+            if duplicate is not None and chat_id is not None:
+                pending = PendingDuplicate(
+                    row=row,
+                    existing_record=duplicate,
+                    chat_id=chat_id,
+                    requested_by_user_id=0,
+                    created_at=datetime.now(SINGAPORE_TZ),
+                )
+                user_ids = set(getattr(self.settings, "me_telegram_ids", ()) or ()) | set(
+                    getattr(self.settings, "wife_telegram_ids", ()) or ()
+                )
+                if not user_ids:
+                    user_ids.add(0)
+                for user_id in user_ids:
+                    self.pending_duplicates[(chat_id, user_id)] = pending
+                return WriteOutcome(logged=False, text=self._duplicate_prompt(row, duplicate))
+        self._append_expense(row)
+        self._remember_logged(row)
+        return WriteOutcome(logged=True, text=self._email_logged_line(row))
+
+    def _drop_duplicate_copies(self, pending: PendingDuplicate) -> None:
+        entry_id = pending.row.entry_id
+        for key in [key for key, item in self.pending_duplicates.items() if item.row.entry_id == entry_id]:
+            self.pending_duplicates.pop(key, None)
+
+    def _email_logged_line(self, row: ExpenseRow) -> str:
+        when = self._human_date(row.timestamp.date())
+        if row.transaction_type.lower() == "income":
+            detail = f" - {row.description}" if row.description else ""
+            return f"Logged income ${row.amount:.2f} to {row.category} - {when}{detail} [{row.entry_id}]"
+        channel = row.payment_channel or "All"
+        return (
+            f"Logged ${row.amount:.2f} at {row.description} to {row.category} - "
+            f"{when} via {row.payment_method} ({channel}) [{row.entry_id}]"
+        )
 
     def _append_expense(self, row: ExpenseRow) -> None:
         self.sheets.append_expense(self.settings.raw_expenses_sheet, row)
@@ -3361,6 +3422,7 @@ def main() -> None:
         sheet_category_config.get("keywords_sheet_loaded"),
     )
     finance_bot = FinanceBot(settings, sheets)
+    email_service = attach_email(finance_bot, settings, sheets)
 
     print("Loading Telegram library...", flush=True)
     from telegram import Update
@@ -3373,6 +3435,8 @@ def main() -> None:
     print("Telegram library loaded.", flush=True)
 
     dashboard_server = start_dashboard_server(settings, sheets)
+    if dashboard_server is not None:
+        dashboard_server.dashboard_app.gmail_push = email_service.handle_http
 
     async def post_init(application: Application) -> None:
         try:
@@ -3386,6 +3450,21 @@ def main() -> None:
             LOGGER.warning("TELEGRAM_CHAT_ID is not set. Monthly reminder messages will not be sent.")
         else:
             application.create_task(finance_bot.run_monthly_scheduler(application.bot))
+
+        async def send_email_notice(text: str) -> None:
+            if settings.telegram_chat_id is None:
+                LOGGER.warning("An email notice was not sent because TELEGRAM_CHAT_ID is not set.")
+                return
+            await application.bot.send_message(chat_id=settings.telegram_chat_id, text=text)
+
+        email_service.bind_notifier(asyncio.get_running_loop(), send_email_notice)
+        try:
+            for text in email_service.start():
+                await send_email_notice(text)
+        except Exception:
+            LOGGER.exception("Email logging did not start. Telegram chat is unchanged.")
+        if email_service.config.active:
+            application.create_task(email_service.run_daily_renewal())
 
     application = Application.builder().token(settings.telegram_bot_token).post_init(post_init).build()
     application.add_handler(CommandHandler("start", finance_bot.start))

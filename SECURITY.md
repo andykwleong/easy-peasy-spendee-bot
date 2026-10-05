@@ -24,6 +24,12 @@ Sensitive values should live in Railway variables or a local `.env` file that is
 - `WIFE_TELEGRAM_IDS`
 - `TELEGRAM_CHAT_ID`
 - `OPENAI_API_KEY`
+- `GMAIL_OAUTH_CLIENT_ID`
+- `GMAIL_OAUTH_CLIENT_SECRET`
+- `GMAIL_OAUTH_REFRESH_TOKEN`
+- `GMAIL_PUBSUB_TOPIC`
+- `ME_FORWARDER_EMAIL`
+- `WIFE_FORWARDER_EMAIL`
 
 Google service account JSON files are private credentials. Keep them outside the repo, share the Google Sheet directly with the service account email, and rotate the service account key if it is ever exposed.
 
@@ -47,9 +53,11 @@ For group chats, disable Telegram bot privacy mode only for the intended private
 
 ## Data Handling
 
-Expense data is stored in your Google Sheet. Screenshot and voice-note extraction may send image/audio-derived content to OpenAI when `OPENAI_API_KEY` is configured.
+Expense data is stored in your Google Sheet. Screenshot and voice-note extraction may send image/audio-derived content to OpenAI when `OPENAI_API_KEY` is configured. Bank email is not sent to OpenAI.
 
 Payment method names and card-limit rows are read from your private Google Sheet when needed for payment buttons and card summaries. The bot does not need bank login access and does not pull transactions from banks automatically.
+
+Email logging, when turned on, uses a separate Gmail read-only sign-in. That refresh token is not the spreadsheet key. The bot can read the mailbox. It cannot send mail. The tap from Google is checked before the bot fetches a message. The last four digits are used only to match a card, and they are not stored on the expense row.
 
 Avoid sending bank account numbers, card numbers, government IDs, or other unnecessary sensitive information to the bot.
 

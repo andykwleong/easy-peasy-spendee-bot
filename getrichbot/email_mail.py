@@ -31,12 +31,13 @@ _LAST4_RE = re.compile(
     re.IGNORECASE,
 )
 _MASKED_LAST4_RE = re.compile(r"(?:[*xX]{2,}|•{2,})\s*(\d{4})(?!\d)")
+_SLASH_DATE = r"\d{1,2}/\d{1,2}/(?:\d{4}|\d{2})"
 _DATE_RE = re.compile(
-    r"\bon\s+(\d{1,2}/\d{1,2}/\d{4}|\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4})",
+    rf"\bon\s+({_SLASH_DATE}|\d{{1,2}}\s+[A-Za-z]{{3,9}}\s+\d{{4}})",
     re.IGNORECASE,
 )
 _SHOP_AFTER_DATE_RE = re.compile(
-    r"\bon\s+\d{1,2}/\d{1,2}/\d{4}(?:\s+at\s+\d{1,2}:\d{2}(?:\s*[AP]M)?)?\s+at\s+(.+?)(?:\.|\n|$)",
+    rf"\bon\s+{_SLASH_DATE}(?:\s+at\s+\d{{1,2}}:\d{{2}}(?:\s*[AP]M)?)?\s+at\s+(.+?)(?:\.|\n|$)",
     re.IGNORECASE,
 )
 _SHOP_AFTER_MONTH_RE = re.compile(
@@ -443,7 +444,7 @@ def _mail_date(body: str) -> date | None:
     if "/" in raw:
         day_raw, month_raw, year_raw = raw.split("/")
         try:
-            return date(int(year_raw), int(month_raw), int(day_raw))
+            return date(_year(year_raw), int(month_raw), int(day_raw))
         except ValueError:
             return None
     parts = raw.split()
@@ -456,6 +457,13 @@ def _mail_date(body: str) -> date | None:
         return date(int(parts[2]), month, int(parts[0]))
     except ValueError:
         return None
+
+
+def _year(year_raw: str) -> int:
+    year = int(year_raw)
+    if len(year_raw) == 2:
+        return 2000 + year
+    return year
 
 
 def _normalize_subject(subject: str) -> str:

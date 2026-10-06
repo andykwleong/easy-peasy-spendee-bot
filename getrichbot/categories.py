@@ -220,3 +220,28 @@ SHOPPING_CATEGORIES = _string_map(CONFIG.get("shopping_categories", {}))
 CATEGORY_ALIASES = _string_map(CONFIG.get("category_aliases", {}))
 
 _validate_config(CONFIG)
+
+
+def remember_priority_keyword(keyword: str, category: str) -> None:
+    """Remember a shop under a category that already exists.
+
+    The shop is checked before shorter priority words, so a later correction
+    for that shop is not beaten by a generic word such as "food".
+    """
+    cleaned = " ".join(keyword.casefold().split())
+    if not cleaned or category not in ALL_CATEGORIES:
+        raise ValueError("A shop keyword must use a category that is already on the list.")
+    for name, words in list(CATEGORY_KEYWORDS.items()):
+        CATEGORY_KEYWORDS[name] = [word for word in words if word.casefold() != cleaned]
+    CATEGORY_KEYWORDS.setdefault(category, [])
+    if cleaned not in CATEGORY_KEYWORDS[category]:
+        CATEGORY_KEYWORDS[category].append(cleaned)
+    for alias in [key for key in CATEGORY_ALIASES if key.casefold() == cleaned]:
+        CATEGORY_ALIASES.pop(alias, None)
+    CATEGORY_ALIASES[cleaned] = category
+    kept: list[tuple[str, list[str]]] = []
+    for name, words in BILL_PRIORITY_KEYWORDS:
+        remaining = [word for word in words if word.casefold() != cleaned]
+        if remaining:
+            kept.append((name, remaining))
+    BILL_PRIORITY_KEYWORDS[:] = [(category, [cleaned]), *kept]

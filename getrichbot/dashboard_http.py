@@ -25,6 +25,7 @@ from getrichbot.dashboard_auth import (
 )
 from getrichbot.dashboard_view import build_dashboard_payload
 from getrichbot.row_edits import expense_kind, format_saved_row, plan_edit
+from getrichbot.shop_category import apply_email_shop_correction
 from getrichbot.summary import build_monthly_summary_table
 
 LOGGER = logging.getLogger(__name__)
@@ -49,6 +50,7 @@ class DashboardContext:
     card_limits_sheet: str
     sheets: object
     monthly_summary_sheet: str = "Monthly Summary"
+    category_keywords_sheet: str = "Category Keywords"
     today: Callable[[], date] | None = None
 
 
@@ -60,6 +62,7 @@ class DashboardApp:
         self._username_lock = threading.Lock()
         self._sheet_lock = threading.Lock()
         self._bot_username: str | None = None
+        self.gmail_push = None
         self._static = {
             path: (content_type, file_path.read_bytes())
             for path, (content_type, file_path) in _STATIC.items()
@@ -94,6 +97,11 @@ class DashboardApp:
             return self._dashboard(normalized, query)
         if method == "POST" and path == "/api/dashboard/edit":
             return self._edit(normalized, body)
+        if path == "/gmail/push":
+            if self.gmail_push is None:
+                return _json(200, {"ok": True})
+            status, payload = self.gmail_push(method, normalized, body)
+            return _json(status, payload if isinstance(payload, dict) else {"ok": False})
         if method not in {"GET", "POST"}:
             return _json(405, {"ok": False, "error": "locked"})
         return _json(404, {"ok": False, "error": "locked"})
@@ -290,6 +298,13 @@ class DashboardApp:
                     payment_owner=planned.payment_owner if planned.touch_payment else None,
                     payment_channel=planned.payment_channel if planned.touch_payment else None,
                 )
+                if planned.category is not None:
+                    apply_email_shop_correction(
+                        self.context.sheets,
+                        self.context.category_keywords_sheet,
+                        record,
+                        planned.category,
+                    )
                 if planned.amount is not None or planned.category is not None:
                     self._refresh_monthly_summary()
             else:
@@ -440,6 +455,7 @@ def context_from_settings(settings, sheets) -> DashboardContext:
         card_limits_sheet=settings.card_limits_sheet,
         sheets=sheets,
         monthly_summary_sheet=settings.monthly_summary_sheet,
+        category_keywords_sheet=settings.category_keywords_sheet,
     )
 
 

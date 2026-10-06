@@ -57,7 +57,7 @@ Expense data is stored in your Google Sheet. Screenshot and voice-note extractio
 
 Payment method names and card-limit rows are read from your private Google Sheet when needed for payment buttons and card summaries. The bot does not need bank login access and does not pull transactions from banks automatically.
 
-Email logging, when turned on, uses a separate Gmail read-only sign-in. That refresh token is not the spreadsheet key. The bot can read the mailbox. It cannot send mail. The tap from Google is checked before the bot fetches a message. The last four digits are used only to match a card, and they are not stored on the expense row.
+Email logging, when turned on, uses a separate Gmail read-only sign-in. That refresh token is not the spreadsheet key. The bot can read the mailbox. It cannot send mail. The tap from Google is checked before the bot fetches a message. The last four digits are used only to match a card, and they are not stored on the expense row. An unknown shop name may be sent once to Wikipedia. The amount, the card number, the last 4 digits, and the rest of the email are not included, and the mail is not sent to OpenAI.
 
 Avoid sending bank account numbers, card numbers, government IDs, or other unnecessary sensitive information to the bot.
 

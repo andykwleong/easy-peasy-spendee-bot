@@ -15,8 +15,10 @@ from getrichbot.email_mail import EmailDecision
 from getrichbot.email_mail import INCOME_MISC
 from getrichbot.email_mail import SINGAPORE_TZ
 from getrichbot.email_mail import build_expense_row
-from getrichbot.email_mail import category_from_keywords
 from getrichbot.categories import ALL_CATEGORIES
+from getrichbot.shop_category import apply_shop_keyword
+from getrichbot.shop_category import categorize_email_shop
+from getrichbot.shop_lookup import lookup_shop_text
 from getrichbot.email_mail import decide_mail
 from getrichbot.gmail_api import GmailApiMailbox
 from getrichbot.gmail_api import HistoryExpired
@@ -551,7 +553,19 @@ class BotEmailContext:
 
     def category_for(self, shop: str, logged_by: str) -> str | None:
         settings = self.bot.settings
-        return category_from_keywords(shop, logged_by, settings.me_label, settings.wife_label)
+
+        def save(keyword: str, category: str) -> None:
+            apply_shop_keyword(self.bot.sheets, settings.category_keywords_sheet, keyword, category)
+
+        return categorize_email_shop(
+            shop,
+            logged_by,
+            settings.me_label,
+            settings.wife_label,
+            self.categories(),
+            lookup_shop_text,
+            save,
+        )
 
 
 def attach_email(bot, settings, sheets) -> EmailService:

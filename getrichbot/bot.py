@@ -18,6 +18,7 @@ from zoneinfo import ZoneInfo
 from getrichbot.categories import ALL_CATEGORIES, CATEGORY_ALIASES, FIXED_CATEGORIES, VARIABLE_CATEGORIES, category_config_status, configure_category_config
 from getrichbot.config import Settings
 from getrichbot.gmail_watch import WriteOutcome, attach_email, is_email_command
+from getrichbot.shop_category import apply_email_shop_correction
 from getrichbot.cards import PaymentConfig, build_card_summary, format_card_summary
 from getrichbot.image_utils import prepare_image_for_vision
 from getrichbot.logging_utils import configure_logging
@@ -1546,6 +1547,13 @@ class FinanceBot:
                 updates["payment_owner"] = planned.payment_owner
                 updates["payment_channel"] = planned.payment_channel
             self.sheets.update_expense_record(sheet_name, record.row_number, **updates)
+            if planned.category is not None:
+                apply_email_shop_correction(
+                    self.sheets,
+                    self.settings.category_keywords_sheet,
+                    record,
+                    planned.category,
+                )
             if planned.amount is not None or planned.category is not None:
                 self._refresh_monthly_summary()
 
@@ -1670,6 +1678,13 @@ class FinanceBot:
                 expense_date=change.expense_date,
                 transaction_type=_transaction_type_for_category(change.category, change.record.input_type) if change.category else None,
             )
+            if change.category:
+                apply_email_shop_correction(
+                    self.sheets,
+                    self.settings.category_keywords_sheet,
+                    change.record,
+                    change.category,
+                )
             updated_lines.append(f"Updated {self._edit_after_line(change)}")
         self._refresh_monthly_summary()
         await update.message.reply_text("\n\n".join(updated_lines))

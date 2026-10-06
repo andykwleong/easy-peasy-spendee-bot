@@ -159,6 +159,34 @@ class SheetsClient:
             "category_aliases": category_aliases,
         }
 
+    def upsert_category_keyword(self, sheet_name: str, keyword: str, category: str) -> None:
+        cleaned = " ".join(keyword.strip().split()).casefold()
+        chosen = category.strip()
+        if not cleaned or not chosen:
+            raise ValueError("A shop keyword needs a shop and an existing category.")
+        result = self._service().spreadsheets().values().get(
+            spreadsheetId=self.sheet_id,
+            range=f"{sheet_name}!A2:D",
+        ).execute()
+        rows = result.get("values", [])
+        actions = keyword_upsert_actions(rows, cleaned, chosen)
+        updates = []
+        append_rows = []
+        for action, row_number, values in actions:
+            if action == "update":
+                updates.append({"range": f"{sheet_name}!B{row_number}:C{row_number}", "values": [values]})
+            else:
+                append_rows.append(values)
+        self._batch_update_cells(updates)
+        if append_rows:
+            self._service().spreadsheets().values().append(
+                spreadsheetId=self.sheet_id,
+                range=f"{sheet_name}!A:D",
+                valueInputOption="USER_ENTERED",
+                insertDataOption="INSERT_ROWS",
+                body={"values": append_rows},
+            ).execute()
+
     def delete_last_matching_row(self, sheet_name: str, logged_by: str) -> bool:
         record = self.get_last_matching_record(sheet_name, logged_by)
         if record is None:
@@ -536,6 +564,22 @@ class SheetsClient:
                 continue
             return sheet_name, result.get("values", [])
         return None, []
+
+
+def keyword_upsert_actions(
+    rows: list[list[str]],
+    keyword: str,
+    category: str,
+) -> list[tuple[str, int, list[str]]]:
+    cleaned = " ".join(keyword.strip().split()).casefold()
+    matches = [
+        index + 2
+        for index, row in enumerate(rows)
+        if _cell(row, 0).casefold() == cleaned
+    ]
+    if not matches:
+        return [("append", 0, [cleaned, category, "Priority", "TRUE"])]
+    return [("update", row_number, [category, "Priority"]) for row_number in matches]
 
 
 def _cell(row: list[str], index: int) -> str:

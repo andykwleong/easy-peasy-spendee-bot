@@ -14,6 +14,7 @@ from getrichbot.email_mail import INCOME_MISC
 from getrichbot.email_mail import build_expense_row
 from getrichbot.email_mail import category_from_keywords
 from getrichbot.email_mail import decide_mail
+from getrichbot.shop_category import categorize_email_shop
 from getrichbot.gmail_watch import BACKLOG_KEY
 from getrichbot.gmail_watch import HISTORY_KEY
 from getrichbot.gmail_watch import EmailService
@@ -430,6 +431,66 @@ class EmailWatchTests(unittest.TestCase):
         self.assertEqual(writer.rows[2].description, "PayNow")
         self.assertEqual(state.get("gmail_message_id:statement"), "ignored")
         self.assertFalse(any("statement" in text.lower() for text in sent))
+
+    def test_unknown_shop_is_logged_without_asking_for_a_category(self):
+        queries = []
+        saved = []
+
+        class LookupContext(Context):
+            def category_for(self, shop, logged_by):
+                return categorize_email_shop(
+                    shop,
+                    logged_by,
+                    "Me",
+                    "My wife",
+                    self._categories,
+                    self.lookup,
+                    self.save,
+                )
+
+        context = LookupContext(config_with(channels=("All",)), ("Food", "Groceries", INCOME_MISC))
+
+        def lookup(query):
+            queries.append(query)
+            return "a neighbourhood supermarket"
+
+        def save(keyword, category):
+            saved.append((keyword, category))
+
+        context.lookup = lookup
+        context.save = save
+        mailbox = FakeMailbox()
+        state = MemoryState()
+        writer = FakeWriter()
+        service = EmailService(
+            active_settings(),
+            mailbox,
+            state,
+            context,
+            writer.write,
+            authorize=lambda _headers: True,
+            now=lambda: datetime(2026, 10, 5, 9, 0, tzinfo=SINGAPORE),
+        )
+        state.set(HISTORY_KEY, "100")
+        body = (
+            "A transaction of SGD 18.50 was made with your UOB Card ending 1234 "
+            "on 05/10/2026 at fp*Sample Depot.\n"
+        )
+        mailbox.added = ["buy", "refund"]
+        mailbox.messages = {
+            "buy": (PURCHASE_SUBJECT, body, ("person-a@example.com",)),
+            "refund": (REFUND_SUBJECT, REFUND_BODY, ("person-a@example.com",)),
+        }
+        service.process_notification("999")
+
+        self.assertEqual(queries, ["Sample Depot"])
+        self.assertEqual(saved, [("sample depot", "Groceries")])
+        self.assertEqual([row.category for row in writer.rows], ["Groceries", INCOME_MISC])
+        self.assertEqual(writer.rows[0].description, "fp*Sample Depot")
+        self.assertEqual(writer.rows[0].payment_method, "UOB Sample Visa")
+        self.assertEqual(writer.rows[1].payment_method, "")
+        self.assertNotIn("18.50", queries[0])
+        self.assertNotIn("1234", queries[0])
 
     def test_missing_last4_on_a_live_message_does_not_crash(self):
         service, mailbox, state, writer = service_for(config_with(include_last4=False))

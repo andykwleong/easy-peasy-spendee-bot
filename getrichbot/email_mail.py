@@ -32,16 +32,19 @@ _LAST4_RE = re.compile(
 )
 _MASKED_LAST4_RE = re.compile(r"(?:[*xX]{2,}|•{2,})\s*(\d{4})(?!\d)")
 _SLASH_DATE = r"\d{1,2}/\d{1,2}/(?:\d{4}|\d{2})"
+_MONTH_DATE = r"\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4}"
+_CLOCK = r"\d{1,2}:\d{2}(?:\s*[AP]M)?"
+_OPTIONAL_CLOCK = rf"(?:\s+(?:at\s+)?{_CLOCK})?"
 _DATE_RE = re.compile(
-    rf"\bon\s+({_SLASH_DATE}|\d{{1,2}}\s+[A-Za-z]{{3,9}}\s+\d{{4}})",
+    rf"\bon\s+({_SLASH_DATE}|{_MONTH_DATE})",
     re.IGNORECASE,
 )
 _SHOP_AFTER_DATE_RE = re.compile(
-    rf"\bon\s+{_SLASH_DATE}(?:\s+at\s+\d{{1,2}}:\d{{2}}(?:\s*[AP]M)?)?\s+at\s+(.+?)(?:\.|\n|$)",
+    rf"\bon\s+({_SLASH_DATE}){_OPTIONAL_CLOCK}\s+at\s+(.+?)(?=\.|\n|$)",
     re.IGNORECASE,
 )
 _SHOP_AFTER_MONTH_RE = re.compile(
-    r"\bon\s+\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4}(?:\s+at\s+\d{1,2}:\d{2}(?:\s*[AP]M)?)?\s+at\s+(.+?)(?:\.|\n|$)",
+    rf"\bon\s+({_MONTH_DATE}){_OPTIONAL_CLOCK}\s+at\s+(.+?)(?=\.|\n|$)",
     re.IGNORECASE,
 )
 _LABELED_SHOP_RE = re.compile(r"(?:merchant|shop)\s*:\s*(.+?)(?:\n|$)", re.IGNORECASE)
@@ -264,17 +267,24 @@ def _purchase_decision(
     channels_for,
     category_for,
 ) -> EmailDecision:
-    amount = _one_amount(body)
-    last4s = _last4s(body)
-    shop = _shop(body)
-    expense_date = _mail_date(body)
-    if amount is None or shop is None or expense_date is None or len(last4s) != 1:
+    clause = _first_purchase_clause(body)
+    if clause is None:
+        shop = _labeled_shop(body)
+        expense_date = _mail_date(body)
+        sentence = None
+    else:
+        shop = clause.shop
+        expense_date = clause.expense_date
+        sentence = clause.sentence
+    amount = _chosen_amount(body, sentence)
+    last4 = _chosen_last4(body, sentence)
+    missing = _missing_purchase_pieces(amount, shop, expense_date, last4)
+    if missing:
         return EmailDecision(
             action="ask",
             kind="purchase",
-            text="I got a UOB transaction alert, but it was not one amount, one shop, one date, and one card. I have not logged it.",
+            text=_missing_purchase_text(missing),
         )
-    last4 = last4s[0]
     matches = match_cards_by_last4(last4, methods)
     if len(matches) != 1:
         return EmailDecision(
@@ -399,20 +409,30 @@ def _logged_by(addresses: tuple[str, ...], forwarders: dict[str, str]) -> str | 
     return None
 
 
+@dataclass(frozen=True)
+class _PurchaseClause:
+    shop: str
+    expense_date: date | None
+    sentence: str
+
+
 def _one_amount(body: str) -> Decimal | None:
+    found = _amounts(body)
+    if len(found) == 1:
+        return found[0]
+    return None
+
+
+def _amounts(body: str) -> list[Decimal]:
     found: list[Decimal] = []
     for raw in _AMOUNT_RE.findall(body or ""):
         try:
-            found.append(Decimal(raw.replace(",", "")))
+            amount = Decimal(raw.replace(",", ""))
         except InvalidOperation:
             continue
-    unique = []
-    for amount in found:
-        if amount not in unique:
-            unique.append(amount)
-    if len(unique) != 1 or unique[0] <= 0:
-        return None
-    return unique[0]
+        if amount > 0 and amount not in found:
+            found.append(amount)
+    return found
 
 
 def _last4s(body: str) -> tuple[str, ...]:
@@ -424,23 +444,108 @@ def _last4s(body: str) -> tuple[str, ...]:
     return tuple(found)
 
 
-def _shop(body: str) -> str | None:
-    for regex in (_SHOP_AFTER_DATE_RE, _SHOP_AFTER_MONTH_RE, _LABELED_SHOP_RE):
-        match = regex.search(body or "")
-        if match is None:
-            continue
-        shop = " ".join(match.group(1).strip(" -:").split())
-        shop = shop.rstrip(".")
-        if shop:
-            return shop
+def _chosen_amount(body: str, sentence: str | None) -> Decimal | None:
+    return _chosen_value(_amounts(body), _amounts(sentence or ""))
+
+
+def _chosen_last4(body: str, sentence: str | None) -> str | None:
+    return _chosen_value(list(_last4s(body)), list(_last4s(sentence or "")))
+
+
+def _chosen_value(whole, inside):
+    if len(whole) == 1:
+        return whole[0]
+    if len(whole) > 1 and len(inside) == 1:
+        return inside[0]
     return None
+
+
+def _missing_purchase_pieces(amount, shop, expense_date, last4) -> list[str]:
+    missing = []
+    if amount is None:
+        missing.append("amount")
+    if not shop:
+        missing.append("shop")
+    if expense_date is None:
+        missing.append("date")
+    if not last4:
+        missing.append("card")
+    return missing
+
+
+def _missing_purchase_text(missing: list[str]) -> str:
+    pieces = [f"the {name}" for name in missing]
+    if len(pieces) == 1:
+        detail = f"{pieces[0]} was"
+    elif len(pieces) == 2:
+        detail = f"{pieces[0]} and {pieces[1]} were"
+    else:
+        detail = f"{', '.join(pieces[:-1])}, and {pieces[-1]} were"
+    return f"I got a UOB transaction alert, but {detail} missing. I have not logged it."
+
+
+def _first_purchase_clause(body: str) -> _PurchaseClause | None:
+    text = body or ""
+    found = None
+    for regex in (_SHOP_AFTER_DATE_RE, _SHOP_AFTER_MONTH_RE):
+        match = regex.search(text)
+        if match is not None and (found is None or match.start() < found.start()):
+            found = match
+    if found is None:
+        return None
+    shop = _clean_shop(found.group(2))
+    if not shop:
+        return None
+    return _PurchaseClause(
+        shop=shop,
+        expense_date=_parse_date_text(found.group(1)),
+        sentence=_sentence_around(text, found.start(), found.end()),
+    )
+
+
+def _labeled_shop(body: str) -> str | None:
+    match = _LABELED_SHOP_RE.search(body or "")
+    if match is None:
+        return None
+    return _clean_shop(match.group(1))
+
+
+def _clean_shop(raw: str) -> str | None:
+    shop = " ".join(raw.strip(" -:").split())
+    shop = shop.rstrip(".")
+    return shop or None
+
+
+def _sentence_around(body: str, start: int, end: int) -> str:
+    left = start
+    while left > 0:
+        if body[left - 1] == "\n":
+            break
+        if body[left - 1] == "." and not _decimal_dot(body, left - 1):
+            break
+        left -= 1
+    right = end
+    while right < len(body):
+        if body[right] == "\n":
+            break
+        if body[right] == "." and not _decimal_dot(body, right):
+            break
+        right += 1
+    return body[left:right]
+
+
+def _decimal_dot(body: str, index: int) -> bool:
+    return index > 0 and index + 1 < len(body) and body[index - 1].isdigit() and body[index + 1].isdigit()
 
 
 def _mail_date(body: str) -> date | None:
     match = _DATE_RE.search(body or "")
     if match is None:
         return None
-    raw = match.group(1)
+    return _parse_date_text(match.group(1))
+
+
+def _parse_date_text(raw: str) -> date | None:
     if "/" in raw:
         day_raw, month_raw, year_raw = raw.split("/")
         try:

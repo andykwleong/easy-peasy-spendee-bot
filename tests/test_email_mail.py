@@ -216,6 +216,65 @@ class EmailMailTests(unittest.TestCase):
         self.assertEqual(decision.category, "Food")
         self.assertEqual(decision.payment_channel, "Online")
 
+    def test_clock_time_before_the_shop_is_still_one_purchase(self):
+        bodies = (
+            "A transaction of SGD 5.99 was made with your UOB Card ending 1234 on 05/10/26 at fp*Food Panda.",
+            "A transaction of SGD 5.99 was made with your UOB Card ending 1234 on 05/10/26 14:22 at fp*Food Panda.",
+            "A transaction of SGD 5.99 was made with your UOB Card ending 1234 on 05/10/26 2:22PM at fp*Food Panda.",
+        )
+        for body in bodies:
+            decision = decide(PURCHASE_SUBJECT, body, config_with())
+            self.assertEqual(decision.action, "log")
+            self.assertEqual(decision.shop, "fp*Food Panda")
+            self.assertEqual(decision.expense_date, date(2026, 10, 5))
+            self.assertEqual(decision.amount, Decimal("5.99"))
+            self.assertEqual(decision.last4, "1234")
+
+    def test_extra_amount_and_card_outside_the_purchase_sentence_are_ignored(self):
+        body = (
+            "A transaction of SGD 5.99 was made with your UOB Card ending 1234 "
+            "on 05/10/26 14:22 at fp*Food Panda. "
+            "Available limit SGD 1,000.00. Card ending 5678."
+        )
+        decision = decide(PURCHASE_SUBJECT, body, config_with())
+        self.assertEqual(decision.action, "log")
+        self.assertEqual(decision.amount, Decimal("5.99"))
+        self.assertEqual(decision.last4, "1234")
+        self.assertEqual(decision.shop, "fp*Food Panda")
+        self.assertEqual(decision.expense_date, date(2026, 10, 5))
+
+    def test_refused_purchase_names_the_missing_piece(self):
+        shop = decide(
+            PURCHASE_SUBJECT,
+            "A transaction of SGD 5.99 was made with your UOB Card ending 1234 on 05/10/26.",
+            config_with(),
+        )
+        amount = decide(
+            PURCHASE_SUBJECT,
+            "A transaction was made with your UOB Card ending 1234 on 05/10/26 at fp*Food Panda.",
+            config_with(),
+        )
+        card = decide(
+            PURCHASE_SUBJECT,
+            "A transaction of SGD 5.99 was made with your UOB Card on 05/10/26 at fp*Food Panda.",
+            config_with(),
+        )
+        date_and_shop = decide(
+            PURCHASE_SUBJECT,
+            "A transaction of SGD 5.99 was made with your UOB Card ending 1234 at fp*Food Panda.",
+            config_with(),
+        )
+        self.assertEqual(shop.text, "I got a UOB transaction alert, but the shop was missing. I have not logged it.")
+        self.assertEqual(amount.text, "I got a UOB transaction alert, but the amount was missing. I have not logged it.")
+        self.assertEqual(card.text, "I got a UOB transaction alert, but the card was missing. I have not logged it.")
+        self.assertEqual(
+            date_and_shop.text,
+            "I got a UOB transaction alert, but the shop and the date were missing. I have not logged it.",
+        )
+        for decision in (shop, amount, card, date_and_shop):
+            self.assertEqual(decision.action, "ask")
+            self.assertNotIn("one amount, one shop, one date, and one card", decision.text)
+
     def test_refund_is_income_misc_and_does_not_touch_the_card(self):
         decision = decide(REFUND_SUBJECT, REFUND_BODY, config_with())
         self.assertEqual(decision.action, "log")

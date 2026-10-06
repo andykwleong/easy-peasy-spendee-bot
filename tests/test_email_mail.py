@@ -202,6 +202,20 @@ class EmailMailTests(unittest.TestCase):
         self.assertEqual(decision.logged_by, "Me")
         self.assertEqual(decision.payment_channel, "Online")
 
+    def test_two_digit_uob_year_is_2026_and_keeps_the_shop(self):
+        body = (
+            "A transaction of SGD 5.99 was made with your UOB Card ending 1234 "
+            "on 05/10/26 at fp*Food Panda."
+        )
+        decision = decide(PURCHASE_SUBJECT, body, config_with())
+        self.assertEqual(decision.action, "log")
+        self.assertEqual(decision.expense_date, date(2026, 10, 5))
+        self.assertEqual(decision.shop, "fp*Food Panda")
+        self.assertEqual(decision.amount, Decimal("5.99"))
+        self.assertEqual(decision.last4, "1234")
+        self.assertEqual(decision.category, "Food")
+        self.assertEqual(decision.payment_channel, "Online")
+
     def test_refund_is_income_misc_and_does_not_touch_the_card(self):
         decision = decide(REFUND_SUBJECT, REFUND_BODY, config_with())
         self.assertEqual(decision.action, "log")

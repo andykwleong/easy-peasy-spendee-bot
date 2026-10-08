@@ -282,11 +282,11 @@ function renderTransaction(row) {
   top.append(el("div", "merchant", row.description || "No description"));
   top.append(el("div", "amount", money(row.amount)));
   const meta = el("div", "tx-meta");
-  meta.append(el("span", "", prettyDate(row.date)));
+  meta.append(el("span", "tx-date", prettyDate(row.date)));
   meta.append(el("span", "tag", row.kind === "card_only" ? "Card only · not an expense" : (row.category || row.kind)));
-  meta.append(el("span", "", "Logged by " + row.logged_by));
-  if (row.kind === "income") meta.append(el("span", "", "No card · income is household"));
-  else meta.append(el("span", "", cardLine(row)));
+  meta.append(el("span", "tx-logged", "Logged by " + row.logged_by));
+  if (row.kind === "income") meta.append(el("span", "tx-note", "No card · income is household"));
+  else meta.append(el("span", "tx-note", cardLine(row)));
   article.append(top, meta);
   const actions = el("div", "tx-actions");
   const open = state.editingId === row.id;
@@ -662,12 +662,13 @@ function mark() {
 }
 
 function rawTable(title, headers, records) {
-  const panel = el("div", "panel scroll");
+  const panel = el("div", "panel");
   panel.append(el("h3", "", title));
   if (!records.length) {
     panel.append(el("p", "empty", "No rows."));
     return panel;
   }
+  const scroller = el("div", "table-scroll");
   const table = el("table");
   const head = el("tr");
   headers.forEach((header, index) => head.append(el("th", index === 3 ? "num" : "", header)));
@@ -681,7 +682,8 @@ function rawTable(title, headers, records) {
     body.append(row);
   });
   table.append(body);
-  panel.append(table);
+  scroller.append(table);
+  panel.append(scroller);
   return panel;
 }
 

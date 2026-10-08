@@ -51,6 +51,7 @@ class Settings:
     gmail_pubsub_service_account: str | None
     me_forwarder_email: str | None
     wife_forwarder_email: str | None
+    exa_api_key: str | None
 
     @classmethod
     def load(cls) -> "Settings":
@@ -96,6 +97,7 @@ class Settings:
             gmail_pubsub_service_account=_optional_text("GMAIL_PUBSUB_SERVICE_ACCOUNT"),
             me_forwarder_email=_optional_text("ME_FORWARDER_EMAIL"),
             wife_forwarder_email=_optional_text("WIFE_FORWARDER_EMAIL"),
+            exa_api_key=_optional_text("EXA_API_KEY"),
         )
 
     def label_for_user(self, telegram_user_id: int) -> str | None:

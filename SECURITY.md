@@ -53,11 +53,11 @@ For group chats, disable Telegram bot privacy mode only for the intended private
 
 ## Data Handling
 
-Expense data is stored in your Google Sheet. Screenshot and voice-note extraction may send image/audio-derived content to OpenAI when `OPENAI_API_KEY` is configured. Bank email is not sent to OpenAI.
+Expense data is stored in your Google Sheet. Screenshot and voice-note extraction may send image/audio-derived content to OpenAI when `OPENAI_API_KEY` is configured. A bank email is not sent to OpenAI. For an unknown shop, only the shop name goes to Exa, and only that name, Exa's short description, and the existing category list go to the configured model.
 
 Payment method names and card-limit rows are read from your private Google Sheet when needed for payment buttons and card summaries. The bot does not need bank login access and does not pull transactions from banks automatically.
 
-Email logging, when turned on, uses a separate Gmail read-only sign-in. That refresh token is not the spreadsheet key. The bot can read the mailbox. It cannot send mail. The tap from Google is checked before the bot fetches a message. The last four digits are used only to match a card, and they are not stored on the expense row. An unknown shop name may be sent once to Wikipedia. The amount, the card number, the last 4 digits, and the rest of the email are not included, and the mail is not sent to OpenAI.
+Email logging, when turned on, uses a separate Gmail read-only sign-in. That refresh token is not the spreadsheet key. The bot can read the mailbox. It cannot send mail. The tap from Google is checked before the bot fetches a message. The last four digits are used only to match a card, and they are not stored on the expense row. An unknown shop name may be sent once to Exa when `EXA_API_KEY` is set. The amount, the card number, the last 4 digits, and the rest of the email are not included. The mail itself is not sent to OpenAI. The shop name, Exa's short description, and the category list may be sent once to the configured model so it can pick a category you already have.
 
 Avoid sending bank account numbers, card numbers, government IDs, or other unnecessary sensitive information to the bot.
 

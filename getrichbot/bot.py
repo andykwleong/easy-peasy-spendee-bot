@@ -17,6 +17,9 @@ from zoneinfo import ZoneInfo
 
 from getrichbot.categories import ALL_CATEGORIES, CATEGORY_ALIASES, FIXED_CATEGORIES, VARIABLE_CATEGORIES, category_config_status, configure_category_config
 from getrichbot.config import Settings
+from getrichbot.email_mail import LAST_BOT_MESSAGE_KEY
+from getrichbot.email_mail import email_logged_text
+from getrichbot.email_mail import logged_notice_entry_id
 from getrichbot.gmail_watch import WriteOutcome, attach_email, is_email_command
 from getrichbot.shop_category import apply_email_shop_correction
 from getrichbot.cards import PaymentConfig, build_card_summary, format_card_summary
@@ -24,7 +27,7 @@ from getrichbot.image_utils import prepare_image_for_vision
 from getrichbot.logging_utils import configure_logging
 from getrichbot.models import CardUsageRow, ExpenseDraft, ExpenseRecord, ExpenseRow
 from getrichbot.parser import categorize_description, extract_date_phrase, extract_standalone_date, parse_expense, parse_expenses
-from getrichbot.row_edits import expense_kind, format_saved_row, latest_logged_row, parse_immediate_edit, plan_edit
+from getrichbot.row_edits import category_for_linked_message, expense_kind, format_saved_row, latest_logged_row, match_category, parse_immediate_edit, plan_edit, record_for_message_id
 from getrichbot.sheets import SheetsClient
 from getrichbot.summary import (
     build_category_breakdown,
@@ -666,6 +669,9 @@ class FinanceBot:
 
         if lowered.startswith(("confirm fixed", "confirmfixed", "fixed expenses")) or lowered in {"log fixed", "log fixed expenses"}:
             await self._start_fixed_review(update, text)
+            return True
+
+        if await self._apply_linked_category(update, text):
             return True
 
         if await self._apply_immediate_edit(update, text):
@@ -1464,6 +1470,64 @@ class FinanceBot:
             [PendingEditChange(record=record, expense_date=parsed_date.isoformat())],
         )
 
+    async def _apply_linked_category(self, update: Update, text: str) -> bool:
+        if update.message is None or match_category(text, tuple(ALL_CATEGORIES)) is None:
+            return False
+        reply = getattr(update.message, "reply_to_message", None)
+        reply_id = getattr(reply, "message_id", None) if reply is not None else None
+        last_id = None
+        if reply_id is None and hasattr(self.sheets, "get_state_value"):
+            last_id = self.sheets.get_state_value(self.settings.bot_state_sheet, LAST_BOT_MESSAGE_KEY)
+        linked = category_for_linked_message(
+            text,
+            tuple(ALL_CATEGORIES),
+            reply_message_id=reply_id,
+            last_bot_message_id=last_id,
+        )
+        if linked is None:
+            return False
+        category, message_id = linked
+        records = self.sheets.get_expense_records(self.settings.raw_expenses_sheet)
+        record = record_for_message_id(records, message_id)
+        if record is None:
+            return False
+        if update.effective_user is None or self.settings.label_for_user(update.effective_user.id) is None:
+            await update.message.reply_text("I do not recognize this Telegram user ID yet.")
+            return True
+        if category.casefold().startswith("income -"):
+            transaction_type = "Income"
+        elif record.transaction_type.casefold() == "fixed" or record.input_type.casefold() == "fixed":
+            transaction_type = "Fixed"
+        else:
+            transaction_type = "Expense"
+        updates = {"category": category, "transaction_type": transaction_type}
+        if transaction_type == "Income":
+            updates["payment_method"] = ""
+            updates["payment_owner"] = ""
+            updates["payment_channel"] = ""
+        self.sheets.update_expense_record(self.settings.raw_expenses_sheet, record.row_number, **updates)
+        apply_email_shop_correction(
+            self.sheets,
+            self.settings.category_keywords_sheet,
+            record,
+            category,
+        )
+        self._refresh_monthly_summary()
+        kind = "income" if transaction_type == "Income" else expense_kind(transaction_type, record.input_type)
+        await update.message.reply_text(
+            format_saved_row(
+                amount=record.amount,
+                category=category,
+                expense_date=record.expense_date,
+                entry_id=record.entry_id,
+                kind=kind,
+                payment_method="" if transaction_type == "Income" else record.payment_method,
+                payment_owner="" if transaction_type == "Income" else record.payment_owner,
+                payment_channel="" if transaction_type == "Income" else record.payment_channel,
+            )
+        )
+        return True
+
     async def _apply_immediate_edit(self, update: Update, text: str) -> bool:
         parsed = parse_immediate_edit(text)
         if parsed is None or update.message is None or update.effective_user is None:
@@ -1973,16 +2037,28 @@ class FinanceBot:
         for key in [key for key, item in self.pending_duplicates.items() if item.row.entry_id == entry_id]:
             self.pending_duplicates.pop(key, None)
 
+    def remember_email_notice(self, text: str, message_id: int | str) -> None:
+        try:
+            self.sheets.set_state_value(self.settings.bot_state_sheet, LAST_BOT_MESSAGE_KEY, str(message_id))
+        except Exception:
+            LOGGER.exception("Could not store the latest bot message id.")
+        entry_id = logged_notice_entry_id(text)
+        if not entry_id or not hasattr(self.sheets, "get_record_by_id"):
+            return
+        try:
+            record = self.sheets.get_record_by_id(self.settings.raw_expenses_sheet, entry_id)
+            if record is None:
+                return
+            self.sheets.update_expense_record(
+                self.settings.raw_expenses_sheet,
+                record.row_number,
+                telegram_message_id=str(message_id),
+            )
+        except Exception:
+            LOGGER.exception("Could not store the Telegram message id. The purchase is still logged.")
+
     def _email_logged_line(self, row: ExpenseRow) -> str:
-        when = self._human_date(row.timestamp.date())
-        if row.transaction_type.lower() == "income":
-            detail = f" - {row.description}" if row.description else ""
-            return f"Logged income ${row.amount:.2f} to {row.category} - {when}{detail} [{row.entry_id}]"
-        channel = row.payment_channel or "All"
-        return (
-            f"Logged ${row.amount:.2f} at {row.description} to {row.category} - "
-            f"{when} via {row.payment_method} ({channel}) [{row.entry_id}]"
-        )
+        return email_logged_text(row)
 
     def _append_expense(self, row: ExpenseRow) -> None:
         self.sheets.append_expense(self.settings.raw_expenses_sheet, row)
@@ -3470,7 +3546,10 @@ def main() -> None:
             if settings.telegram_chat_id is None:
                 LOGGER.warning("An email notice was not sent because TELEGRAM_CHAT_ID is not set.")
                 return
-            await application.bot.send_message(chat_id=settings.telegram_chat_id, text=text)
+            sent = await application.bot.send_message(chat_id=settings.telegram_chat_id, text=text)
+            message_id = getattr(sent, "message_id", None)
+            if message_id is not None:
+                finance_bot.remember_email_notice(text, message_id)
 
         email_service.bind_notifier(asyncio.get_running_loop(), send_email_notice)
         try:

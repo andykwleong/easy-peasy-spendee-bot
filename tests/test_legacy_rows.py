@@ -50,6 +50,7 @@ class TestLegacyRows(unittest.TestCase):
 
         self.assertEqual(records[0].input_type, "Text")
         self.assertEqual(records[0].status, "Confirmed")
+        self.assertEqual(records[0].telegram_message_id, "1")
         self.assertIn(["Food", "20.00"], table)
         self.assertIn(["Total Expenses", "20.00"], table)
 
@@ -66,6 +67,7 @@ class TestLegacyRows(unittest.TestCase):
 
         self.assertEqual(record.payment_method, "Wife Card")
         self.assertEqual(record.payment_owner, "My wife")
+        self.assertEqual(record.telegram_message_id, "2")
 
     def test_payment_owner_rows_keep_logged_by_and_card_owner_separate(self):
         row = [
@@ -81,6 +83,7 @@ class TestLegacyRows(unittest.TestCase):
         self.assertEqual(record.logged_by, "My wife")
         self.assertEqual(record.payment_owner, "Me")
         self.assertEqual(record.payment_method, "Citi Rewards")
+        self.assertEqual(record.telegram_message_id, "3")
 
     def test_payment_channel_rows_parse_new_layout(self):
         row = [
@@ -98,6 +101,7 @@ class TestLegacyRows(unittest.TestCase):
         self.assertEqual(record.payment_channel, "Online")
         self.assertEqual(record.transaction_type, "Expense")
         self.assertEqual(record.status, "Confirmed")
+        self.assertEqual(record.telegram_message_id, "5")
 
     def test_card_usage_payment_owner_rows_keep_logger_and_card_owner_separate(self):
         row = [

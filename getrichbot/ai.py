@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import base64
+import logging
 from datetime import date
 from typing import Literal
+
+LOGGER = logging.getLogger(__name__)
 
 from pydantic import BaseModel, Field
 
@@ -197,6 +200,53 @@ class AIInterpreter:
             file=(filename, audio_bytes),
         )
         return response.text.strip()
+
+
+class ShopCategoryPick(BaseModel):
+    category: str = ""
+
+
+def pick_existing_category(
+    shop: str,
+    description: str,
+    categories: tuple[str, ...],
+    api_key: str | None,
+    model: str,
+) -> str | None:
+    """Ask the configured model to pick one existing category.
+
+    The prompt is the shop name, Exa's short description, and the category
+    list. The amount, the card, the last 4 digits, and the email are not sent.
+    """
+    key = (api_key or "").strip()
+    names = tuple(category for category in categories if category)
+    if not key or not description.strip() or not names or not model:
+        return None
+    from openai import OpenAI
+
+    category_text = "\n".join(f"- {category}" for category in names)
+    system = (
+        "Pick one category for a shop. Return the category name exactly as written, "
+        "or leave it blank if none fits. Do not invent a category."
+    )
+    user = f"Shop: {shop}\nDescription: {description}\nCategories:\n{category_text}"
+    try:
+        client = OpenAI(api_key=key, timeout=45, max_retries=0)
+        response = client.responses.parse(
+            model=model,
+            input=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            text_format=ShopCategoryPick,
+        )
+    except Exception:
+        LOGGER.exception("Shop category model failed. The purchase is still logged with a blank category.")
+        return None
+    parsed = response.output_parsed
+    if parsed is None:
+        return None
+    return parsed.category
 
 
 def _shopping_guidance() -> str:

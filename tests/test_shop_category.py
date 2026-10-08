@@ -7,9 +7,10 @@ from getrichbot.sheets import keyword_upsert_actions
 from getrichbot.shop_category import categorize_email_shop
 from getrichbot.shop_category import remember_email_shop_correction
 from getrichbot.shop_category import resolve_shop_category
+from getrichbot.shop_lookup import EXA_SEARCH_URL
+from getrichbot.shop_lookup import exa_description
+from getrichbot.shop_lookup import exa_search_body
 from getrichbot.shop_lookup import lookup_shop_text
-from getrichbot.shop_lookup import opensearch_text
-from getrichbot.shop_lookup import wikipedia_search_url
 from decimal import Decimal
 
 
@@ -66,6 +67,14 @@ class ShopCategoryTests(unittest.TestCase):
             queries.append(query)
             return "This place is a neighbourhood supermarket."
 
+        asked = []
+
+        def ask(shop, description, choices):
+            asked.append((shop, description, choices))
+            if "supermarket" in description:
+                return "Groceries"
+            return ""
+
         result = resolve_shop_category(
             "fp*Sample Depot",
             "Me",
@@ -73,16 +82,22 @@ class ShopCategoryTests(unittest.TestCase):
             "My wife",
             ("Food", "Groceries", "Income - misc"),
             lookup,
+            ask,
         )
 
         self.assertEqual(queries, ["Sample Depot"])
         self.assertNotIn("1234", queries[0])
         self.assertNotIn("18.50", queries[0])
+        self.assertEqual(asked[0][0], "Sample Depot")
+        self.assertIn("supermarket", asked[0][1])
+        self.assertNotIn("18.50", asked[0][1])
+        self.assertNotIn("1234", asked[0][1])
         self.assertEqual(result.category, "Groceries")
         self.assertEqual(result.learned_keyword, "sample depot")
         self.assertNotEqual(result.category, "Income - misc")
 
-    def test_failed_lookup_uses_a_category_word_and_a_blank_lookup_asks(self):
+    def test_failed_lookup_leaves_the_category_blank_and_does_not_ask(self):
+        asked = []
         care = resolve_shop_category(
             "Care Clinic",
             "Me",
@@ -90,9 +105,11 @@ class ShopCategoryTests(unittest.TestCase):
             "My wife",
             ("Personal care", "Transport"),
             lambda _query: None,
+            lambda *args: asked.append(args),
         )
-        self.assertEqual(care.category, "Personal care")
-        self.assertEqual(care.learned_keyword, "care clinic")
+        self.assertIsNone(care.category)
+        self.assertEqual(care.learned_keyword, "")
+        self.assertEqual(asked, [])
 
         queries = []
 
@@ -107,21 +124,35 @@ class ShopCategoryTests(unittest.TestCase):
             "My wife",
             ("Food", "Groceries"),
             fail,
+            lambda *args: asked.append(args),
         )
         self.assertEqual(queries, ["Zzzqq Plug"])
         self.assertIsNone(unknown.category)
         self.assertEqual(unknown.learned_keyword, "")
+        self.assertEqual(asked, [])
 
-    def test_ambiguous_category_words_do_not_invent_a_category(self):
-        result = resolve_shop_category(
+    def test_model_cannot_invent_a_category(self):
+        cannot = resolve_shop_category(
             "Alpha Place",
             "Me",
             "Me",
             "My wife",
-            ("Alpha Goods", "Alpha Services"),
-            lambda _query: None,
+            ("Food", "Groceries"),
+            lambda _query: "a small shop",
+            lambda *_args: "cannot",
         )
-        self.assertIsNone(result.category)
+        invented = resolve_shop_category(
+            "Alpha Place",
+            "Me",
+            "Me",
+            "My wife",
+            ("Food", "Groceries"),
+            lambda _query: "a small shop",
+            lambda *_args: "Made Up",
+        )
+        self.assertIsNone(cannot.category)
+        self.assertIsNone(invented.category)
+        self.assertEqual(cannot.learned_keyword, "")
 
     def test_keyword_save_failure_still_returns_the_category(self):
         def save(_keyword, _category):
@@ -135,6 +166,7 @@ class ShopCategoryTests(unittest.TestCase):
             ("Food", "Groceries"),
             lambda _query: "a supermarket",
             save,
+            lambda *_args: "Groceries",
         )
         self.assertEqual(category, "Groceries")
 
@@ -204,22 +236,33 @@ class ShopCategoryTests(unittest.TestCase):
             ],
         )
 
-    def test_lookup_url_contains_only_the_shop_name(self):
-        url = wikipedia_search_url("Sample Depot")
-        self.assertIn("search=Sample+Depot", url)
-        self.assertNotIn("1234", url)
-        self.assertNotIn("18.50", url)
-        self.assertNotIn("SGD", url)
-        self.assertIsNone(opensearch_text('["Sample Depot", [], [], []]'))
-        self.assertIn("supermarket", opensearch_text('["Sample Depot", ["Sample Depot"], ["a supermarket"], ["https://example.com"]]'))
+    def test_exa_search_sends_only_the_shop_name(self):
+        body = exa_search_body("Sample Depot")
+        encoded = str(body)
+        self.assertEqual(body["query"], "Sample Depot")
+        self.assertEqual(body["numResults"], 1)
+        self.assertNotIn("1234", encoded)
+        self.assertNotIn("18.50", encoded)
+        self.assertNotIn("SGD", encoded)
+        self.assertIsNone(exa_description('{"results": []}'))
+        self.assertIsNone(exa_description('{"results": [{"title": "", "highlights": []}]}'))
+        self.assertIn(
+            "supermarket",
+            exa_description('{"results": [{"title": "Sample Depot", "highlights": ["a supermarket"]}]}'),
+        )
 
         seen = []
 
-        def fetch(url):
-            seen.append(url)
+        def fetch(url, payload, api_key):
+            seen.append((url, payload, api_key))
             raise TimeoutError("no network in tests")
 
-        self.assertIsNone(lookup_shop_text("Sample Depot", fetch))
+        self.assertIsNone(lookup_shop_text("Sample Depot", fetch=fetch))
+        self.assertEqual(seen, [])
+        self.assertIsNone(lookup_shop_text("Sample Depot", "test-exa-key", fetch=fetch))
         self.assertEqual(len(seen), 1)
-        self.assertIn("Sample+Depot", seen[0])
-        self.assertNotIn("1234", seen[0])
+        self.assertEqual(seen[0][0], EXA_SEARCH_URL)
+        self.assertEqual(seen[0][1]["query"], "Sample Depot")
+        self.assertNotIn("1234", str(seen[0][1]))
+        self.assertNotIn("test-exa-key", seen[0][0])
+        self.assertNotIn("test-exa-key", str(seen[0][1]))

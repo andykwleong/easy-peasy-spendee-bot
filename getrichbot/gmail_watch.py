@@ -19,6 +19,7 @@ from getrichbot.categories import ALL_CATEGORIES
 from getrichbot.shop_category import apply_shop_keyword
 from getrichbot.shop_category import categorize_email_shop
 from getrichbot.shop_lookup import lookup_shop_text
+from getrichbot.ai import pick_existing_category
 from getrichbot.email_mail import decide_mail
 from getrichbot.gmail_api import GmailApiMailbox
 from getrichbot.gmail_api import HistoryExpired
@@ -418,6 +419,7 @@ class EmailService:
             channels_for=self.context.channels_for,
             category_for=self.context.category_for,
             today=self._now().date(),
+            remember_category=getattr(self.context, "remember_category", None),
         )
 
     def _authorized(self, headers: dict[str, str]) -> bool:
@@ -551,11 +553,28 @@ class BotEmailContext:
     def channels_for(self, owner: str, payment_method: str) -> tuple[str, ...]:
         return self.bot._load_payment_config().channel_options_for(owner, payment_method)
 
-    def category_for(self, shop: str, logged_by: str) -> str | None:
+    def remember_category(self, keyword: str, category: str) -> None:
+        settings = self.bot.settings
+        apply_shop_keyword(self.bot.sheets, settings.category_keywords_sheet, keyword, category)
+
+    def category_for(self, shop: str, logged_by: str, body: str = "") -> str | None:
+        del body
         settings = self.bot.settings
 
         def save(keyword: str, category: str) -> None:
             apply_shop_keyword(self.bot.sheets, settings.category_keywords_sheet, keyword, category)
+
+        def lookup(query: str) -> str | None:
+            return lookup_shop_text(query, settings.exa_api_key)
+
+        def ask(query: str, description: str, categories: tuple[str, ...]) -> str | None:
+            return pick_existing_category(
+                query,
+                description,
+                categories,
+                settings.openai_api_key,
+                settings.openai_model,
+            )
 
         return categorize_email_shop(
             shop,
@@ -563,8 +582,9 @@ class BotEmailContext:
             settings.me_label,
             settings.wife_label,
             self.categories(),
-            lookup_shop_text,
+            lookup,
             save,
+            ask,
         )
 
 

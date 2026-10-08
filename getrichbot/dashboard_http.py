@@ -55,7 +55,7 @@ class DashboardContext:
 
 
 class DashboardApp:
-    """Private page. Reading does not write. A finished row correction writes that row back to the sheet."""
+    """Private page. Reading does not write. A finished row correction writes that row back. Delete writes only after confirm."""
 
     def __init__(self, context: DashboardContext):
         self.context = context
@@ -97,6 +97,8 @@ class DashboardApp:
             return self._dashboard(normalized, query)
         if method == "POST" and path == "/api/dashboard/edit":
             return self._edit(normalized, body)
+        if method == "POST" and path == "/api/dashboard/delete":
+            return self._delete(normalized, body)
         if path == "/gmail/push":
             if self.gmail_push is None:
                 return _json(200, {"ok": True})
@@ -330,6 +332,81 @@ class DashboardApp:
             dashboard = self._read_sheet_unlocked(label, scope, cards_scope)
         dashboard["ok"] = True
         dashboard["message"] = saved
+        return 200, dashboard
+
+    def _delete(self, headers: dict[str, str], body: bytes) -> tuple[int, list[tuple[str, str]], bytes]:
+        identity = self._identity_from_headers(headers)
+        if identity is None:
+            return _json(401, {"ok": False, "error": "locked"})
+        label = self.context.label_for_user(identity.user_id)
+        if label is None:
+            return _json(401, {"ok": False, "error": "not_allowed"})
+        payload = _json_object(body)
+        if payload is None:
+            return _json(400, {"ok": False, "error": "invalid"})
+        if payload.get("confirm") is not True:
+            return _json(400, {
+                "ok": False,
+                "error": "confirm",
+                "message": "Nothing was deleted. Confirm in the popup first.",
+            })
+        entry_id = payload.get("id")
+        source = payload.get("source")
+        scope = payload.get("scope", "mine")
+        cards_scope = payload.get("cards", "mine")
+        if not isinstance(entry_id, str) or not entry_id.strip() or len(entry_id) > 40:
+            return _json(400, {"ok": False, "error": "invalid"})
+        if source not in {"expense", "card_usage"}:
+            return _json(400, {"ok": False, "error": "invalid"})
+        if not isinstance(scope, str) or not isinstance(cards_scope, str):
+            return _json(400, {"ok": False, "error": "invalid"})
+        if scope not in {"mine", "both"} or cards_scope not in {"mine", "other"}:
+            return _json(400, {"ok": False, "error": "scope"})
+        try:
+            result = self._write_delete(label, entry_id.strip(), source, scope, cards_scope)
+        except ValueError:
+            return _json(400, {"ok": False, "error": "cards"})
+        except Exception:
+            LOGGER.exception("Dashboard could not delete the Google Sheet row.")
+            return _json(500, {
+                "ok": False,
+                "error": "sheet",
+                "message": "I could not delete that row just now. It is still there.",
+            })
+        if result is None:
+            return _json(404, {"ok": False, "error": "not_found", "message": "I could not find that row."})
+        status, body_payload = result
+        return _json(status, body_payload)
+
+    def _write_delete(
+        self,
+        label: str,
+        entry_id: str,
+        source: str,
+        scope: str,
+        cards_scope: str,
+    ) -> tuple[int, dict] | None:
+        with self._sheet_lock:
+            if source == "expense":
+                records = self.context.sheets.get_expense_records(self.context.raw_sheet)
+                record = next((item for item in reversed(records) if item.entry_id.lower() == entry_id.lower()), None)
+                if record is None:
+                    return None
+                deleted = self.context.sheets.delete_entry_by_id(self.context.raw_sheet, record.entry_id)
+                if not deleted:
+                    return None
+                self._refresh_monthly_summary()
+            else:
+                card_usage = self.context.sheets.get_card_usage_records(self.context.card_usage_sheet)
+                record = next((item for item in reversed(card_usage) if item.entry_id.lower() == entry_id.lower()), None)
+                if record is None:
+                    return None
+                deleted = self.context.sheets.delete_entry_by_id(self.context.card_usage_sheet, record.entry_id)
+                if not deleted:
+                    return None
+            dashboard = self._read_sheet_unlocked(label, scope, cards_scope)
+        dashboard["ok"] = True
+        dashboard["message"] = "Deleted that row."
         return 200, dashboard
 
     def _refresh_monthly_summary(self) -> None:

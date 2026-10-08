@@ -34,7 +34,7 @@ Telegram group chat
 - Shows category spending breakdowns by month, including who logged each row and category totals.
 - Supports undo for the last expense sent by a user.
 - Keeps the bot private to configured Telegram user IDs.
-- Shows a private dashboard for those same two people. It reads the Google Sheet. Fix tagging can correct a saved row's category, amount, card, or channel, and that correction is written back to the same row.
+- Shows a private dashboard for those same two people. It reads the Google Sheet. Fix tagging can correct a saved row's category, amount, card, or channel, and that correction is written back to the same row. Delete asks first, then removes that one row.
 - Can log a clear bank email when email logging is turned on. A purchase is written immediately. A refund, PayNow, dividend, or interest is written as household income. A statement stays quiet. Unclear mail asks and is not written.
 
 ## Requirements
@@ -310,11 +310,15 @@ The page rearranges itself. A narrow window uses the phone layout. A wide window
 
 It shows recent transactions (yours, or both), card summary, the household monthly income, expenses, and net, the raw rows, and card-only rows that stay out of household spending. Income is for the household, not split by person. On Cards, a toggle switches between your credit cards and the other person's. The colours stay the same as Telegram: green under 60%, yellow from 60% to 79%, orange from 80% to 94%, red at 95% or more. A card with no limit still shows.
 
+On a wide screen, each recent row keeps the shop and date on the left, the category in one fixed column, who logged it in the next fixed column, and the amount and card on the right. A narrow window stacks those lines so the phone layout still fits.
+
 Fix tagging, on a recent row, is how you correct that row. Either of you can change the category, the amount, the card, or the payment channel when that field applies. Income has no card. Card-only spend has no expense category. The sheet updates when you pick a category, card, or channel, or when you finish the amount. It does not ask "are you sure", and it does not save on every keystroke. Payment owner follows the card you pick. Logged by stays the person who logged the row. If a card has only one channel that is not All, that channel stays. If it has no channel choice, the page does not invent one. Monthly totals and card totals are calculated again from the rows. A later "Agent eval" space is labelled and has no score.
+
+Delete, on a recent row and on the same rows in Raw entries, does ask first. The first tap opens a popup with the shop, the amount, and the date. Nothing is removed yet. Cancel closes the popup and leaves the row. Confirm deletes that one row from the Google Sheet. The monthly totals are then calculated again from the rows that remain. Card-only rows in the Card Usage list use the same popup. Either of you can delete a row.
 
 Before the computer login can finish, tell BotFather that this website belongs to your bot. Open BotFather, choose your bot, and use Login Widget or `/setdomain`. Add the dashboard address. Until that is done, the computer button may open and then stop. Until `DASHBOARD_PUBLIC_URL` is set on Railway, the button in the chat does nothing useful. The expense chat keeps working either way.
 
-The page is served by the same Python process that already runs the bot (`python -u -m getrichbot.bot`). It is not a second Railway service. Opening the page reads the sheet. Fix tagging writes the correction back to the same row. When email logging is on, Google’s mail tap arrives on this same process.
+The page is served by the same Python process that already runs the bot (`python -u -m getrichbot.bot`). It is not a second Railway service. Opening the page reads the sheet. Fix tagging writes the correction back to the same row. Delete writes only after you confirm, and it removes one row. When email logging is on, Google’s mail tap arrives on this same process.
 
 ## Email logging
 

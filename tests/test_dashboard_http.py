@@ -103,6 +103,7 @@ class EditableSheets(FakeSheets):
     def __init__(self):
         super().__init__()
         self.writes = []
+        self.deletes = []
         self.config = parse_payment_config(
             [
                 ["Payment Method", "Owner", "Type", "Cycle Type", "Cycle Start Day", "Active"],
@@ -131,6 +132,16 @@ class EditableSheets(FakeSheets):
 
     def update_monthly_summary(self, sheet_name, rows):
         self.summary_rows = rows
+
+    def delete_entry_by_id(self, sheet_name, entry_id, logged_by=None):
+        self.deletes.append((sheet_name, entry_id))
+        if sheet_name == "Card Usage":
+            before = len(self.usage)
+            self.usage = [row for row in self.usage if row.entry_id.lower() != entry_id.lower()]
+            return len(self.usage) != before
+        before = len(self.records)
+        self.records = [row for row in self.records if row.entry_id.lower() != entry_id.lower()]
+        return len(self.records) != before
 
 
 def labels(user_id: int) -> str | None:
@@ -590,6 +601,86 @@ class DashboardPromptTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(status, 400)
         self.assertEqual(body_json(payload)["message"], "Income has no card.")
         self.assertEqual(sheets.writes, [])
+
+    def test_delete_does_not_run_until_confirm(self):
+        sheets = EditableSheets()
+        sheets.records.append(
+            ExpenseRecord(
+                row_number=4,
+                entry_id="bb2002",
+                timestamp="15:00:00",
+                expense_date="2026-09-21",
+                month="2026-09",
+                logged_by="Sam",
+                raw_input="sample books",
+                amount=Decimal("12.00"),
+                category="Shopping - Person B",
+                description="Sample books",
+                input_type="text",
+                status="Confirmed",
+                transaction_type="Expense",
+                payment_method="Sample Mastercard",
+                payment_owner="Sam",
+            )
+        )
+        app, _sheets = app_for(sheets)
+        _status, headers, _payload = app.handle(
+            "POST",
+            "/api/session/widget",
+            {"Content-Type": "application/json"},
+            json.dumps(sign_widget(111)).encode(),
+            secure=True,
+        )
+        cookie = dict(headers)["Set-Cookie"].split(";", 1)[0]
+        signed = {"Content-Type": "application/json", "Cookie": cookie}
+
+        locked, _, _locked_body = app.handle(
+            "POST",
+            "/api/dashboard/delete",
+            {"Content-Type": "application/json"},
+            json.dumps({"id": "aa1001", "source": "expense", "confirm": True}).encode(),
+            secure=True,
+        )
+        self.assertEqual(locked, 401)
+
+        for extra in ({}, {"confirm": False}, {"confirm": "yes"}):
+            status, _, payload = app.handle(
+                "POST",
+                "/api/dashboard/delete",
+                signed,
+                json.dumps({"id": "aa1001", "source": "expense", "scope": "both", **extra}).encode(),
+                secure=True,
+            )
+            self.assertEqual(status, 400)
+            self.assertEqual(body_json(payload)["error"], "confirm")
+            self.assertIn(b"Nothing was deleted", payload)
+
+        self.assertEqual(sheets.deletes, [])
+        self.assertEqual([record.entry_id for record in sheets.records], ["aa1001", "bb2002"])
+        self.assertFalse(hasattr(sheets, "summary_rows"))
+
+        deleted_status, _, deleted_body = app.handle(
+            "POST",
+            "/api/dashboard/delete",
+            signed,
+            json.dumps({
+                "id": "aa1001",
+                "source": "expense",
+                "confirm": True,
+                "scope": "both",
+            }).encode(),
+            secure=True,
+        )
+
+        self.assertEqual(deleted_status, 200)
+        deleted = body_json(deleted_body)
+        self.assertTrue(deleted["ok"])
+        self.assertEqual(sheets.deletes, [("Raw Expenses", "aa1001")])
+        self.assertEqual([record.entry_id for record in sheets.records], ["bb2002"])
+        self.assertTrue(all(item["id"] != "aa1001" for item in deleted["recent"]))
+        self.assertTrue(any(item["id"] == "bb2002" and item["logged_by"] == "Sam" for item in deleted["recent"]))
+        self.assertTrue(hasattr(sheets, "summary_rows"))
+        self.assertNotIn(b"Andy", deleted_body)
 
     async def test_menu_button_failure_does_not_stop_startup(self):
         class Bot:

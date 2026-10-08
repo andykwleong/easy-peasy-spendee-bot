@@ -14,6 +14,11 @@ from getrichbot.email_mail import INCOME_MISC
 from getrichbot.email_mail import build_expense_row
 from getrichbot.email_mail import category_from_keywords
 from getrichbot.email_mail import decide_mail
+from getrichbot.email_mail import email_logged_text
+from getrichbot.email_mail import logged_notice_entry_id
+from getrichbot.row_edits import category_for_linked_message
+from getrichbot.row_edits import record_for_message_id
+from getrichbot.sheets import expense_message_column
 from getrichbot.shop_category import categorize_email_shop
 from getrichbot.gmail_watch import BACKLOG_KEY
 from getrichbot.gmail_watch import HISTORY_KEY
@@ -80,7 +85,8 @@ class Context:
     def channels_for(self, owner, payment_method):
         return self.config.channel_options_for(owner, payment_method)
 
-    def category_for(self, shop, logged_by):
+    def category_for(self, shop, logged_by, body=""):
+        del body
         return category_from_keywords(shop, logged_by, "Me", "My wife")
 
 
@@ -180,7 +186,7 @@ def decide(subject: str, body: str, config, categories: tuple[str, ...] = ("Food
         methods=config.payment_methods,
         categories=categories,
         channels_for=config.channel_options_for,
-        category_for=lambda shop, logged_by: category_from_keywords(shop, logged_by, "Me", "My wife"),
+        category_for=lambda shop, logged_by, body="": category_from_keywords(shop, logged_by, "Me", "My wife"),
         today=TODAY,
     )
 
@@ -264,14 +270,15 @@ class EmailMailTests(unittest.TestCase):
             "A transaction of SGD 5.99 was made with your UOB Card ending 1234 at fp*Food Panda.",
             config_with(),
         )
-        self.assertEqual(shop.text, "I got a UOB transaction alert, but the shop was missing. I have not logged it.")
+        self.assertEqual(shop.action, "log")
+        self.assertEqual(shop.amount, Decimal("5.99"))
+        self.assertEqual(shop.last4, "1234")
+        self.assertEqual(shop.expense_date, date(2026, 10, 5))
+        self.assertEqual(shop.shop, "")
         self.assertEqual(amount.text, "I got a UOB transaction alert, but the amount was missing. I have not logged it.")
         self.assertEqual(card.text, "I got a UOB transaction alert, but the card was missing. I have not logged it.")
-        self.assertEqual(
-            date_and_shop.text,
-            "I got a UOB transaction alert, but the shop and the date were missing. I have not logged it.",
-        )
-        for decision in (shop, amount, card, date_and_shop):
+        self.assertEqual(date_and_shop.text, "I got a UOB transaction alert, but the date was missing. I have not logged it.")
+        for decision in (amount, card, date_and_shop):
             self.assertEqual(decision.action, "ask")
             self.assertNotIn("one amount, one shop, one date, and one card", decision.text)
 
@@ -330,9 +337,12 @@ class EmailMailTests(unittest.TestCase):
         self.assertEqual(items[0].total_spend, Decimal("18.50"))
 
     def test_statement_is_ignored(self):
-        decision = decide(STATEMENT_SUBJECT, "Your statement total is SGD 900.00.", config_with())
-        self.assertEqual(decision.action, "ignore")
-        self.assertEqual(decision.text, "")
+        with_amount = decide(STATEMENT_SUBJECT, "Your statement total is SGD 900.00.", config_with())
+        without_amount = decide(STATEMENT_SUBJECT, "Your statement is ready for viewing.", config_with())
+        self.assertEqual(with_amount.action, "ignore")
+        self.assertEqual(with_amount.text, "")
+        self.assertEqual(without_amount.action, "ignore")
+        self.assertEqual(without_amount.text, "")
 
     def test_paynow_dividend_and_interest_are_income_misc(self):
         paynow = decide(PAYNOW_SUBJECT, PAYNOW_BODY, config_with())
@@ -365,14 +375,14 @@ class EmailMailTests(unittest.TestCase):
         self.assertEqual(salary.action, "ask")
         self.assertNotEqual(salary.category, INCOME_MISC)
 
-    def test_unknown_shop_with_both_channels_asks_and_does_not_write(self):
+    def test_unknown_shop_with_both_channels_is_logged_with_a_blank_channel(self):
         body = (
             "A transaction of SGD 22.00 was made with your UOB Card ending 1234 "
             "on 05/10/2026 at Sample Market.\n"
         )
         decision = decide(PURCHASE_SUBJECT, body, config_with())
-        self.assertEqual(decision.action, "ask")
-        self.assertEqual(decision.kind, "channel")
+        self.assertEqual(decision.action, "log")
+        self.assertEqual(decision.payment_channel, "")
         self.assertEqual(decision.category, "Groceries")
 
     def test_restaurant_uses_paywave_and_one_channel_is_automatic(self):
@@ -404,6 +414,115 @@ class EmailMailTests(unittest.TestCase):
         body = "A transaction of SGD 18.50 was made with your UOB Card on 05/10/2026 at fp*Food Panda.\n"
         decision = decide(PURCHASE_SUBJECT, body, config_with())
         self.assertEqual(decision.action, "ask")
+
+    def test_any_subject_with_amount_date_and_card_is_logged(self):
+        body = (
+            "Paid SGD 16.31 with your card ending 1234 "
+            "on 08/10/2026 at Zzzqq Plug."
+        )
+        decision = decide("A note from the bank", body, config_with())
+        self.assertEqual(decision.action, "log")
+        self.assertEqual(decision.shop, "Zzzqq Plug")
+        self.assertEqual(decision.amount, Decimal("16.31"))
+        self.assertEqual(decision.last4, "1234")
+        self.assertEqual(decision.expense_date, date(2026, 10, 8))
+        self.assertEqual(decision.category, "")
+        self.assertEqual(decision.payment_channel, "")
+        row = build_expense_row(decision, chat_id=-100, now=datetime(2026, 10, 8, 11, 0, tzinfo=SINGAPORE))
+        text = email_logged_text(row)
+        lines = text.splitlines()
+        self.assertEqual(len(lines), 2)
+        self.assertTrue(lines[0].startswith("Logged $16.31 at Zzzqq Plug - 8 October 2026 via UOB Sample Visa (All) ["))
+        self.assertEqual(lines[1], "Category is missing. Reply to this message with the category.")
+        self.assertNotIn("Income - A", text)
+        self.assertNotIn("Income - fx", text)
+
+    def test_body_category_is_used_and_the_shop_is_not_searched(self):
+        calls = []
+        saved = []
+
+        def category_for(shop, logged_by, body=""):
+            del logged_by, body
+            calls.append(shop)
+            return None
+
+        decision = decide_mail(
+            "Please file this",
+            "Income Tax of SGD 16.31 on card ending 1234 on 08/10/2026 at Sample Office.",
+            ("person-a@example.com",),
+            forwarders={"person-a@example.com": "Me"},
+            methods=config_with(("All",)).payment_methods,
+            categories=("Food", "Income Tax", INCOME_MISC, "Income - A", "Income - fx"),
+            channels_for=config_with(("All",)).channel_options_for,
+            category_for=category_for,
+            today=TODAY,
+            remember_category=lambda keyword, category: saved.append((keyword, category)),
+        )
+        self.assertEqual(decision.action, "log")
+        self.assertEqual(decision.category, "Income Tax")
+        self.assertEqual(decision.payment_method, "UOB Sample Visa")
+        self.assertEqual(calls, [])
+        self.assertEqual(saved, [("sample office", "Income Tax")])
+        self.assertNotEqual(decision.category, "Income - A")
+        self.assertNotEqual(decision.category, "Income - fx")
+
+    def test_clock_time_is_optional_between_the_date_and_the_shop(self):
+        body = (
+            "A transaction of SGD 16.31 was made with your card ending 1234 "
+            "on 08/10/2026 14:22 at Sample Cafe."
+        )
+        decision = decide("Receipt", body, config_with(("PayWave",)))
+        self.assertEqual(decision.action, "log")
+        self.assertEqual(decision.shop, "Sample Cafe")
+        self.assertEqual(decision.expense_date, date(2026, 10, 8))
+        self.assertEqual(decision.amount, Decimal("16.31"))
+
+    def test_category_reply_uses_the_replied_message_or_the_previous_one(self):
+        older = ExpenseRecord(
+            row_number=2,
+            entry_id="aaa111",
+            timestamp="09:00:00",
+            expense_date="2026-10-08",
+            month="2026-10",
+            logged_by="Me",
+            raw_input="email: Sample Cafe",
+            amount=Decimal("16.31"),
+            category="",
+            description="Sample Cafe",
+            input_type="Email",
+            status="Confirmed",
+            payment_method="Sample Card",
+            telegram_message_id="41",
+        )
+        newer = ExpenseRecord(
+            row_number=3,
+            entry_id="bbb222",
+            timestamp="09:05:00",
+            expense_date="2026-10-08",
+            month="2026-10",
+            logged_by="Me",
+            raw_input="email: Sample Depot",
+            amount=Decimal("9.00"),
+            category="",
+            description="Sample Depot",
+            input_type="Email",
+            status="Confirmed",
+            payment_method="Sample Card",
+            telegram_message_id="42",
+        )
+        bare = category_for_linked_message("Food", ("Food", "Groceries"), reply_message_id=None, last_bot_message_id="42")
+        replied = category_for_linked_message("Groceries", ("Food", "Groceries"), reply_message_id="41", last_bot_message_id="42")
+        self.assertEqual(bare, ("Food", "42"))
+        self.assertEqual(replied, ("Groceries", "41"))
+        self.assertEqual(record_for_message_id([older, newer], "42").entry_id, "bbb222")
+        self.assertEqual(record_for_message_id([older, newer], "41").entry_id, "aaa111")
+        self.assertIsNone(category_for_linked_message("dinner 20", ("Food",), reply_message_id=None, last_bot_message_id="42"))
+        notice = "Logged $16.31 at Sample Cafe - 8 October 2026 via Sample Card (All) [e9e56c]\nCategory is missing. Reply to this message with the category."
+        self.assertEqual(logged_notice_entry_id(notice), "e9e56c")
+        self.assertIsNone(logged_notice_entry_id("Possible duplicate found:\nExisting [e9e56c]"))
+        self.assertEqual(expense_message_column(True, True), "Q")
+        self.assertEqual(expense_message_column(True, False), "P")
+        self.assertEqual(expense_message_column(False, False), "O")
 
 
 class EmailWatchTests(unittest.TestCase):
@@ -510,7 +629,8 @@ class EmailWatchTests(unittest.TestCase):
         saved = []
 
         class LookupContext(Context):
-            def category_for(self, shop, logged_by):
+            def category_for(self, shop, logged_by, body=""):
+                del body
                 return categorize_email_shop(
                     shop,
                     logged_by,
@@ -519,6 +639,7 @@ class EmailWatchTests(unittest.TestCase):
                     self._categories,
                     self.lookup,
                     self.save,
+                    self.ask,
                 )
 
         context = LookupContext(config_with(channels=("All",)), ("Food", "Groceries", INCOME_MISC))
@@ -530,8 +651,18 @@ class EmailWatchTests(unittest.TestCase):
         def save(keyword, category):
             saved.append((keyword, category))
 
+        def ask(shop, description, choices):
+            self.assertEqual(shop, "Sample Depot")
+            self.assertNotIn("18.50", description)
+            self.assertNotIn("1234", description)
+            self.assertIn("Groceries", choices)
+            if "supermarket" in description:
+                return "Groceries"
+            return ""
+
         context.lookup = lookup
         context.save = save
+        context.ask = ask
         mailbox = FakeMailbox()
         state = MemoryState()
         writer = FakeWriter()

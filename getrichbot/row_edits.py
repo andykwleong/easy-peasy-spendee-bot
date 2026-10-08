@@ -129,6 +129,38 @@ def categories_for(kind: str) -> tuple[str, ...]:
     return ()
 
 
+def category_for_linked_message(
+    text: str,
+    categories: tuple[str, ...],
+    *,
+    reply_message_id: str | int | None,
+    last_bot_message_id: str | int | None,
+) -> tuple[str, str] | None:
+    """A bare category attaches to the replied message, or the previous bot message."""
+    category = match_category(text, categories)
+    if category is None:
+        return None
+    if reply_message_id not in (None, ""):
+        return category, str(reply_message_id)
+    if last_bot_message_id not in (None, ""):
+        return category, str(last_bot_message_id)
+    return None
+
+
+def record_for_message_id(records: list[ExpenseRecord], message_id: str | int | None) -> ExpenseRecord | None:
+    if message_id in (None, ""):
+        return None
+    wanted = str(message_id)
+    found = [
+        record
+        for record in records
+        if str(getattr(record, "telegram_message_id", "") or "") == wanted
+    ]
+    if not found:
+        return None
+    return found[-1]
+
+
 def match_category(raw: str, choices: tuple[str, ...]) -> str | None:
     lowered = " ".join(raw.strip().split()).casefold()
     if not lowered:

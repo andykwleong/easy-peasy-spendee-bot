@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 import uuid
 from dataclasses import dataclass
@@ -13,6 +14,10 @@ from zoneinfo import ZoneInfo
 from getrichbot.cards import PaymentMethod
 from getrichbot.models import ExpenseRow
 from getrichbot.parser import categorize_description
+
+LOGGER = logging.getLogger(__name__)
+LAST_BOT_MESSAGE_KEY = "last_bot_message_id"
+_ENTRY_RE = re.compile(r"\[([A-Za-z0-9]{6})\]")
 
 SINGAPORE_TZ = ZoneInfo("Asia/Singapore")
 INCOME_MISC = "Income - misc"
@@ -131,26 +136,32 @@ def decide_mail(
     channels_for,
     category_for,
     today: date,
+    remember_category=None,
 ) -> EmailDecision:
     kind = classify_kind(subject, body)
     if kind == "statement":
         return EmailDecision(action="ignore", kind=kind)
     if kind in {"refund", "paynow", "dividend", "interest"}:
         return _income_decision(kind, body, addresses, forwarders, categories, today)
+    purchase = _purchase_decision(
+        body,
+        addresses,
+        forwarders=forwarders,
+        methods=methods,
+        categories=categories,
+        channels_for=channels_for,
+        category_for=category_for,
+        remember_category=remember_category,
+    )
+    if purchase.action == "log":
+        return purchase
+    if kind == "purchase":
+        return purchase
     if kind == "salary":
         return EmailDecision(
             action="ask",
             kind=kind,
             text="This looks like salary. I have not logged it. Type income in the chat if you want it recorded.",
-        )
-    if kind == "purchase":
-        return _purchase_decision(
-            body,
-            addresses,
-            forwarders=forwarders,
-            methods=methods,
-            channels_for=channels_for,
-            category_for=category_for,
         )
     return EmailDecision(
         action="ask",
@@ -215,8 +226,11 @@ def build_expense_row(decision: EmailDecision, *, chat_id: int | str, now: datet
         time(hour=now.hour, minute=now.minute, second=now.second),
         SINGAPORE_TZ,
     )
-    income = decision.category == INCOME_MISC
-    description = decision.description or decision.shop or decision.kind
+    income = decision.category.casefold().startswith("income -")
+    if decision.kind == "purchase":
+        description = decision.shop or decision.description or ""
+    else:
+        description = decision.description or decision.shop or decision.kind
     shop_label = decision.shop or description
     return ExpenseRow(
         entry_id=_entry_id(),
@@ -243,10 +257,26 @@ def email_logged_text(row: ExpenseRow) -> str:
         detail = f" - {row.description}" if row.description else ""
         return f"Logged income ${row.amount:.2f} to {row.category} - {when}{detail} [{row.entry_id}]"
     channel = row.payment_channel or "All"
+    place = f" at {row.description}" if row.description else ""
+    if not (row.category or "").strip():
+        return (
+            f"Logged ${row.amount:.2f}{place} - {when} via {row.payment_method} ({channel}) [{row.entry_id}]\n"
+            "Category is missing. Reply to this message with the category."
+        )
     return (
-        f"Logged ${row.amount:.2f} at {row.description} to {row.category} - "
+        f"Logged ${row.amount:.2f}{place} to {row.category} - "
         f"{when} via {row.payment_method} ({channel}) [{row.entry_id}]"
     )
+
+
+def logged_notice_entry_id(text: str) -> str | None:
+    first = (text or "").splitlines()[0]
+    if not first.startswith("Logged "):
+        return None
+    match = _ENTRY_RE.search(first)
+    if match is None:
+        return None
+    return match.group(1)
 
 
 def addresses_in_text(value: str) -> tuple[str, ...]:
@@ -264,12 +294,14 @@ def _purchase_decision(
     *,
     forwarders: dict[str, str],
     methods: tuple[PaymentMethod, ...],
+    categories: tuple[str, ...],
     channels_for,
     category_for,
+    remember_category=None,
 ) -> EmailDecision:
     clause = _first_purchase_clause(body)
     if clause is None:
-        shop = _labeled_shop(body)
+        shop = _labeled_shop(body) or ""
         expense_date = _mail_date(body)
         sentence = None
     else:
@@ -278,7 +310,7 @@ def _purchase_decision(
         sentence = clause.sentence
     amount = _chosen_amount(body, sentence)
     last4 = _chosen_last4(body, sentence)
-    missing = _missing_purchase_pieces(amount, shop, expense_date, last4)
+    missing = _missing_purchase_pieces(amount, expense_date, last4)
     if missing:
         return EmailDecision(
             action="ask",
@@ -295,50 +327,40 @@ def _purchase_decision(
             text="I got a UOB purchase but could not match one card from the Last 4 column. I have not logged it.",
         )
     card = matches[0]
-    logged_by = _logged_by(addresses, forwarders)
-    if logged_by is None:
+    logged_by = _logged_by(addresses, forwarders) or ""
+    from getrichbot.shop_category import category_named_in_text
+
+    named = category_named_in_text(body, categories)
+    if named:
+        _remember_shop(remember_category, shop, named)
+        category = named
+    else:
+        try:
+            try:
+                category = category_for(shop, logged_by, body) or ""
+            except TypeError:
+                category = category_for(shop, logged_by) or ""
+        except Exception:
+            LOGGER.exception("Could not choose a category. The purchase is still logged with a blank category.")
+            category = ""
+    if category.casefold().startswith("income -"):
         return EmailDecision(
-            action="ask",
+            action="log",
             kind="purchase",
-            shop=shop,
-            amount=amount,
-            text="I got a UOB purchase but could not tell who forwarded it. I have not logged it.",
-        )
-    category = category_for(shop, logged_by)
-    if not category:
-        return EmailDecision(
-            action="ask",
-            kind="purchase",
-            shop=shop,
-            amount=amount,
-            text=f"I could not match a category for {shop}. I have not logged it.",
-        )
-    try:
-        channels = tuple(channels_for(card.owner, card.name))
-    except Exception:
-        channels = ()
-    channel = choose_channel(shop, channels)
-    if channel is None:
-        choices = " or ".join(f"email channel {channel}" for channel in channels)
-        return EmailDecision(
-            action="ask",
-            kind="channel",
-            text=(
-                f"I have not logged ${amount:.2f} at {shop}. "
-                f"The card has {' and '.join(channels)}, and the shop does not say which. "
-                f"Reply {choices}."
-            ),
             amount=amount,
             shop=shop,
             last4=last4,
             expense_date=expense_date,
             category=category,
             logged_by=logged_by,
-            payment_method=card.name,
-            payment_owner=card.owner,
-            channels=channels,
             description=shop,
         )
+    try:
+        channels = tuple(channels_for(card.owner, card.name))
+    except Exception:
+        channels = ()
+    chosen = choose_channel(shop, channels)
+    channel = "" if chosen is None else chosen
     return EmailDecision(
         action="log",
         kind="purchase",
@@ -460,17 +482,29 @@ def _chosen_value(whole, inside):
     return None
 
 
-def _missing_purchase_pieces(amount, shop, expense_date, last4) -> list[str]:
+def _missing_purchase_pieces(amount, expense_date, last4) -> list[str]:
     missing = []
     if amount is None:
         missing.append("amount")
-    if not shop:
-        missing.append("shop")
     if expense_date is None:
         missing.append("date")
     if not last4:
         missing.append("card")
     return missing
+
+
+def _remember_shop(remember_category, shop: str, category: str) -> None:
+    if remember_category is None or not shop or not category:
+        return
+    from getrichbot.shop_category import shop_keyword
+
+    keyword = shop_keyword(shop)
+    if not keyword:
+        return
+    try:
+        remember_category(keyword, category)
+    except Exception:
+        LOGGER.exception("Could not save the shop keyword. The purchase is still logged.")
 
 
 def _missing_purchase_text(missing: list[str]) -> str:

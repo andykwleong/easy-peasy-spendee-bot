@@ -252,7 +252,7 @@ class SheetsClient:
     def get_expense_records(self, sheet_name: str) -> list[ExpenseRecord]:
         result = self._service().spreadsheets().values().get(
             spreadsheetId=self.sheet_id,
-            range=f"{sheet_name}!A2:P",
+            range=f"{sheet_name}!A2:Q",
         ).execute()
         rows = result.get("values", [])
         records: list[ExpenseRecord] = []
@@ -283,6 +283,7 @@ class SheetsClient:
                     payment_method=_record_payment_method(row),
                     payment_owner=_record_payment_owner(row),
                     payment_channel=_record_payment_channel(row),
+                    telegram_message_id=_record_message_id(row),
                 )
             )
         return records
@@ -406,6 +407,7 @@ class SheetsClient:
         payment_method: str | None = None,
         payment_owner: str | None = None,
         payment_channel: str | None = None,
+        telegram_message_id: str | None = None,
     ) -> None:
         updates = []
         if expense_date is not None:
@@ -435,6 +437,14 @@ class SheetsClient:
             else:
                 transaction_column = "L" if self.has_payment_owner_column(sheet_name) else "K"
             updates.append({"range": f"{sheet_name}!{transaction_column}{row_number}", "values": [[transaction_type]]})
+        if telegram_message_id is not None:
+            message_column = expense_message_column(
+                self.has_payment_owner_column(sheet_name),
+                self.has_payment_channel_column(sheet_name),
+            )
+            updates.append(
+                {"range": f"{sheet_name}!{message_column}{row_number}", "values": [[telegram_message_id]]}
+            )
         self._batch_update_cells(updates)
 
     def update_card_usage_record(
@@ -566,6 +576,14 @@ class SheetsClient:
         return None, []
 
 
+def expense_message_column(has_owner: bool, has_channel: bool) -> str:
+    if has_channel:
+        return "Q"
+    if has_owner:
+        return "P"
+    return "O"
+
+
 def keyword_upsert_actions(
     rows: list[list[str]],
     keyword: str,
@@ -639,6 +657,14 @@ def _record_payment_owner(row: list[str]) -> str:
         return _cell(row, 9) or _cell(row, 4)
     if _cell(row, 12).casefold() in statuses and _cell(row, 9):
         return _cell(row, 4)
+    return ""
+
+
+def _record_message_id(row: list[str]) -> str:
+    statuses = {"confirmed", "pending", "cancelled", "canceled"}
+    for index in (14, 13, 12, 11):
+        if _cell(row, index).casefold() in statuses:
+            return _cell(row, index + 2)
     return ""
 
 

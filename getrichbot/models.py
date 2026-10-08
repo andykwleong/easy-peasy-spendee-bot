@@ -88,6 +88,7 @@ class ExpenseRecord:
     payment_method: str = ""
     payment_owner: str = ""
     payment_channel: str = ""
+    telegram_message_id: str = ""
 
     def compact(self) -> str:
         return (

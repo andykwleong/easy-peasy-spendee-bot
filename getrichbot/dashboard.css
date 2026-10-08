@@ -131,7 +131,7 @@ h2 { font-size: 1.7rem; letter-spacing: -0.03em; }
 .tx-top { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
 .tx-line {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 15.5rem 11.5rem max-content;
+  grid-template-columns: minmax(0, 1fr) 15.5rem 11.5rem 16rem;
   column-gap: 16px;
   align-items: center;
 }
@@ -141,7 +141,8 @@ h2 { font-size: 1.7rem; letter-spacing: -0.03em; }
 .tx-date, .tx-card { margin-top: 2px; }
 .tx-category { min-width: 0; }
 .tx-logged { overflow-wrap: anywhere; }
-.tx-money { text-align: right; }
+.tx-money { text-align: right; min-width: 0; }
+.tx-card { overflow-wrap: anywhere; }
 .amount { font-variant-numeric: tabular-nums; font-weight: 750; font-size: 1.15rem; }
 .tag {
   display: inline-flex;

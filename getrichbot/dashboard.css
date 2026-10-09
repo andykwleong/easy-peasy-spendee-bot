@@ -128,20 +128,57 @@ h2 { font-size: 1.7rem; letter-spacing: -0.03em; }
   margin-bottom: 10px;
   box-shadow: var(--shadow);
 }
-.tx-top, .tx-meta { display: flex; justify-content: space-between; gap: 12px; }
-.tx-top { align-items: baseline; }
-.merchant { font-weight: 700; font-size: 1.05rem; }
+.tx-top { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
+.tx-line {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 15.5rem 11.5rem 16rem;
+  column-gap: 16px;
+  align-items: center;
+}
+.tx-shop { min-width: 0; }
+.merchant { font-weight: 700; font-size: 1.05rem; overflow-wrap: anywhere; }
+.tx-date, .tx-logged, .tx-card { color: var(--muted); font-size: 0.92rem; }
+.tx-date, .tx-card { margin-top: 2px; }
+.tx-category { min-width: 0; }
+.tx-logged { overflow-wrap: anywhere; }
+.tx-money { text-align: right; min-width: 0; }
+.tx-card { overflow-wrap: anywhere; }
 .amount { font-variant-numeric: tabular-nums; font-weight: 750; font-size: 1.15rem; }
-.tx-meta { color: var(--muted); font-size: 0.92rem; margin-top: 4px; flex-wrap: wrap; }
 .tag {
   display: inline-flex;
   align-items: center;
+  max-width: 100%;
   background: var(--paper);
   border-radius: 999px;
   padding: 3px 8px;
   color: var(--ink);
+  overflow-wrap: anywhere;
 }
-.tx-actions { margin-top: 10px; display: flex; justify-content: flex-end; align-items: center; gap: 10px; }
+.tx-actions { margin-top: 10px; display: flex; justify-content: flex-end; align-items: center; gap: 10px; flex-wrap: wrap; }
+.danger-text { color: var(--red); border-color: #e3c8c4; }
+.modal-back {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 20px 16px;
+  background: rgba(28, 36, 48, 0.45);
+}
+.modal {
+  width: min(420px, 100%);
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  box-shadow: var(--shadow);
+  padding: 22px 20px 18px;
+}
+.modal h3 { font-size: 1.25rem; letter-spacing: -0.02em; margin-bottom: 12px; }
+.modal-shop { font-weight: 700; font-size: 1.05rem; overflow-wrap: anywhere; }
+.modal-amount { font-variant-numeric: tabular-nums; font-weight: 750; font-size: 1.2rem; margin-top: 4px; }
+.modal-date { color: var(--muted); margin-top: 2px; }
+.modal-actions { display: flex; justify-content: center; gap: 8px; margin-top: 18px; flex-wrap: wrap; }
+.danger { background: var(--red); color: white; border-color: var(--red); }
 .text-btn:disabled { cursor: not-allowed; opacity: 0.55; }
 .later-note { color: var(--muted); font-size: 0.82rem; }
 .edit-box {
@@ -239,5 +276,14 @@ th { color: var(--muted); font-size: 0.82rem; font-weight: 700; }
     border-top: 1px solid var(--line);
     padding: 8px 0 10px;
   }
-  .tx-top, .tx-meta { align-items: flex-start; }
+  .tx-top { align-items: flex-start; }
+  .tx-line {
+    grid-template-columns: minmax(0, 1fr) auto;
+    row-gap: 6px;
+    align-items: start;
+  }
+  .tx-shop { grid-column: 1; grid-row: 1; }
+  .tx-money { grid-column: 2; grid-row: 1; }
+  .tx-category { grid-column: 1 / -1; grid-row: 2; }
+  .tx-logged { grid-column: 1 / -1; grid-row: 3; }
 }

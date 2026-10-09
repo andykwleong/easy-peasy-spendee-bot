@@ -14,6 +14,9 @@ const state = {
   cards: "mine",
   editingId: "",
   savedNote: "",
+  pendingDelete: null,
+  deleteError: "",
+  deleting: false,
   payload: null,
   message: "",
   loggedOut: false,
@@ -93,6 +96,9 @@ async function loginWithWidget(user) {
   state.scope = "mine";
   state.cards = "mine";
   state.editingId = "";
+  state.pendingDelete = null;
+  state.deleteError = "";
+  state.deleting = false;
   state.view = "recent";
   await loadDashboard();
 }
@@ -101,6 +107,9 @@ async function logout() {
   await fetch("/api/session/logout", { method: "POST", credentials: "same-origin" });
   state.loggedOut = true;
   state.payload = null;
+  state.pendingDelete = null;
+  state.deleteError = "";
+  state.deleting = false;
   state.view = "recent";
   state.message = "Logged out. This browser has forgotten you.";
   renderLogin();
@@ -207,6 +216,7 @@ function render() {
   else wrap.append(renderLater());
   main.append(wrap);
   shell.append(main);
+  if (state.pendingDelete) shell.append(renderDeletePopup());
   app.append(shell);
 }
 
@@ -246,10 +256,8 @@ function renderTop() {
 
 function renderRecent() {
   const section = el("section");
-  const head = pageHead(
-    "Recent transactions",
-    "Switch between your own rows and both of you. This follows who logged the row, not whose card paid."
-  );
+  const head = el("div", "page-head");
+  head.append(el("h2", "", "Recent transactions"));
   const filters = el("div", "filters");
   [
     ["mine", state.payload.viewer_label + " only"],
@@ -267,7 +275,6 @@ function renderRecent() {
   });
   head.append(filters);
   section.append(head);
-  section.append(el("p", "sub", "Fix tagging writes to the sheet when you pick a category, card, or channel, or when you finish the amount. It does not ask again, and it does not save each keystroke. Logged by stays the person who logged the row. Payment owner follows the card."));
   if (state.payload.recent_truncated) {
     section.append(el("p", "sub", "Showing the latest " + state.payload.recent_limit + " confirmed rows."));
   }
@@ -278,17 +285,21 @@ function renderRecent() {
 
 function renderTransaction(row) {
   const article = el("article", "tx");
-  const top = el("div", "tx-top");
-  top.append(el("div", "merchant", row.description || "No description"));
-  top.append(el("div", "amount", money(row.amount)));
-  const meta = el("div", "tx-meta");
-  meta.append(el("span", "", prettyDate(row.date)));
-  meta.append(el("span", "tag", row.kind === "card_only" ? "Card only · not an expense" : (row.category || row.kind)));
-  meta.append(el("span", "", "Logged by " + row.logged_by));
-  if (row.kind === "income") meta.append(el("span", "", "No card · income is household"));
-  else meta.append(el("span", "", cardLine(row)));
-  article.append(top, meta);
+  const line = el("div", "tx-line");
+  const shop = el("div", "tx-shop");
+  shop.append(el("div", "merchant", row.description || "No description"));
+  shop.append(el("div", "tx-date", prettyDate(row.date)));
+  const category = el("div", "tx-category");
+  category.append(el("span", "tag", row.kind === "card_only" ? "Card only · not an expense" : (row.category || row.kind)));
+  const logged = el("div", "tx-logged", "Logged by " + row.logged_by);
+  const moneySide = el("div", "tx-money");
+  moneySide.append(el("div", "amount", money(row.amount)));
+  if (row.kind === "income") moneySide.append(el("div", "tx-card", "No card · income is household"));
+  else moneySide.append(el("div", "tx-card", cardLine(row)));
+  line.append(shop, category, logged, moneySide);
+  article.append(line);
   const actions = el("div", "tx-actions");
+  actions.append(deleteButton(row));
   const open = state.editingId === row.id;
   const fix = el("button", "text-btn", open ? "Close" : "Fix tagging");
   fix.type = "button";
@@ -302,6 +313,113 @@ function renderTransaction(row) {
   article.append(actions);
   if (open) article.append(renderEditor(row));
   return article;
+}
+
+function deleteButton(row) {
+  const button = el("button", "text-btn danger-text", "Delete");
+  button.type = "button";
+  button.setAttribute("aria-label", "Delete " + (row.description || "this row"));
+  button.addEventListener("click", () => askDelete(row));
+  return button;
+}
+
+function askDelete(row) {
+  state.pendingDelete = {
+    id: row.id,
+    source: row.source,
+    shop: row.description || "No description",
+    amount: row.amount,
+    date: row.date
+  };
+  state.deleteError = "";
+  state.deleting = false;
+  render();
+}
+
+function cancelDelete() {
+  if (state.deleting) return;
+  state.pendingDelete = null;
+  state.deleteError = "";
+  render();
+}
+
+function renderDeletePopup() {
+  const pending = state.pendingDelete;
+  const back = el("div", "modal-back");
+  const dialog = el("div", "modal");
+  dialog.setAttribute("role", "dialog");
+  dialog.setAttribute("aria-modal", "true");
+  dialog.setAttribute("aria-labelledby", "delete-title");
+  const title = el("h3", "", "Delete this row?");
+  title.id = "delete-title";
+  dialog.append(title);
+  dialog.append(el("div", "modal-shop", pending.shop));
+  dialog.append(el("div", "modal-amount", money(pending.amount)));
+  dialog.append(el("div", "modal-date", prettyDate(pending.date)));
+  if (state.deleteError) dialog.append(el("p", "banner", state.deleteError));
+  const actions = el("div", "modal-actions");
+  const cancel = el("button", "text-btn", "Cancel");
+  cancel.type = "button";
+  cancel.disabled = state.deleting;
+  cancel.addEventListener("click", cancelDelete);
+  const confirm = el("button", "primary danger", "Delete");
+  confirm.type = "button";
+  confirm.disabled = state.deleting;
+  confirm.addEventListener("click", confirmDelete);
+  actions.append(cancel, confirm);
+  dialog.append(actions);
+  back.addEventListener("click", (event) => {
+    if (event.target === back) cancelDelete();
+  });
+  dialog.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") cancelDelete();
+  });
+  back.append(dialog);
+  return back;
+}
+
+async function confirmDelete() {
+  const pending = state.pendingDelete;
+  if (!pending || state.deleting) return;
+  state.deleting = true;
+  state.deleteError = "";
+  render();
+  const headers = { "Content-Type": "application/json" };
+  if (telegramInitData() && !state.loggedOut) headers["X-Telegram-Init-Data"] = telegramInitData();
+  try {
+    const response = await fetch("/api/dashboard/delete", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: headers,
+      body: JSON.stringify({
+        id: pending.id,
+        source: pending.source,
+        confirm: true,
+        scope: state.scope,
+        cards: state.cards
+      })
+    });
+    const body = await response.json().catch(() => ({ ok: false }));
+    if (!response.ok || !body.ok) {
+      state.deleting = false;
+      state.deleteError = body.message || "I could not delete that row just now. It is still there.";
+      render();
+      return;
+    }
+    state.payload = body;
+    state.pendingDelete = null;
+    state.deleting = false;
+    state.deleteError = "";
+    if (state.editingId === pending.id) {
+      state.editingId = "";
+      state.savedNote = "";
+    }
+    render();
+  } catch (error) {
+    state.deleting = false;
+    state.deleteError = "I could not delete that row just now. It is still there.";
+    render();
+  }
 }
 
 function renderEditor(row) {
@@ -597,10 +715,13 @@ function renderRaw() {
   section.append(rawTable(
     "Raw Expenses",
     ["Entry ID", "Date", "Logged by", "Amount", "Category", "Description", "Payment owner", "Payment method", "Channel", "Type", "Status"],
-    state.payload.raw_expenses.map((row) => [
-      row.id, prettyDate(row.date), row.logged_by, money(row.amount), row.category, row.description,
-      row.payment_owner || "—", row.payment_method || "—", row.payment_channel || "—", row.type, row.status
-    ])
+    state.payload.raw_expenses.map((row) => ({
+      cells: [
+        row.id, prettyDate(row.date), row.logged_by, money(row.amount), row.category, row.description,
+        row.payment_owner || "—", row.payment_method || "—", row.payment_channel || "—", row.type, row.status
+      ],
+      deleteTarget: rawDeleteTarget(row, "expense")
+    }))
   ));
   if (state.payload.card_usage_truncated) {
     section.append(el("p", "sub", "Showing the latest " + state.payload.card_usage_limit + " card-only rows."));
@@ -608,10 +729,13 @@ function renderRaw() {
   section.append(rawTable(
     "Card Usage",
     ["Entry ID", "Date", "Logged by", "Amount", "Payment owner", "Payment method", "Channel", "Description", "Type", "Status"],
-    state.payload.card_usage.map((row) => [
-      row.id, prettyDate(row.date), row.logged_by, money(row.amount), row.payment_owner || "—",
-      row.payment_method || "—", row.payment_channel || "—", row.description, row.type, row.status
-    ])
+    state.payload.card_usage.map((row) => ({
+      cells: [
+        row.id, prettyDate(row.date), row.logged_by, money(row.amount), row.payment_owner || "—",
+        row.payment_method || "—", row.payment_channel || "—", row.description, row.type, row.status
+      ],
+      deleteTarget: rawDeleteTarget(row, "card_usage")
+    }))
   ));
   section.append(el("p", "sub", "Card Usage counts toward the card, and not toward household expenses or the monthly net figure."));
   return section;
@@ -661,6 +785,16 @@ function mark() {
   return node;
 }
 
+function rawDeleteTarget(row, source) {
+  return {
+    id: row.id,
+    source: source,
+    description: row.description || "No description",
+    amount: row.amount,
+    date: row.date
+  };
+}
+
 function rawTable(title, headers, records) {
   const panel = el("div", "panel scroll");
   panel.append(el("h3", "", title));
@@ -671,13 +805,17 @@ function rawTable(title, headers, records) {
   const table = el("table");
   const head = el("tr");
   headers.forEach((header, index) => head.append(el("th", index === 3 ? "num" : "", header)));
+  head.append(el("th", "", ""));
   const thead = el("thead");
   thead.append(head);
   table.append(thead);
   const body = el("tbody");
   records.forEach((record) => {
     const row = el("tr");
-    record.forEach((value, index) => row.append(el("td", index === 3 ? "num" : "", value)));
+    record.cells.forEach((value, index) => row.append(el("td", index === 3 ? "num" : "", value)));
+    const action = el("td");
+    if (record.deleteTarget) action.append(deleteButton(record.deleteTarget));
+    row.append(action);
     body.append(row);
   });
   table.append(body);

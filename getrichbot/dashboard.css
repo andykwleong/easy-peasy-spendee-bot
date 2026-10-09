@@ -245,6 +245,53 @@ th { color: var(--muted); font-size: 0.82rem; font-weight: 700; }
 .total td { font-weight: 750; }
 .net td { background: var(--green-soft); font-weight: 750; }
 .scroll { overflow-x: auto; }
+.app-fill {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.app-fill main {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding-bottom: 16px;
+}
+.app-fill .wrap {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.raw-page {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.raw-frame {
+  flex: 1;
+  min-height: 0;
+  overflow: scroll;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: var(--shadow);
+}
+.raw-frame::-webkit-scrollbar { width: 14px; height: 14px; }
+.raw-frame::-webkit-scrollbar-track { background: #efe8da; }
+.raw-frame::-webkit-scrollbar-thumb { background: #8a8175; border-radius: 8px; border: 3px solid #efe8da; }
+.raw-frame .raw-block {
+  overflow: visible;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  background: transparent;
+}
+.raw-frame table { width: max-content; min-width: 1280px; }
+.raw-frame th, .raw-frame td { white-space: nowrap; }
 .panel { margin-bottom: 14px; box-shadow: var(--shadow); }
 .panel h3 { margin-bottom: 8px; }
 .later-box {

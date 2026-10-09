@@ -206,6 +206,7 @@ function mountWidget() {
 function render() {
   app.replaceChildren();
   const shell = el("div");
+  if (state.view === "raw") shell.classList.add("app-fill");
   shell.append(renderTop());
   const main = el("main");
   const wrap = el("div", "wrap");
@@ -237,8 +238,7 @@ function renderTop() {
     ["recent", "Recent"],
     ["cards", "Cards"],
     ["month", "Month"],
-    ["raw", "Raw entries"],
-    ["later", "Agent eval"]
+    ["raw", "Raw entries"]
   ].forEach(([id, label]) => {
     const button = el("button", "nav-btn" + (id === "later" ? " later" : ""), label);
     button.type = "button";
@@ -574,10 +574,8 @@ async function saveEdit(row, field, value, owner) {
 function renderCards() {
   const section = el("section");
   const cards = state.payload.cards;
-  const head = pageHead(
-    "Card summary",
-    "Credit cards for " + cards.owner + ". Switch between the two of you. Colours match the bot. A card with no limit still shows."
-  );
+  const head = el("div", "page-head");
+  head.append(el("h2", "", "Card summary"));
   if (cards.other_label) {
     const filters = el("div", "filters");
     [
@@ -597,7 +595,6 @@ function renderCards() {
     head.append(filters);
   }
   section.append(head);
-  section.append(legend());
   if (cards.error) section.append(el("p", "banner", cards.error));
   section.append(el("p", "group-label", "Capped"));
   if (!cards.capped.length) section.append(el("p", "sub", "No capped cards."));
@@ -643,7 +640,6 @@ function renderCard(card) {
     bar.append(fill);
     block.append(title, bar);
     block.append(el("div", "", money(limit.spent) + " of " + money(limit.limit)));
-    block.append(el("div", "sub", bandText(limit.band)));
     article.append(block);
   });
   return article;
@@ -651,26 +647,24 @@ function renderCard(card) {
 
 function renderMonth() {
   const section = el("section");
-  section.append(pageHead(
-    "Monthly summary",
-    "Household income, expenses, and what is left. Income is not split between the two of you. Card-only rows are left out."
-  ));
+  const head = el("div", "page-head");
+  head.append(el("h2", "", "Monthly summary"));
+  section.append(head);
   const months = state.payload.months;
   const panel = el("div", "panel scroll");
   panel.append(el("h3", "", "From the raw rows"));
   const table = el("table");
-  const head = el("thead");
+  const tableHead = el("thead");
   const headRow = el("tr");
   headRow.append(el("th", "", ""));
   months.forEach((month) => headRow.append(el("th", "num", month.label)));
-  head.append(headRow);
-  table.append(head);
+  tableHead.append(headRow);
+  table.append(tableHead);
   const body = el("tbody");
   monthRows(months).forEach((row) => body.append(row));
   table.append(body);
   panel.append(table);
   section.append(panel);
-  section.append(el("p", "sub", "These figures are calculated from Raw Expenses when you open the page. They are not a second copy. Card Usage is not included."));
   return section;
 }
 
@@ -704,15 +698,15 @@ function totalRow(name, months, key, kind) {
 }
 
 function renderRaw() {
-  const section = el("section");
-  section.append(pageHead(
-    "Raw entries",
-    "The same rows as the record book, plus card-only rows that stay out of household spending."
-  ));
+  const section = el("section", "raw-page");
+  const head = el("div", "page-head");
+  head.append(el("h2", "", "Raw entries"));
+  section.append(head);
+  const frame = el("div", "raw-frame");
   if (state.payload.raw_expenses_truncated) {
-    section.append(el("p", "sub", "Showing the latest " + state.payload.raw_expenses_limit + " raw expense rows."));
+    frame.append(el("p", "sub", "Showing the latest " + state.payload.raw_expenses_limit + " raw expense rows."));
   }
-  section.append(rawTable(
+  frame.append(rawTable(
     "Raw Expenses",
     ["Entry ID", "Date", "Logged by", "Amount", "Category", "Description", "Payment owner", "Payment method", "Channel", "Type", "Status"],
     state.payload.raw_expenses.map((row) => ({
@@ -724,9 +718,9 @@ function renderRaw() {
     }))
   ));
   if (state.payload.card_usage_truncated) {
-    section.append(el("p", "sub", "Showing the latest " + state.payload.card_usage_limit + " card-only rows."));
+    frame.append(el("p", "sub", "Showing the latest " + state.payload.card_usage_limit + " card-only rows."));
   }
-  section.append(rawTable(
+  frame.append(rawTable(
     "Card Usage",
     ["Entry ID", "Date", "Logged by", "Amount", "Payment owner", "Payment method", "Channel", "Description", "Type", "Status"],
     state.payload.card_usage.map((row) => ({
@@ -737,7 +731,7 @@ function renderRaw() {
       deleteTarget: rawDeleteTarget(row, "card_usage")
     }))
   ));
-  section.append(el("p", "sub", "Card Usage counts toward the card, and not toward household expenses or the monthly net figure."));
+  section.append(frame);
   return section;
 }
 
@@ -796,7 +790,7 @@ function rawDeleteTarget(row, source) {
 }
 
 function rawTable(title, headers, records) {
-  const panel = el("div", "panel scroll");
+  const panel = el("div", "panel raw-block");
   panel.append(el("h3", "", title));
   if (!records.length) {
     panel.append(el("p", "empty", "No rows."));

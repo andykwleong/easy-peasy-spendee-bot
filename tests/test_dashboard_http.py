@@ -376,6 +376,30 @@ class DashboardHttpTests(unittest.TestCase):
         self.assertIn("grb_session=", cookie or "")
         self.assertIn("HttpOnly", cookie or "")
 
+    def test_tidy_dashboard_page_hides_explanations_and_keeps_colour_rules(self):
+        app, _sheets = app_for()
+
+        script_status, _, script_payload = app.handle("GET", "/dashboard.js", {}, b"", secure=False)
+        css_status, _, css_payload = app.handle("GET", "/dashboard.css", {}, b"", secure=False)
+
+        self.assertEqual(script_status, 200)
+        self.assertEqual(css_status, 200)
+        script = script_payload.decode()
+        css = css_payload.decode()
+        self.assertNotIn('["later", "Agent eval"]', script)
+        self.assertNotIn("section.append(legend())", script)
+        self.assertNotIn("bandText(limit.band)", script)
+        self.assertNotIn("The same rows as the record book", script)
+        self.assertNotIn("Household income, expenses, and what is left", script)
+        self.assertNotIn("Colours match the bot", script)
+        self.assertNotIn("Card Usage counts toward the card", script)
+        self.assertIn('["raw", "Raw entries"]', script)
+        self.assertIn("raw-frame", script)
+        self.assertIn("limit.percent_label", script)
+        self.assertIn("No cap", script)
+        self.assertIn(".raw-frame", css)
+        self.assertIn("overflow: scroll", css)
+
 
 class DashboardPromptTests(unittest.IsolatedAsyncioTestCase):
     def test_button_stays_off_until_an_https_address_is_set(self):

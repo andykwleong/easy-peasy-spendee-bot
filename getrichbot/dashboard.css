@@ -177,7 +177,7 @@ h2 { font-size: 1.7rem; letter-spacing: -0.03em; }
 .modal-shop { font-weight: 700; font-size: 1.05rem; overflow-wrap: anywhere; }
 .modal-amount { font-variant-numeric: tabular-nums; font-weight: 750; font-size: 1.2rem; margin-top: 4px; }
 .modal-date { color: var(--muted); margin-top: 2px; }
-.modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; flex-wrap: wrap; }
+.modal-actions { display: flex; justify-content: center; gap: 8px; margin-top: 18px; flex-wrap: wrap; }
 .danger { background: var(--red); color: white; border-color: var(--red); }
 .text-btn:disabled { cursor: not-allowed; opacity: 0.55; }
 .later-note { color: var(--muted); font-size: 0.82rem; }
@@ -286,5 +286,4 @@ th { color: var(--muted); font-size: 0.82rem; font-weight: 700; }
   .tx-money { grid-column: 2; grid-row: 1; }
   .tx-category { grid-column: 1 / -1; grid-row: 2; }
   .tx-logged { grid-column: 1 / -1; grid-row: 3; }
-  .modal-actions .primary, .modal-actions .text-btn { flex: 1 1 140px; }
 }

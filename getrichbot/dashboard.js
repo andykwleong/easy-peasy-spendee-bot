@@ -256,10 +256,8 @@ function renderTop() {
 
 function renderRecent() {
   const section = el("section");
-  const head = pageHead(
-    "Recent transactions",
-    "Switch between your own rows and both of you. This follows who logged the row, not whose card paid."
-  );
+  const head = el("div", "page-head");
+  head.append(el("h2", "", "Recent transactions"));
   const filters = el("div", "filters");
   [
     ["mine", state.payload.viewer_label + " only"],
@@ -277,7 +275,6 @@ function renderRecent() {
   });
   head.append(filters);
   section.append(head);
-  section.append(el("p", "sub", "Fix tagging writes to the sheet when you pick a category, card, or channel, or when you finish the amount. It does not ask again, and it does not save each keystroke. Logged by stays the person who logged the row. Payment owner follows the card. Delete asks first. The row stays until you confirm."));
   if (state.payload.recent_truncated) {
     section.append(el("p", "sub", "Showing the latest " + state.payload.recent_limit + " confirmed rows."));
   }
@@ -359,14 +356,13 @@ function renderDeletePopup() {
   dialog.append(el("div", "modal-shop", pending.shop));
   dialog.append(el("div", "modal-amount", money(pending.amount)));
   dialog.append(el("div", "modal-date", prettyDate(pending.date)));
-  dialog.append(el("p", "sub", "This removes that one row from the Google Sheet. Cancel leaves it where it is."));
   if (state.deleteError) dialog.append(el("p", "banner", state.deleteError));
   const actions = el("div", "modal-actions");
   const cancel = el("button", "text-btn", "Cancel");
   cancel.type = "button";
   cancel.disabled = state.deleting;
   cancel.addEventListener("click", cancelDelete);
-  const confirm = el("button", "primary danger", state.deleting ? "Deleting..." : "Delete this row");
+  const confirm = el("button", "primary danger", "Delete");
   confirm.type = "button";
   confirm.disabled = state.deleting;
   confirm.addEventListener("click", confirmDelete);

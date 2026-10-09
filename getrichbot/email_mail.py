@@ -32,16 +32,23 @@ _AMOUNT_RE = re.compile(
     re.IGNORECASE,
 )
 _LAST4_RE = re.compile(
-    r"(?:card\s+ending|ending|last\s*4(?:\s*digits)?)\D{0,16}(\d{4})(?!\d)",
+    r"(?:card\s+ending|a/c\s+ending|last\s*4(?:\s*digits)?|(?<![A-Za-z])ending)\s*[:\-]?\s*(\d{4})\b",
     re.IGNORECASE,
 )
+_MASKED_GROUP_LAST4_RE = re.compile(r"(?:[*xX]{2,4}(?:[-\s]+[*xX]{2,4}){2,}[-\s]+)(\d{4})\b")
 _MASKED_LAST4_RE = re.compile(r"(?:[*xX]{2,}|•{2,})\s*(\d{4})(?!\d)")
 _SLASH_DATE = r"\d{1,2}/\d{1,2}/(?:\d{4}|\d{2})"
 _MONTH_DATE = r"\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4}"
 _CLOCK = r"\d{1,2}:\d{2}(?:\s*[AP]M)?"
 _OPTIONAL_CLOCK = rf"(?:\s+(?:at\s+)?{_CLOCK})?"
-_DATE_RE = re.compile(
-    rf"\bon\s+({_SLASH_DATE}|{_MONTH_DATE})",
+_NUMERIC_DATE_RE = re.compile(r"\b(\d{1,2})/(\d{1,2})/(\d{4}|\d{2})\b")
+_SLASH_MONTH_DATE_RE = re.compile(r"\b(\d{1,2})/([A-Za-z]{3,9})/(\d{4}|\d{2})\b")
+_DAY_MONTH_DATE_RE = re.compile(
+    r"\b(\d{1,2})\s+([A-Za-z]{3,9})(?:\s+(\d{4}|\d{2})(?!\d|:))?",
+    re.IGNORECASE,
+)
+_DATE_LABEL_RE = re.compile(
+    r"(?:transaction\s+date|date\s*(?:&(?:amp;)?|and)\s*time|\bdated\b)",
     re.IGNORECASE,
 )
 _SHOP_AFTER_DATE_RE = re.compile(
@@ -52,7 +59,11 @@ _SHOP_AFTER_MONTH_RE = re.compile(
     rf"\bon\s+({_MONTH_DATE}){_OPTIONAL_CLOCK}\s+at\s+(.+?)(?=\.|\n|$)",
     re.IGNORECASE,
 )
-_LABELED_SHOP_RE = re.compile(r"(?:merchant|shop)\s*:\s*(.+?)(?:\n|$)", re.IGNORECASE)
+_SHOP_LABEL_RE = re.compile(
+    r"^(?:transaction\s+details|description|merchant|shop|to)\b\s*:?\s*(.*)$",
+    re.IGNORECASE,
+)
+_UEN_RE = re.compile(r"\s*\(\s*UEN\s+ending\s+[^)]*\)", re.IGNORECASE)
 _EMAIL_RE = re.compile(r"[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}", re.IGNORECASE)
 _ONLINE_RE = re.compile(
     r"food\s*panda|foodpanda|deliveroo|\bgrab\b|grabfood|booking\.com|\bagoda\b|\bexpedia\b|\bklook\b|"
@@ -151,11 +162,10 @@ def decide_mail(
         categories=categories,
         channels_for=channels_for,
         category_for=category_for,
+        today=today,
         remember_category=remember_category,
     )
     if purchase.action == "log":
-        return purchase
-    if kind == "purchase":
         return purchase
     if kind == "salary":
         return EmailDecision(
@@ -163,11 +173,7 @@ def decide_mail(
             kind=kind,
             text="This looks like salary. I have not logged it. Type income in the chat if you want it recorded.",
         )
-    return EmailDecision(
-        action="ask",
-        kind="unclear",
-        text="I got mail that is not one clear purchase. I have not logged it.",
-    )
+    return purchase
 
 
 def classify_kind(subject: str, body: str) -> str:
@@ -297,12 +303,13 @@ def _purchase_decision(
     categories: tuple[str, ...],
     channels_for,
     category_for,
+    today: date,
     remember_category=None,
 ) -> EmailDecision:
     clause = _first_purchase_clause(body)
     if clause is None:
         shop = _labeled_shop(body) or ""
-        expense_date = _mail_date(body)
+        expense_date = _mail_date(body, today)
         sentence = None
     else:
         shop = clause.shop
@@ -324,7 +331,7 @@ def _purchase_decision(
             kind="purchase",
             shop=shop,
             amount=amount,
-            text="I got a UOB purchase but could not match one card from the Last 4 column. I have not logged it.",
+            text="I got a purchase but could not match one card from the Last 4 column. I have not logged it.",
         )
     card = matches[0]
     logged_by = _logged_by(addresses, forwarders) or ""
@@ -413,7 +420,7 @@ def _income_decision(
         action="log",
         kind=kind,
         amount=amount,
-        expense_date=_mail_date(body) or today,
+        expense_date=_mail_date(body, today) or today,
         category=INCOME_MISC,
         logged_by=logged_by,
         description=description,
@@ -459,7 +466,7 @@ def _amounts(body: str) -> list[Decimal]:
 
 def _last4s(body: str) -> tuple[str, ...]:
     found: list[str] = []
-    for regex in (_LAST4_RE, _MASKED_LAST4_RE):
+    for regex in (_MASKED_GROUP_LAST4_RE, _MASKED_LAST4_RE, _LAST4_RE):
         for match in regex.findall(body or ""):
             if match not in found:
                 found.append(match)
@@ -515,7 +522,7 @@ def _missing_purchase_text(missing: list[str]) -> str:
         detail = f"{pieces[0]} and {pieces[1]} were"
     else:
         detail = f"{', '.join(pieces[:-1])}, and {pieces[-1]} were"
-    return f"I got a UOB transaction alert, but {detail} missing. I have not logged it."
+    return f"I got a transaction, but {detail} missing. I have not logged it."
 
 
 def _first_purchase_clause(body: str) -> _PurchaseClause | None:
@@ -538,14 +545,26 @@ def _first_purchase_clause(body: str) -> _PurchaseClause | None:
 
 
 def _labeled_shop(body: str) -> str | None:
-    match = _LABELED_SHOP_RE.search(body or "")
-    if match is None:
-        return None
-    return _clean_shop(match.group(1))
+    lines = (body or "").splitlines()
+    for index, line in enumerate(lines):
+        match = _SHOP_LABEL_RE.match(line.strip())
+        if match is None:
+            continue
+        raw = match.group(1).strip()
+        if not raw:
+            for later in lines[index + 1 :]:
+                if later.strip():
+                    raw = later.strip()
+                    break
+        shop = _clean_shop(raw)
+        if shop:
+            return shop
+    return None
 
 
 def _clean_shop(raw: str) -> str | None:
-    shop = " ".join(raw.strip(" -:").split())
+    shop = _UEN_RE.sub("", raw or "")
+    shop = " ".join(shop.strip(" -:").split())
     shop = shop.rstrip(".")
     return shop or None
 
@@ -572,11 +591,109 @@ def _decimal_dot(body: str, index: int) -> bool:
     return index > 0 and index + 1 < len(body) and body[index - 1].isdigit() and body[index + 1].isdigit()
 
 
-def _mail_date(body: str) -> date | None:
-    match = _DATE_RE.search(body or "")
-    if match is None:
+@dataclass(frozen=True)
+class _FoundDate:
+    day: int
+    month: int
+    year: int | None
+    start: int
+
+
+def _mail_date(body: str, today: date) -> date | None:
+    found = _found_dates(body)
+    if not found:
         return None
-    return _parse_date_text(match.group(1))
+    years = {item.year for item in found if item.year is not None}
+    borrowed = next(iter(years)) if len(years) == 1 else None
+    resolved: list[tuple[date, _FoundDate]] = []
+    for item in found:
+        if item.year is not None:
+            year = item.year
+        elif borrowed is not None:
+            year = borrowed
+        else:
+            year = today.year
+        try:
+            resolved.append((date(year, item.month, item.day), item))
+        except ValueError:
+            continue
+    unique = {when for when, _item in resolved}
+    if len(unique) == 1:
+        return next(iter(unique))
+    labeled = [when for when, item in resolved if _date_is_labeled(body, item.start)]
+    labeled_days = set(labeled)
+    if len(labeled_days) == 1:
+        return labeled[0]
+    return None
+
+
+def _found_dates(body: str) -> list[_FoundDate]:
+    text = body or ""
+    matches = []
+    for regex, kind in (
+        (_NUMERIC_DATE_RE, "numeric"),
+        (_SLASH_MONTH_DATE_RE, "slash_month"),
+        (_DAY_MONTH_DATE_RE, "day_month"),
+    ):
+        for match in regex.finditer(text):
+            matches.append((match.start(), match.end(), kind, match))
+    matches.sort(key=lambda item: (item[0], item[0] - item[1]))
+    found: list[_FoundDate] = []
+    occupied_until = -1
+    for start, end, kind, match in matches:
+        if start < occupied_until:
+            continue
+        parts = _date_parts(kind, match)
+        if parts is None:
+            continue
+        day, month, year = parts
+        found.append(_FoundDate(day, month, year, start))
+        occupied_until = end
+    return found
+
+
+def _date_parts(kind: str, match: re.Match[str]) -> tuple[int, int, int | None] | None:
+    if kind == "numeric":
+        day = int(match.group(1))
+        month = int(match.group(2))
+        year = _year(match.group(3))
+    elif kind == "slash_month":
+        month_number = _MONTHS.get(match.group(2).casefold())
+        if month_number is None:
+            return None
+        day = int(match.group(1))
+        month = month_number
+        year = _year(match.group(3))
+    else:
+        month_number = _MONTHS.get(match.group(2).casefold())
+        if month_number is None:
+            return None
+        day = int(match.group(1))
+        month = month_number
+        year = _year(match.group(3)) if match.group(3) else None
+    if not _possible_date(day, month, year):
+        return None
+    return day, month, year
+
+
+def _possible_date(day: int, month: int, year: int | None) -> bool:
+    try:
+        date(year or 2000, month, day)
+    except ValueError:
+        return False
+    return True
+
+
+def _date_is_labeled(body: str, start: int) -> bool:
+    line_start = body.rfind("\n", 0, start) + 1
+    if _DATE_LABEL_RE.search(body[line_start:start]):
+        return True
+    if line_start == 0:
+        return False
+    previous_end = line_start - 1
+    previous_start = body.rfind("\n", 0, previous_end) + 1
+    previous = body[previous_start:previous_end]
+    return _DATE_LABEL_RE.search(previous) is not None
 
 
 def _parse_date_text(raw: str) -> date | None:

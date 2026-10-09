@@ -275,11 +275,12 @@ class EmailMailTests(unittest.TestCase):
         self.assertEqual(shop.last4, "1234")
         self.assertEqual(shop.expense_date, date(2026, 10, 5))
         self.assertEqual(shop.shop, "")
-        self.assertEqual(amount.text, "I got a UOB transaction alert, but the amount was missing. I have not logged it.")
-        self.assertEqual(card.text, "I got a UOB transaction alert, but the card was missing. I have not logged it.")
-        self.assertEqual(date_and_shop.text, "I got a UOB transaction alert, but the date was missing. I have not logged it.")
+        self.assertEqual(amount.text, "I got a transaction, but the amount was missing. I have not logged it.")
+        self.assertEqual(card.text, "I got a transaction, but the card was missing. I have not logged it.")
+        self.assertEqual(date_and_shop.text, "I got a transaction, but the date was missing. I have not logged it.")
         for decision in (amount, card, date_and_shop):
             self.assertEqual(decision.action, "ask")
+            self.assertNotIn("not one clear purchase", decision.text)
             self.assertNotIn("one amount, one shop, one date, and one card", decision.text)
 
     def test_refund_is_income_misc_and_does_not_touch_the_card(self):
@@ -372,7 +373,13 @@ class EmailMailTests(unittest.TestCase):
         unclear = decide("Weekly newsletter", "Hello from the bank.", config_with())
         salary = decide("Salary payment", "Salary of SGD 1000.00 was paid.", config_with())
         self.assertEqual(unclear.action, "ask")
+        self.assertEqual(
+            unclear.text,
+            "I got a transaction, but the amount, the date, and the card were missing. I have not logged it.",
+        )
+        self.assertNotIn("not one clear purchase", unclear.text)
         self.assertEqual(salary.action, "ask")
+        self.assertIn("salary", salary.text.casefold())
         self.assertNotEqual(salary.category, INCOME_MISC)
 
     def test_unknown_shop_with_both_channels_is_logged_with_a_blank_channel(self):
@@ -436,6 +443,146 @@ class EmailMailTests(unittest.TestCase):
         self.assertEqual(lines[1], "Category is missing. Reply to this message with the category.")
         self.assertNotIn("Income - A", text)
         self.assertNotIn("Income - fx", text)
+
+    def test_missing_date_is_named_for_any_bank(self):
+        decision = decide(
+            "Card transaction",
+            "Amount: SGD10.00\ncard ending 1111\nTo: SAMPLE SHOP\n",
+            config_with(last4="1111"),
+        )
+        self.assertEqual(decision.action, "ask")
+        self.assertEqual(decision.text, "I got a transaction, but the date was missing. I have not logged it.")
+        self.assertNotIn("not one clear purchase", decision.text)
+
+    def test_card_shapes_read_the_last_four_and_ignore_a_uen_or_a_long_number(self):
+        stars = decide(
+            "Card transaction",
+            "Amount: SGD 8.00\ndated 09/10/2026\n****1111\nTo: SAMPLE DEPOT\n",
+            config_with(last4="1111"),
+        )
+        bare_ending = decide(
+            "Card transaction",
+            "Amount: SGD 8.00\ndated 09/10/2026\nending 1111\nTo: SAMPLE DEPOT\n",
+            config_with(last4="1111"),
+        )
+        for decision in (stars, bare_ending):
+            self.assertEqual(decision.action, "log")
+            self.assertEqual(decision.last4, "1111")
+            self.assertEqual(decision.shop, "SAMPLE DEPOT")
+            self.assertEqual(decision.expense_date, date(2026, 10, 9))
+        uen = decide(
+            "Payment sent",
+            "Amount: SGD 3.50\nDate & Time: 05 Oct 11:26 (SGT)\nTo: SAMPLE COURIER (UEN ending ABCD)\n",
+            config_with(last4="4444"),
+        )
+        reference = decide(
+            "Card transaction",
+            "Amount: SGD231.66\ndated 09/10/26\nTransaction Ref: REF000000000000009999\nTo: SAMPLE SHOP\n",
+            config_with(last4="1111"),
+        )
+        for decision in (uen, reference):
+            self.assertEqual(decision.action, "ask")
+            self.assertIn("the card was missing", decision.text)
+
+    def test_month_without_a_year_uses_another_date_in_the_same_mail(self):
+        body = (
+            "dated 09/10/27\n"
+            "Date & Time: 09 OCT 23:25 (SGT)\n"
+            "Amount: SGD10.00\n"
+            "card ending 1111\n"
+            "To: SAMPLE DEPOT\n"
+        )
+        decision = decide("Card transaction", body, config_with(last4="1111"))
+        self.assertEqual(decision.action, "log")
+        self.assertEqual(decision.expense_date, date(2027, 10, 9))
+        self.assertEqual(decision.amount, Decimal("10.00"))
+
+    def test_purchase_layouts_log_an_expense(self):
+        layouts = (
+            (
+                "Card transaction",
+                "\n".join(
+                    (
+                        "Transaction Ref: REF000000000000009999",
+                        "dated 09/10/26",
+                        "Date & Time: 09 OCT 23:25 (SGT)",
+                        "Amount: SGD231.66",
+                        "card ending 1111",
+                        "To: SAMPLE SHOP",
+                    )
+                ),
+                "1111",
+                Decimal("231.66"),
+                date(2026, 10, 9),
+                "SAMPLE SHOP",
+            ),
+            (
+                "Card transaction",
+                "\n".join(
+                    (
+                        "Account number: XXXX-XXXX-XXXX-2222",
+                        "Transaction date: 09/10/26",
+                        "Transaction time: 13:33:34",
+                        "Transaction amount: SGD36.76",
+                        "Transaction details : SAMPLE MARKET",
+                    )
+                ),
+                "2222",
+                Decimal("36.76"),
+                date(2026, 10, 9),
+                "SAMPLE MARKET",
+            ),
+            (
+                "Card transaction",
+                "\n".join(
+                    (
+                        "Card Number",
+                        "XXXX-XXXX-XXXX-3333",
+                        "Transaction Date",
+                        "08/OCT/2026",
+                        "Transaction Time",
+                        "18:50:38",
+                        "Transaction Amount",
+                        "SGD25.90",
+                        "Description",
+                        "SAMPLE CAFE",
+                    )
+                ),
+                "3333",
+                Decimal("25.90"),
+                date(2026, 10, 8),
+                "SAMPLE CAFE",
+            ),
+            (
+                "Payment sent",
+                "\n".join(
+                    (
+                        "Date & Time: 05 Oct 11:26 (SGT)",
+                        "Amount: SGD3.50",
+                        "From: Sample Joint Account A/C ending 4444",
+                        "To: SAMPLE COURIER (UEN ending ABCD)",
+                    )
+                ),
+                "4444",
+                Decimal("3.50"),
+                date(2026, 10, 5),
+                "SAMPLE COURIER",
+            ),
+        )
+        for subject, body, last4, amount, when, shop in layouts:
+            decision = decide(subject, body, config_with(last4=last4))
+            self.assertEqual(decision.action, "log", decision.text)
+            self.assertEqual(decision.kind, "purchase")
+            self.assertEqual(decision.amount, amount)
+            self.assertEqual(decision.last4, last4)
+            self.assertEqual(decision.expense_date, when)
+            self.assertEqual(decision.shop, shop)
+            self.assertFalse(decision.category.casefold().startswith("income"))
+            row = build_expense_row(decision, chat_id=-100, now=datetime(2026, 10, 9, 12, 0, tzinfo=SINGAPORE))
+            self.assertEqual(row.transaction_type, "Expense")
+            self.assertNotEqual(row.category, INCOME_MISC)
+            self.assertEqual(row.payment_method, "UOB Sample Visa")
+            self.assertEqual(row.description, shop)
 
     def test_body_category_is_used_and_the_shop_is_not_searched(self):
         calls = []

@@ -65,6 +65,10 @@ _SHOP_LABEL_RE = re.compile(
 )
 _UEN_RE = re.compile(r"\s*\(\s*UEN\s+ending\s+[^)]*\)", re.IGNORECASE)
 _EMAIL_RE = re.compile(r"[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}", re.IGNORECASE)
+_MAILBOX_LINE_RE = re.compile(
+    r"[^<>@]+<\s*[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}\s*>",
+    re.IGNORECASE,
+)
 _ONLINE_RE = re.compile(
     r"food\s*panda|foodpanda|deliveroo|\bgrab\b|grabfood|booking\.com|\bagoda\b|\bexpedia\b|\bklook\b|"
     r"\bairbnb\b|hotels\.com|\btraveloka\b|trip\.com|travel\s+booking",
@@ -283,6 +287,17 @@ def logged_notice_entry_id(text: str) -> str | None:
     if match is None:
         return None
     return match.group(1)
+
+
+def is_email_shop(value: str) -> bool:
+    """True when the text is an email address, not a store name."""
+    text = " ".join((value or "").split())
+    if not text or "@" not in text:
+        return False
+    bare = text.strip("<>").strip()
+    if _EMAIL_RE.fullmatch(bare):
+        return True
+    return _MAILBOX_LINE_RE.fullmatch(text) is not None
 
 
 def addresses_in_text(value: str) -> tuple[str, ...]:
@@ -506,7 +521,7 @@ def _remember_shop(remember_category, shop: str, category: str) -> None:
     from getrichbot.shop_category import shop_keyword
 
     keyword = shop_keyword(shop)
-    if not keyword:
+    if not keyword or is_email_shop(shop) or is_email_shop(keyword):
         return
     try:
         remember_category(keyword, category)
@@ -557,8 +572,9 @@ def _labeled_shop(body: str) -> str | None:
                     raw = later.strip()
                     break
         shop = _clean_shop(raw)
-        if shop:
-            return shop
+        if not shop or is_email_shop(shop):
+            continue
+        return shop
     return None
 
 

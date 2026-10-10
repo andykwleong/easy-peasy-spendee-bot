@@ -171,7 +171,7 @@ class DashboardApp:
         except ValueError:
             return _json(400, {"ok": False, "error": "cards"})
         except Exception:
-            LOGGER.error("Dashboard could not read the Google Sheet. Nothing was changed.")
+            LOGGER.exception("Dashboard could not read the Google Sheet. Nothing was changed.")
             return _json(500, {"ok": False, "error": "sheet"})
         return _json(200, payload)
 

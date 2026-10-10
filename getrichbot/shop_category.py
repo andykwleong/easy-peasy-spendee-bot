@@ -14,7 +14,7 @@ from dataclasses import dataclass
 
 from getrichbot.categories import ALL_CATEGORIES
 from getrichbot.categories import remember_priority_keyword
-from getrichbot.email_mail import category_from_keywords
+from getrichbot.email_mail import category_from_keywords, is_email_shop
 
 LOGGER = logging.getLogger(__name__)
 
@@ -35,7 +35,10 @@ def strip_payment_prefix(shop: str) -> str:
 
 
 def shop_keyword(shop: str) -> str:
-    return strip_payment_prefix(shop).casefold()
+    keyword = strip_payment_prefix(shop).casefold()
+    if is_email_shop(shop) or is_email_shop(keyword):
+        return ""
+    return keyword
 
 
 def category_named_in_text(text: str, categories: tuple[str, ...]) -> str | None:
@@ -52,6 +55,8 @@ def resolve_shop_category(
     lookup,
     ask=None,
 ) -> ShopCategory:
+    if is_email_shop(shop):
+        return ShopCategory(None)
     sheet_categories = tuple(category for category in categories if category)
     allowed = tuple(category for category in sheet_categories if not category.casefold().startswith("income"))
     known = category_from_keywords(shop, logged_by, me_label, wife_label)

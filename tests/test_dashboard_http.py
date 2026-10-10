@@ -14,7 +14,8 @@ from urllib.parse import urlencode
 
 from telegram.error import TelegramError
 
-from getrichbot.cards import parse_payment_config
+from getrichbot.cards import CardLimit, CardLimitUsage, parse_payment_config
+from getrichbot.sheets import SheetsClient
 from getrichbot.dashboard_auth import issue_session_token
 from getrichbot.dashboard_bot import _DASHBOARD_REPLY_TEXT, configure_dashboard_menu, dashboard_prompt, reply_with_dashboard
 from getrichbot.dashboard_http import DashboardApp, DashboardContext, DashboardHTTPServer
@@ -150,6 +151,39 @@ def labels(user_id: int) -> str | None:
     if user_id == 222:
         return "Sam"
     return None
+
+
+class _SheetValues:
+    def __init__(self, sheets: dict[str, list]):
+        self._sheets = sheets
+
+    def get(self, **kwargs):
+        title, _cells = kwargs["range"].split("!", 1)
+        return _SheetRequest(self._sheets[title])
+
+
+class _SheetRequest:
+    def __init__(self, values):
+        self._values = values
+
+    def execute(self):
+        return {"values": self._values}
+
+
+class _SheetSpreadsheets:
+    def __init__(self, sheets: dict[str, list]):
+        self._values = _SheetValues(sheets)
+
+    def values(self):
+        return self._values
+
+
+class _SheetService:
+    def __init__(self, sheets: dict[str, list]):
+        self._spreadsheets = _SheetSpreadsheets(sheets)
+
+    def spreadsheets(self):
+        return self._spreadsheets
 
 
 def app_for(sheets: FakeSheets | None = None) -> tuple[DashboardApp, FakeSheets]:
@@ -300,6 +334,49 @@ class DashboardHttpTests(unittest.TestCase):
         self.assertEqual(scope_status, 400)
         self.assertNotIn(b"Sample cafe", scope_body)
         self.assertEqual(sheets.calls, [])
+
+    def test_nan_limit_does_not_blank_the_page_and_blank_limit_stays_uncapped(self):
+        expense = [[
+            "aa1001", "12:00:00", "2026-09-20", "2026-09", "Alex", "sample", "18.50", "Food", "Sample cafe",
+            "Alex", "Sample Visa", "", "Expense", "text", "Confirmed", "1", "2",
+        ]]
+        methods = [
+            ["Payment Method", "Owner", "Type", "Cycle Type", "Cycle Start Day", "Active"],
+            ["Sample Visa", "Alex", "Credit Card", "Calendar", "1", "TRUE"],
+            ["Sample Cashback", "Alex", "Credit Card", "Calendar", "1", "TRUE"],
+        ]
+        limits = [
+            ["Payment Method", "Owner", "Category", "Payment Channel", "Limit Amount", "Active"],
+            ["Sample Visa", "Alex", "All", "All", "", "TRUE"],
+            ["Sample Cashback", "Alex", "All", "All", "NaN", "TRUE"],
+        ]
+        client = SheetsClient("sheet-id")
+        client.service = _SheetService({
+            "Raw Expenses": expense,
+            "Card Usage": [],
+            "Payment Methods": methods,
+            "Card Limits": limits,
+        })
+        app, _sheets = app_for(client)
+        token = issue_session_token(111, TOKEN, now=NOW)
+        status, _, payload = app.handle(
+            "GET",
+            "/api/dashboard?scope=mine&cards=mine",
+            {"cookie": f"grb_session={token}"},
+            b"",
+            secure=False,
+        )
+        body = body_json(payload)
+        self.assertEqual(status, 200)
+        self.assertNotEqual(body.get("error"), "sheet")
+        self.assertEqual(body["recent"][0]["id"], "aa1001")
+        uncapped = {card["name"] for card in body["cards"]["uncapped"]}
+        self.assertIn("Sample Visa", uncapped)
+        self.assertIn("Sample Cashback", uncapped)
+        self.assertEqual(body["cards"]["capped"], [])
+        self.assertIsNone(body["cards"]["error"])
+        safe = CardLimitUsage(CardLimit("Sample Visa", "Alex", "All", Decimal("0")), Decimal("10"))
+        self.assertEqual(safe.percent, Decimal("0"))
 
     def test_sheet_failure_does_not_echo_private_details_or_write(self):
         sheets = FakeSheets()

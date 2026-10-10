@@ -3,7 +3,7 @@ from __future__ import annotations
 import calendar
 from dataclasses import dataclass
 from datetime import date
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation, Overflow
 
 from getrichbot.models import CardUsageRecord, ExpenseRecord
 
@@ -69,7 +69,13 @@ class CardLimitUsage:
 
     @property
     def percent(self) -> Decimal:
-        return (self.spent / self.limit.amount) * Decimal("100")
+        amount = self.limit.amount
+        if not amount.is_finite() or amount == 0:
+            return Decimal("0")
+        try:
+            return (self.spent / amount) * Decimal("100")
+        except (InvalidOperation, ZeroDivisionError, Overflow):
+            return Decimal("0")
 
 
 @dataclass(frozen=True)
@@ -287,6 +293,9 @@ def _parse_card_limits(rows: list[list[str]]) -> list[CardLimit]:
             amount = Decimal(amount_raw.replace(",", "").replace("S$", "").replace("$", ""))
         except Exception as exc:
             raise ValueError(f"Could not read limit amount for {payment_method} / {category}.") from exc
+        # NaN is not a limit. Comparing it raises InvalidOperation, which is not a ValueError.
+        if not amount.is_finite():
+            continue
         key = (owner.casefold(), payment_method.casefold(), category.casefold(), payment_channel.casefold())
         if key in seen:
             raise ValueError(f"Card Limits has a duplicate active row for {payment_method} / {owner} / {category} / {payment_channel}.")

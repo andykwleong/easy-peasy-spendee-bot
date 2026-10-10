@@ -14,6 +14,8 @@ RAW_LIMIT = 200
 
 
 def limit_band(percent: Decimal) -> str:
+    if not percent.is_finite():
+        return "green"
     if percent < Decimal("60"):
         return "green"
     if percent < Decimal("80"):
@@ -267,4 +269,6 @@ def _raw_card_usage(records: list[CardUsageRecord]) -> list[dict]:
 
 
 def _money(value: Decimal) -> str:
+    if isinstance(value, Decimal) and not value.is_finite():
+        return "0.00"
     return f"{value:.2f}"

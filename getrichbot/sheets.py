@@ -702,6 +702,9 @@ def _parse_sheet_amount(raw: str) -> Decimal | None:
     if not cleaned:
         return None
     try:
-        return Decimal(cleaned)
+        amount = Decimal(cleaned)
     except InvalidOperation:
         return None
+    if not amount.is_finite():
+        return None
+    return amount

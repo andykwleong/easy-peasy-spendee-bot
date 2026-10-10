@@ -584,6 +584,36 @@ class EmailMailTests(unittest.TestCase):
             self.assertEqual(row.payment_method, "UOB Sample Visa")
             self.assertEqual(row.description, shop)
 
+    def test_to_email_address_is_skipped_for_the_next_shop_line(self):
+        saved = []
+        body = "\n".join(
+            (
+                "To: <person@example.com>",
+                "Transaction amount: SGD36.76",
+                "Transaction date: 09/10/26",
+                "Account number: XXXX-XXXX-XXXX-2222",
+                "To: SAMPLE MARKET",
+                "Note: Food",
+            )
+        )
+        decision = decide_mail(
+            "Card transaction",
+            body,
+            ("person-a@example.com",),
+            forwarders={"person-a@example.com": "Me"},
+            methods=config_with(channels=("Online",), last4="2222").payment_methods,
+            categories=("Food", "Groceries", INCOME_MISC),
+            channels_for=config_with(channels=("Online",), last4="2222").channel_options_for,
+            category_for=lambda shop, logged_by, body="": None,
+            today=TODAY,
+            remember_category=lambda keyword, category: saved.append((keyword, category)),
+        )
+        self.assertEqual(decision.action, "log", decision.text)
+        self.assertEqual(decision.shop, "SAMPLE MARKET")
+        self.assertNotIn("person@example.com", decision.shop)
+        self.assertEqual(saved, [("sample market", "Food")])
+        self.assertFalse(any("@" in keyword for keyword, _category in saved))
+
     def test_body_category_is_used_and_the_shop_is_not_searched(self):
         calls = []
         saved = []

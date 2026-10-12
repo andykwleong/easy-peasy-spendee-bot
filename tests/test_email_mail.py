@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 from getrichbot.cards import build_card_summary
 from getrichbot.cards import parse_payment_config
 from getrichbot.email_mail import INCOME_MISC
+from getrichbot.email_mail import REVERSAL_MISSING_TEXT
 from getrichbot.email_mail import build_expense_row
 from getrichbot.email_mail import category_from_keywords
 from getrichbot.email_mail import decide_mail
@@ -369,18 +370,205 @@ class EmailMailTests(unittest.TestCase):
         self.assertEqual(decision.category, "")
         self.assertNotIn("Income - A", decision.category)
 
-    def test_unclear_mail_and_salary_ask_and_do_not_write(self):
-        unclear = decide("Weekly newsletter", "Hello from the bank.", config_with())
+    def test_unclear_mail_stays_silent_and_salary_still_asks(self):
+        unclear = decide("Security alert", "We noticed a sign-in from a new device.", config_with())
+        newsletter = decide("Weekly newsletter", "Hello from the bank.", config_with())
         salary = decide("Salary payment", "Salary of SGD 1000.00 was paid.", config_with())
-        self.assertEqual(unclear.action, "ask")
-        self.assertEqual(
-            unclear.text,
-            "I got a transaction, but the amount, the date, and the card were missing. I have not logged it.",
-        )
-        self.assertNotIn("not one clear purchase", unclear.text)
+        dated_only = decide("Security alert", "Something changed on 12/10/26.", config_with())
+        for decision in (unclear, newsletter, dated_only):
+            self.assertEqual(decision.action, "ignore")
+            self.assertEqual(decision.text, "")
         self.assertEqual(salary.action, "ask")
         self.assertIn("salary", salary.text.casefold())
         self.assertNotEqual(salary.category, INCOME_MISC)
+
+    def test_amount_without_date_or_card_still_names_the_missing_piece(self):
+        decision = decide(
+            "Card transaction",
+            "Transaction amount SGD 40.00\nTransaction details SAMPLE SHOP\n",
+            config_with(last4="1111"),
+        )
+        self.assertEqual(decision.action, "ask")
+        self.assertIn("the date", decision.text)
+        self.assertIn("the card", decision.text)
+        self.assertNotIn("the amount", decision.text)
+
+    def test_reversal_removes_the_matching_row_and_does_not_write_income(self):
+        body = (
+            "This is a reversal.\n"
+            "Account number XXXX-XXXX-XXXX-1111\n"
+            "Transaction date 12/10/26\n"
+            "Transaction amount SGD165.00\n"
+            "Transaction details SAMPLE SHOP\n"
+        )
+        decision = decide("Card transaction", body, config_with(last4="1111"))
+        self.assertEqual(decision.action, "reverse")
+        self.assertEqual(decision.amount, Decimal("165.00"))
+        self.assertEqual(decision.last4, "1111")
+        self.assertEqual(decision.shop, "SAMPLE SHOP")
+        self.assertNotEqual(decision.category, INCOME_MISC)
+
+        original = ExpenseRecord(
+            row_number=2,
+            entry_id="ab12cd",
+            timestamp="09:00:00",
+            expense_date="2026-10-12",
+            month="2026-10",
+            logged_by="Me",
+            raw_input="email: SAMPLE SHOP",
+            amount=Decimal("165.00"),
+            category="Food",
+            description="SAMPLE SHOP",
+            input_type="Email",
+            status="Confirmed",
+            transaction_type="Expense",
+            payment_method="UOB Sample Visa",
+            payment_owner="Me",
+            payment_channel="PayWave",
+        )
+        other = ExpenseRecord(
+            row_number=3,
+            entry_id="cd34ef",
+            timestamp="09:05:00",
+            expense_date="2026-10-12",
+            month="2026-10",
+            logged_by="Me",
+            raw_input="email: SAMPLE SHOP",
+            amount=Decimal("10.00"),
+            category="Food",
+            description="SAMPLE SHOP",
+            input_type="Email",
+            status="Confirmed",
+            transaction_type="Expense",
+            payment_method="UOB Sample Visa",
+            payment_owner="Me",
+            payment_channel="PayWave",
+        )
+        context = Context(config_with(last4="1111"), ("Food", "Groceries", INCOME_MISC))
+        context.records = [original, other]
+        context.deleted = []
+
+        def expense_records():
+            return list(context.records)
+
+        def delete_expense(entry_id):
+            context.deleted.append(entry_id)
+            context.records = [record for record in context.records if record.entry_id != entry_id]
+            return True
+
+        context.expense_records = expense_records
+        context.delete_expense = delete_expense
+        mailbox = FakeMailbox()
+        state = MemoryState()
+        writer = FakeWriter()
+        service = EmailService(
+            active_settings(),
+            mailbox,
+            state,
+            context,
+            writer.write,
+            authorize=lambda _headers: True,
+            now=lambda: datetime(2026, 10, 12, 9, 0, tzinfo=SINGAPORE),
+        )
+        state.set(HISTORY_KEY, "100")
+        mailbox.added = ["reverse"]
+        mailbox.messages["reverse"] = ("Card transaction", body, ("person-a@example.com",))
+        sent = []
+        service._notify = sent.append
+        service.process_notification("999")
+
+        self.assertEqual(writer.rows, [])
+        self.assertEqual(context.deleted, ["ab12cd"])
+        self.assertEqual([record.entry_id for record in context.records], ["cd34ef"])
+        self.assertEqual(len(sent), 1)
+        self.assertIn("The original charge was reversed and removed.", sent[0])
+        self.assertIn("SAMPLE SHOP", sent[0])
+        self.assertIn("ab12cd", sent[0])
+        self.assertNotIn("duplicate", sent[0].casefold())
+        self.assertNotIn(INCOME_MISC, sent[0])
+
+    def test_reversal_with_no_match_does_not_write_a_row(self):
+        body = (
+            "A reversal was posted.\n"
+            "Account number XXXX-XXXX-XXXX-1111\n"
+            "Transaction date 12/10/26\n"
+            "Transaction amount SGD165.00\n"
+            "Transaction details SAMPLE SHOP\n"
+        )
+        context = Context(config_with(last4="1111"), ("Food", INCOME_MISC))
+        context.records = []
+        context.expense_records = lambda: []
+        context.delete_expense = lambda entry_id: False
+        mailbox = FakeMailbox()
+        state = MemoryState()
+        writer = FakeWriter()
+        service = EmailService(
+            active_settings(),
+            mailbox,
+            state,
+            context,
+            writer.write,
+            authorize=lambda _headers: True,
+            now=lambda: datetime(2026, 10, 12, 9, 0, tzinfo=SINGAPORE),
+        )
+        state.set(HISTORY_KEY, "100")
+        mailbox.added = ["reverse"]
+        mailbox.messages["reverse"] = ("Card transaction", body, ("person-a@example.com",))
+        sent = []
+        service._notify = sent.append
+        service.process_notification("999")
+        self.assertEqual(writer.rows, [])
+        self.assertEqual(sent, [REVERSAL_MISSING_TEXT])
+        self.assertNotIn("duplicate", sent[0].casefold())
+
+    def test_refund_subject_stays_income_when_the_body_says_reversal(self):
+        body = REFUND_BODY + "The posting note says reversal.\n"
+        decision = decide(REFUND_SUBJECT, body, config_with())
+        self.assertEqual(decision.action, "log")
+        self.assertEqual(decision.kind, "refund")
+        self.assertEqual(decision.category, INCOME_MISC)
+        original = ExpenseRecord(
+            row_number=2,
+            entry_id="ab12cd",
+            timestamp="09:00:00",
+            expense_date="2026-10-05",
+            month="2026-10",
+            logged_by="Me",
+            raw_input="email: SAMPLE SHOP",
+            amount=Decimal("18.50"),
+            category="Food",
+            description="SAMPLE SHOP",
+            input_type="Email",
+            status="Confirmed",
+            transaction_type="Expense",
+            payment_method="UOB Sample Visa",
+            payment_owner="Me",
+        )
+        context = Context(config_with(), ("Food", INCOME_MISC))
+        context.records = [original]
+        context.deleted = []
+        context.expense_records = lambda: list(context.records)
+        context.delete_expense = lambda entry_id: context.deleted.append(entry_id) or False
+        mailbox = FakeMailbox()
+        state = MemoryState()
+        writer = FakeWriter()
+        service = EmailService(
+            active_settings(),
+            mailbox,
+            state,
+            context,
+            writer.write,
+            authorize=lambda _headers: True,
+            now=lambda: datetime(2026, 10, 5, 9, 0, tzinfo=SINGAPORE),
+        )
+        state.set(HISTORY_KEY, "100")
+        mailbox.added = ["refund"]
+        mailbox.messages["refund"] = (REFUND_SUBJECT, body, ("person-a@example.com",))
+        service.process_notification("999")
+        self.assertEqual(context.deleted, [])
+        self.assertEqual([record.entry_id for record in context.records], ["ab12cd"])
+        self.assertEqual(writer.rows[0].category, INCOME_MISC)
+        self.assertEqual(writer.rows[0].transaction_type, "Income")
 
     def test_unknown_shop_with_both_channels_is_logged_with_a_blank_channel(self):
         body = (

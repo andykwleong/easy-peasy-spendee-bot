@@ -20,7 +20,10 @@ from getrichbot.shop_category import apply_shop_keyword
 from getrichbot.shop_category import categorize_email_shop
 from getrichbot.shop_lookup import lookup_shop_text
 from getrichbot.ai import pick_existing_category
+from getrichbot.email_mail import REVERSAL_MISSING_TEXT
 from getrichbot.email_mail import decide_mail
+from getrichbot.email_mail import match_reversal
+from getrichbot.email_mail import reversal_removed_text
 from getrichbot.gmail_api import GmailApiMailbox
 from getrichbot.gmail_api import HistoryExpired
 from getrichbot.gmail_api import verify_pubsub_token
@@ -381,10 +384,40 @@ class EmailService:
             else:
                 self.state.set(_message_key(message_id), "asked")
             return [decision.text] if decision.text else []
+        if decision.action == "reverse":
+            text = self._reverse(decision)
+            removed = "reversed and removed" in text
+            self.state.set(_message_key(message_id), "logged" if removed else "asked")
+            return [text] if text else []
         if decision.action == "log":
             text = self._write(decision, message_id)
             return [text] if text else []
         return []
+
+    def _reverse(self, decision: EmailDecision) -> str:
+        try:
+            records = list(self.context.expense_records())
+            methods = tuple(self.context.methods())
+        except Exception:
+            LOGGER.exception("Could not read expenses for a reversal. Nothing was written.")
+            return "I could not read the sheet, so I have not removed a row and I have not logged a new one."
+        match = match_reversal(
+            records,
+            methods,
+            amount=decision.amount,
+            last4=decision.last4,
+            shop=decision.shop,
+        )
+        if match is None:
+            return REVERSAL_MISSING_TEXT
+        try:
+            deleted = bool(self.context.delete_expense(match.entry_id))
+        except Exception:
+            LOGGER.exception("Could not remove the reversed charge. Nothing new was written.")
+            return "I found the original charge but could not remove it. I have not logged a new row."
+        if not deleted:
+            return REVERSAL_MISSING_TEXT
+        return reversal_removed_text(match)
 
     def _write(self, decision: EmailDecision, message_id: str) -> str:
         if decision.category == INCOME_MISC and not self.context.has_income_misc():
@@ -552,6 +585,15 @@ class BotEmailContext:
 
     def channels_for(self, owner: str, payment_method: str) -> tuple[str, ...]:
         return self.bot._load_payment_config().channel_options_for(owner, payment_method)
+
+    def expense_records(self):
+        return self.bot.sheets.get_expense_records(self.bot.settings.raw_expenses_sheet)
+
+    def delete_expense(self, entry_id: str) -> bool:
+        deleted = self.bot.sheets.delete_entry_by_id(self.bot.settings.raw_expenses_sheet, entry_id)
+        if deleted:
+            self.bot._refresh_monthly_summary()
+        return deleted
 
     def remember_category(self, keyword: str, category: str) -> None:
         settings = self.bot.settings

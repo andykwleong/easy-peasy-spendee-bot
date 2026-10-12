@@ -85,6 +85,10 @@ _INTEREST_PHRASE_RE = re.compile(
     re.IGNORECASE,
 )
 _SALARY_RE = re.compile(r"\bsalary\b", re.IGNORECASE)
+_REVERSAL_RE = re.compile(r"\breversal\b", re.IGNORECASE)
+REVERSAL_MISSING_TEXT = (
+    "I could not find the original charge to reverse. I have not logged a new row."
+)
 _MONTHS = {
     "jan": 1,
     "january": 1,
@@ -158,6 +162,8 @@ def decide_mail(
         return EmailDecision(action="ignore", kind=kind)
     if kind in {"refund", "paynow", "dividend", "interest"}:
         return _income_decision(kind, body, addresses, forwarders, categories, today)
+    if _REVERSAL_RE.search(body or ""):
+        return _reversal_decision(body, today)
     purchase = _purchase_decision(
         body,
         addresses,
@@ -283,7 +289,11 @@ def logged_notice_entry_id(text: str) -> str | None:
     first = (text or "").splitlines()[0]
     if not first.startswith("Logged "):
         return None
-    match = _ENTRY_RE.search(first)
+    return entry_id_in_text(first)
+
+
+def entry_id_in_text(text: str) -> str | None:
+    match = _ENTRY_RE.search(text or "")
     if match is None:
         return None
     return match.group(1)
@@ -334,6 +344,8 @@ def _purchase_decision(
     last4 = _chosen_last4(body, sentence)
     missing = _missing_purchase_pieces(amount, expense_date, last4)
     if missing:
+        if amount is None and not last4:
+            return EmailDecision(action="ignore", kind="purchase")
         return EmailDecision(
             action="ask",
             kind="purchase",
@@ -397,6 +409,80 @@ def _purchase_decision(
         payment_channel=channel,
         description=shop,
     )
+
+
+def _reversal_decision(body: str, today: date) -> EmailDecision:
+    clause = _first_purchase_clause(body)
+    if clause is None:
+        shop = _labeled_shop(body) or ""
+        sentence = None
+    else:
+        shop = clause.shop
+        sentence = clause.sentence
+    amount = _chosen_amount(body, sentence)
+    last4 = _chosen_last4(body, sentence) or ""
+    return EmailDecision(
+        action="reverse",
+        kind="reversal",
+        amount=amount,
+        shop=shop,
+        last4=last4,
+        expense_date=_mail_date(body, today),
+    )
+
+
+def match_reversal(records, methods, *, amount: Decimal | None, last4: str, shop: str):
+    """Return the latest expense whose amount, card last 4, and shop text match."""
+    needle = " ".join((shop or "").casefold().split())
+    if amount is None or len(last4) != 4 or not last4.isdigit() or len(needle) < 3:
+        return None
+    found = None
+    for record in records:
+        if (record.status or "").casefold() != "confirmed":
+            continue
+        if (record.transaction_type or "Expense").casefold() == "income":
+            continue
+        if record.amount != amount:
+            continue
+        if _record_last4(record, methods) != last4:
+            continue
+        if not _shop_contained(needle, record):
+            continue
+        found = record
+    return found
+
+
+def reversal_removed_text(record) -> str:
+    try:
+        when = datetime.fromisoformat(record.expense_date).strftime("%-d %B %Y")
+    except ValueError:
+        when = record.expense_date
+    place = f" at {record.description}" if (record.description or "").strip() else ""
+    return (
+        "The original charge was reversed and removed. "
+        f"Deleted ${record.amount:.2f}{place} logged as {record.category} - {when} [{record.entry_id}]."
+    )
+
+
+def _record_last4(record, methods) -> str:
+    name = (record.payment_method or "").casefold()
+    if not name:
+        return ""
+    owner = (record.payment_owner or record.logged_by or "").casefold()
+    for method in methods:
+        if method.name.casefold() == name and method.owner.casefold() == owner:
+            return method.last4 or ""
+    return ""
+
+
+def _shop_contained(needle: str, record) -> bool:
+    for raw in (record.description, record.raw_input):
+        haystack = " ".join((raw or "").casefold().split())
+        if len(haystack) < 3:
+            continue
+        if needle in haystack or haystack in needle:
+            return True
+    return False
 
 
 def _income_decision(

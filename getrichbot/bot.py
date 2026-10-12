@@ -19,6 +19,7 @@ from getrichbot.categories import ALL_CATEGORIES, CATEGORY_ALIASES, FIXED_CATEGO
 from getrichbot.config import Settings
 from getrichbot.email_mail import LAST_BOT_MESSAGE_KEY
 from getrichbot.email_mail import email_logged_text
+from getrichbot.email_mail import entry_id_in_text
 from getrichbot.email_mail import logged_notice_entry_id
 from getrichbot.gmail_watch import WriteOutcome, attach_email, is_email_command
 from getrichbot.shop_category import apply_email_shop_correction
@@ -53,6 +54,8 @@ INCOME_CATEGORY_CALLBACK = "income_category"
 PAYMENT_METHOD_CALLBACK = "payment_method"
 PAYMENT_CHANNEL_CALLBACK = "payment_channel"
 PAYMENT_CONFIG_CACHE_WINDOW = timedelta(minutes=1)
+REFRESH_PAYMENT_COMMANDS = ("refreshpayments", "refreshpayment")
+DUPLICATE_NOT_LOGGED_TEXT = "The new row was not logged."
 HELP_TEXT = """Send expenses naturally:
 dinner 60
 ntuc 82.30
@@ -71,7 +74,7 @@ Useful commands:
 /pending - show items needing review
 /categories or /category - show categories
 /refreshcategories - reload categories from Google Sheets
-/refreshpayments - reload payment methods and card limits from Google Sheets
+/refreshpayments or /refreshpayment - reload payment methods and card limits from Google Sheets
 /summary - show this month's checkpoint
 /cards or /cardlimits - show your card spending against current limits
 /cards last month - show the previous card cycle
@@ -628,6 +631,9 @@ class FinanceBot:
             return False
         text = (update.message.text or "").strip()
         lowered = text.lower()
+
+        if await self._handle_reply_delete(update, lowered):
+            return True
 
         if await self._handle_pending_edit_date_reply(update, text, lowered):
             return True
@@ -1764,6 +1770,35 @@ class FinanceBot:
             date_text = date_value
         return f"${amount:.2f} logged as {category} - {date_text} [{change.record.entry_id}]"
 
+    async def _handle_reply_delete(self, update: Update, lowered: str) -> bool:
+        if lowered != "delete" or update.message is None or update.effective_user is None:
+            return False
+        reply = getattr(update.message, "reply_to_message", None)
+        if reply is None:
+            return False
+        if self.settings.label_for_user(update.effective_user.id) is None:
+            await update.message.reply_text("I do not recognize this Telegram user ID yet.")
+            return True
+        replied_text = getattr(reply, "text", None) or getattr(reply, "caption", None) or ""
+        entry_id = entry_id_in_text(replied_text)
+        if not entry_id:
+            await update.message.reply_text("Reply to the logged message to delete that row.")
+            return True
+        record = self.sheets.get_record_by_id(self.settings.raw_expenses_sheet, entry_id)
+        if record is None:
+            await update.message.reply_text("I could not find that expense anymore. It may already be deleted.")
+            return True
+        deleted = self.sheets.delete_entry_by_id(self.settings.raw_expenses_sheet, record.entry_id)
+        if not deleted:
+            await update.message.reply_text("I could not find that expense anymore. It may already be deleted.")
+            return True
+        for key, pending in list(self.pending_deletes.items()):
+            if pending.record.entry_id.lower() == record.entry_id.lower():
+                self.pending_deletes.pop(key, None)
+        self._refresh_monthly_summary()
+        await update.message.reply_text(f"Deleted {self._delete_candidate_line(record)}.")
+        return True
+
     async def _ask_delete_confirmation(
         self,
         update: Update,
@@ -1858,17 +1893,18 @@ class FinanceBot:
             if pending.pending_id is not None:
                 self.pending.pop(pending.pending_id, None)
             if key in self.pending_payment_batches:
-                await update.message.reply_text("Duplicate not logged.")
+                await update.message.reply_text(DUPLICATE_NOT_LOGGED_TEXT)
                 await self._continue_payment_batch(update)
                 return True
             remaining = self._matching_pending(update, latest_batch_only=True) or self._matching_pending(update)
             if remaining:
                 await update.message.reply_text(
-                    "Duplicate not logged.\n\n"
+                    DUPLICATE_NOT_LOGGED_TEXT
+                    + "\n\n"
                     + self._pending_summary(update, "Pending expenses still need your decision:")
                 )
             else:
-                await update.message.reply_text("Duplicate not logged.")
+                await update.message.reply_text(DUPLICATE_NOT_LOGGED_TEXT)
             return True
 
         if lowered != "confirm":
@@ -3567,7 +3603,7 @@ def main() -> None:
     application.add_handler(CommandHandler(["categories", "category"], finance_bot.categories))
     application.add_handler(CommandHandler("categorydebug", finance_bot.category_debug))
     application.add_handler(CommandHandler("refreshcategories", finance_bot.refresh_categories))
-    application.add_handler(CommandHandler("refreshpayments", finance_bot.refresh_payments))
+    application.add_handler(CommandHandler(list(REFRESH_PAYMENT_COMMANDS), finance_bot.refresh_payments))
     application.add_handler(CommandHandler("pending", finance_bot.pending_command))
     application.add_handler(CommandHandler("summary", finance_bot.summary_command))
     application.add_handler(CommandHandler(["cards", "cardsummary", "cardlimits", "cardlimit"], finance_bot.cards_command))

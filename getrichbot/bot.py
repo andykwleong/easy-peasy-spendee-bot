@@ -12,7 +12,7 @@ from datetime import time
 from datetime import datetime
 from datetime import date
 from datetime import timedelta
-from time import perf_counter
+from time import perf_counter, sleep
 from zoneinfo import ZoneInfo
 
 from getrichbot.categories import ALL_CATEGORIES, CATEGORY_ALIASES, FIXED_CATEGORIES, VARIABLE_CATEGORIES, category_config_status, configure_category_config
@@ -29,7 +29,7 @@ from getrichbot.logging_utils import configure_logging
 from getrichbot.models import CardUsageRow, ExpenseDraft, ExpenseRecord, ExpenseRow
 from getrichbot.parser import categorize_description, extract_date_phrase, extract_standalone_date, parse_expense, parse_expenses
 from getrichbot.row_edits import category_for_linked_message, expense_kind, format_saved_row, latest_logged_row, match_category, parse_immediate_edit, plan_edit, record_for_message_id
-from getrichbot.sheets import SheetsClient
+from getrichbot.sheets import CATEGORY_SHEET_READ_TIMEOUT_SECONDS, SheetsClient
 from getrichbot.summary import (
     build_category_breakdown,
     build_personal_expense_history,
@@ -3519,15 +3519,11 @@ def _card_summary_month_number(value: str) -> int | None:
     return months.get(value.lower())
 
 
+CATEGORY_SHEET_RETRY_SECONDS = 15
+
+
 def load_category_config_from_sheets(settings: Settings, sheets: SheetsClient) -> dict:
-    try:
-        sheet_category_config = sheets.get_category_config(settings.categories_sheet, settings.category_keywords_sheet)
-    except TimeoutError as exc:
-        LOGGER.error("Category sheet read timed out. Placeholder categories were not loaded.")
-        raise RuntimeError(
-            "Reading categories from Google Sheets took too long. "
-            "Startup stopped so placeholder categories were not used."
-        ) from exc
+    sheet_category_config = sheets.get_category_config(settings.categories_sheet, settings.category_keywords_sheet)
     if not sheet_category_config.get("variable_categories"):
         raise RuntimeError(
             "No active categories found in Google Sheets. "
@@ -3536,19 +3532,36 @@ def load_category_config_from_sheets(settings: Settings, sheets: SheetsClient) -
     return sheet_category_config
 
 
-def open_dashboard_then_load_categories(settings: Settings, sheets: SheetsClient):
+def open_dashboard_then_load_categories(
+    settings: Settings,
+    sheets: SheetsClient,
+    *,
+    pause=sleep,
+    retry_seconds: float = CATEGORY_SHEET_RETRY_SECONDS,
+):
     """Listen for the page before reading the category sheet.
 
-    The page and the Telegram bot share this process. If the category read
-    runs first and the sheet never answers, nothing is listening and the
-    site stays silent.
+    The page and the Telegram bot share this process. If the category sheet
+    does not answer, the page stays up and the read is tried again. Placeholder
+    categories are not loaded.
     """
     from getrichbot.dashboard_http import start_dashboard_server
 
+    if retry_seconds <= 0:
+        raise ValueError("Category sheet retry wait must be greater than zero.")
     print("Dashboard page is starting.", flush=True)
     dashboard_server = start_dashboard_server(settings, sheets)
-    sheet_category_config = load_category_config_from_sheets(settings, sheets)
-    return dashboard_server, sheet_category_config
+    while True:
+        try:
+            sheet_category_config = load_category_config_from_sheets(settings, sheets)
+        except TimeoutError:
+            LOGGER.error(
+                "Category sheet did not answer within %s seconds. The page stays up and the read will be tried again. Placeholder categories were not loaded.",
+                CATEGORY_SHEET_READ_TIMEOUT_SECONDS,
+            )
+            pause(retry_seconds)
+            continue
+        return dashboard_server, sheet_category_config
 
 
 def main() -> None:

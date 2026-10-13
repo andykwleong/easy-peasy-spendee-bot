@@ -758,6 +758,11 @@ class DashboardPromptTests(unittest.IsolatedAsyncioTestCase):
                     payment_channel="All",
                 )
             )
+
+            def rewrite_month(sheet_name, rows):
+                raise AssertionError("the save must not rewrite Monthly Summary")
+
+            sheets.update_monthly_summary = rewrite_month
             app, _sheets = app_for(sheets)
             _status, headers, _payload = app.handle(
                 "POST",
@@ -797,6 +802,11 @@ class DashboardPromptTests(unittest.IsolatedAsyncioTestCase):
             changed = next(row for row in sheets.records if row.entry_id == "cc3111")
             self.assertEqual(changed.transaction_type, "Expense")
             self.assertEqual(changed.payment_method, "Sample Visa")
+            shown = next(item for item in expense_saved["recent"] if item["id"] == "cc3111")
+            self.assertEqual(shown["category"], "Transport")
+            self.assertEqual(shown["kind"], "expense")
+            self.assertEqual(shown["payment_method"], "Sample Visa")
+            self.assertFalse(hasattr(sheets, "summary_rows"))
             self.assertEqual(changed.payment_owner, "Alex")
             self.assertEqual(
                 sheets.keywords,

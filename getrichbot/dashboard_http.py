@@ -307,8 +307,8 @@ class DashboardApp:
                         record,
                         planned.category,
                     )
-                if planned.amount is not None or planned.category is not None:
-                    self._refresh_monthly_summary()
+                # The next normal summary refresh rebuilds the month. Doing it
+                # inside this save can sit forever, and the page never returns.
             else:
                 self.context.sheets.update_card_usage_record(
                     self.context.card_usage_sheet,

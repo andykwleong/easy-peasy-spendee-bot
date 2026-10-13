@@ -105,6 +105,7 @@ class EditableSheets(FakeSheets):
         super().__init__()
         self.writes = []
         self.deletes = []
+        self.keywords = []
         self.config = parse_payment_config(
             [
                 ["Payment Method", "Owner", "Type", "Cycle Type", "Cycle Start Day", "Active"],
@@ -127,6 +128,9 @@ class EditableSheets(FakeSheets):
                 record = replace(record, **changes)
             updated.append(record)
         self.records = updated
+
+    def upsert_category_keyword(self, sheet_name, keyword, category):
+        self.keywords.append((sheet_name, keyword, category))
 
     def update_card_usage_record(self, sheet_name, row_number, **kwargs):
         self.writes.append(("card_usage", row_number, kwargs))
@@ -702,6 +706,130 @@ class DashboardPromptTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(status, 400)
         self.assertEqual(body_json(payload)["message"], "Income has no card.")
         self.assertEqual(sheets.writes, [])
+
+    def test_fix_tagging_switches_transaction_type_and_lists_expenses_first(self):
+        from getrichbot import categories
+        from getrichbot.categories import configure_category_config
+
+        original = {
+            "variable_categories": list(categories.VARIABLE_CATEGORIES),
+            "fixed_categories": list(categories.FIXED_CATEGORIES),
+            "category_keywords": {key: list(value) for key, value in categories.CATEGORY_KEYWORDS.items()},
+            "priority_keywords": [
+                {"category": category, "keywords": list(keywords)}
+                for category, keywords in categories.BILL_PRIORITY_KEYWORDS
+            ],
+            "shopping_keywords": list(categories.SHOPPING_KEYWORDS),
+            "shopping_categories": dict(categories.SHOPPING_CATEGORIES),
+            "category_aliases": dict(categories.CATEGORY_ALIASES),
+            "source": "test",
+        }
+        configure_category_config(
+            {
+                "variable_categories": ["Food", "Transport", "Income - Misc"],
+                "fixed_categories": ["Rent or mortgage"],
+                "category_keywords": {"Transport": ["transport"]},
+                "priority_keywords": [],
+                "shopping_keywords": [],
+                "shopping_categories": {},
+                "category_aliases": {},
+                "source": "test",
+            }
+        )
+        try:
+            sheets = EditableSheets()
+            sheets.records.append(
+                ExpenseRecord(
+                    row_number=8,
+                    entry_id="cc3111",
+                    timestamp="14:42:00",
+                    expense_date="2026-10-13",
+                    month="2026-10",
+                    logged_by="Alex",
+                    raw_input="email: GPAY NETWORK (S) PTE L Singapore SGP",
+                    amount=Decimal("9.60"),
+                    category="Income - Misc",
+                    description="GPAY NETWORK (S) PTE L Singapore SGP",
+                    input_type="Email",
+                    status="Confirmed",
+                    transaction_type="Income",
+                    payment_method="Sample Visa",
+                    payment_owner="Alex",
+                    payment_channel="All",
+                )
+            )
+            app, _sheets = app_for(sheets)
+            _status, headers, _payload = app.handle(
+                "POST",
+                "/api/session/widget",
+                {"Content-Type": "application/json"},
+                json.dumps(sign_widget(111)).encode(),
+                secure=True,
+            )
+            cookie = dict(headers)["Set-Cookie"].split(";", 1)[0]
+            signed = {"Content-Type": "application/json", "Cookie": cookie}
+
+            expense_status, _, expense_body = app.handle(
+                "POST",
+                "/api/dashboard/edit",
+                signed,
+                json.dumps({
+                    "id": "cc3111",
+                    "source": "expense",
+                    "field": "category",
+                    "value": "Transport",
+                }).encode(),
+                secure=True,
+            )
+            self.assertEqual(expense_status, 200)
+            expense_saved = body_json(expense_body)
+            self.assertEqual(expense_saved["edit_choices"]["category_picker"], ["Food", "Transport", "Income - Misc"])
+            self.assertLess(
+                expense_saved["edit_choices"]["category_picker"].index("Food"),
+                expense_saved["edit_choices"]["category_picker"].index("Income - Misc"),
+            )
+            income_write = sheets.writes[0][2]
+            self.assertEqual(income_write["category"], "Transport")
+            self.assertEqual(income_write["transaction_type"], "Expense")
+            self.assertIsNone(income_write["payment_method"])
+            self.assertIsNone(income_write["payment_owner"])
+            self.assertIsNone(income_write["payment_channel"])
+            changed = next(row for row in sheets.records if row.entry_id == "cc3111")
+            self.assertEqual(changed.transaction_type, "Expense")
+            self.assertEqual(changed.payment_method, "Sample Visa")
+            self.assertEqual(changed.payment_owner, "Alex")
+            self.assertEqual(
+                sheets.keywords,
+                [("Category Keywords", "gpay network (s) pte l singapore sgp", "Transport")],
+            )
+
+            income_status, _, income_body = app.handle(
+                "POST",
+                "/api/dashboard/edit",
+                signed,
+                json.dumps({
+                    "id": "aa1001",
+                    "source": "expense",
+                    "field": "category",
+                    "value": "Income - Misc",
+                }).encode(),
+                secure=True,
+            )
+            self.assertEqual(income_status, 200)
+            self.assertEqual(body_json(income_body)["edit_choices"]["category_picker"][0], "Food")
+            cleared = sheets.writes[1][2]
+            self.assertEqual(cleared["category"], "Income - Misc")
+            self.assertEqual(cleared["transaction_type"], "Income")
+            self.assertEqual(cleared["payment_method"], "")
+            self.assertEqual(cleared["payment_owner"], "")
+            self.assertEqual(cleared["payment_channel"], "")
+            original_row = next(row for row in sheets.records if row.entry_id == "aa1001")
+            self.assertEqual(original_row.transaction_type, "Income")
+            self.assertEqual(original_row.payment_method, "")
+            self.assertEqual(original_row.payment_owner, "")
+            self.assertEqual(original_row.payment_channel, "")
+        finally:
+            configure_category_config(original)
 
     def test_delete_does_not_run_until_confirm(self):
         sheets = EditableSheets()

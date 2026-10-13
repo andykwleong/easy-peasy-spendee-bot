@@ -129,6 +129,15 @@ def categories_for(kind: str) -> tuple[str, ...]:
     return ()
 
 
+def category_picker_choices(kind: str) -> tuple[str, ...]:
+    """Expense categories first, then income categories. Fixed rows stay fixed."""
+    if kind == "fixed":
+        return categories_for("fixed")
+    if kind in {"income", "expense"}:
+        return categories_for("expense") + categories_for("income")
+    return ()
+
+
 def category_for_linked_message(
     text: str,
     categories: tuple[str, ...],
@@ -192,6 +201,7 @@ def edit_choices(payment_config: PaymentConfig | None) -> dict:
         "expense_categories": list(categories_for("expense")),
         "income_categories": list(categories_for("income")),
         "fixed_categories": list(categories_for("fixed")),
+        "category_picker": list(category_picker_choices("expense")),
         "cards": cards,
     }
 
@@ -289,12 +299,27 @@ def plan_edit(
         return PlannedEdit("Saved.", amount=amount)
 
     if field == "category":
+        if kind in {"income", "expense"}:
+            expense_category = match_category(value, categories_for("expense"))
+            if expense_category is not None:
+                return PlannedEdit("Saved.", category=expense_category, transaction_type="Expense")
+            income_category = match_category(value, categories_for("income"))
+            if income_category is not None:
+                return PlannedEdit(
+                    "Saved.",
+                    category=income_category,
+                    transaction_type="Income",
+                    payment_method="",
+                    payment_owner="",
+                    payment_channel="",
+                    touch_payment=True,
+                )
+            return PlannedEdit("I do not recognize this category. Send: categories", error="invalid")
         choices = categories_for(kind)
         category = match_category(value, choices)
         if category is None:
             return PlannedEdit("I do not recognize this category. Send: categories", error="invalid")
-        transaction_type = "Fixed" if kind == "fixed" else ("Income" if kind == "income" else "Expense")
-        return PlannedEdit("Saved.", category=category, transaction_type=transaction_type)
+        return PlannedEdit("Saved.", category=category, transaction_type="Fixed")
 
     if payment_config is None:
         return PlannedEdit("I could not read the card list just now. Nothing was changed.", error="sheet")

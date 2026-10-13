@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from typing import Any
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -9,6 +10,54 @@ from getrichbot.models import CardUsageRecord, CardUsageRow, ExpenseRecord, Expe
 from getrichbot.cards import PaymentConfig, parse_payment_config
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+# A category read at startup must finish or fail. An open socket with no
+# deadline can sit forever, and the process then never answers the page.
+CATEGORY_SHEET_READ_TIMEOUT_SECONDS = 20
+
+
+def _request_http(request: Any) -> Any | None:
+    http = getattr(request, "http", None)
+    inner = getattr(http, "http", None)
+    if inner is not None and hasattr(inner, "timeout"):
+        return inner
+    if http is not None and hasattr(http, "timeout"):
+        return http
+    return None
+
+
+def execute_sheet_request(request: Any, timeout_seconds: float | None = None) -> Any:
+    """Run one Sheets call. A timeout stops a read that would otherwise never return."""
+    if timeout_seconds is None:
+        return request.execute()
+    if timeout_seconds <= 0:
+        raise ValueError("Sheet read timeout must be greater than zero.")
+    http = _request_http(request)
+    previous_timeout = getattr(http, "timeout", None) if http is not None else None
+    if http is not None:
+        http.timeout = timeout_seconds
+    outcome: dict[str, Any] = {}
+
+    def run() -> None:
+        try:
+            outcome["value"] = request.execute()
+        except Exception as exc:
+            outcome["error"] = exc
+
+    worker = threading.Thread(target=run, name="sheet-read", daemon=True)
+    try:
+        worker.start()
+        worker.join(timeout_seconds)
+        if worker.is_alive():
+            raise TimeoutError(f"Google Sheet read exceeded {timeout_seconds:g} seconds.")
+    finally:
+        if http is not None:
+            http.timeout = previous_timeout
+    if "error" in outcome:
+        error = outcome["error"]
+        if isinstance(error, TimeoutError):
+            raise TimeoutError(f"Google Sheet read exceeded {timeout_seconds:g} seconds.") from error
+        raise error
+    return outcome.get("value")
 
 
 class SheetsClient:
@@ -98,15 +147,28 @@ class SheetsClient:
             )
         return expenses
 
-    def get_category_config(self, categories_sheet: str, keywords_sheet: str) -> dict[str, Any]:
-        category_source, category_rows = self._get_values_first_available(
-            [categories_sheet, "Categories", "categories"],
-            "A2:D",
-        )
-        keyword_source, keyword_rows = self._get_values_first_available(
-            [keywords_sheet, "Category Keywords", "Category Keyword", "Categories Keyword", "categories keyword"],
-            "A2:D",
-        )
+    def get_category_config(
+        self,
+        categories_sheet: str,
+        keywords_sheet: str,
+        *,
+        timeout_seconds: float = CATEGORY_SHEET_READ_TIMEOUT_SECONDS,
+    ) -> dict[str, Any]:
+        if timeout_seconds <= 0:
+            raise ValueError("Category sheet read timeout must be greater than zero.")
+        previous_timeout = getattr(self, "_values_timeout_seconds", None)
+        self._values_timeout_seconds = timeout_seconds
+        try:
+            category_source, category_rows = self._get_values_first_available(
+                [categories_sheet, "Categories", "categories"],
+                "A2:D",
+            )
+            keyword_source, keyword_rows = self._get_values_first_available(
+                [keywords_sheet, "Category Keywords", "Category Keyword", "Categories Keyword", "categories keyword"],
+                "A2:D",
+            )
+        finally:
+            self._values_timeout_seconds = previous_timeout
 
         variable_categories: list[str] = []
         fixed_categories: list[str] = []
@@ -565,11 +627,14 @@ class SheetsClient:
             if not sheet_name or sheet_name in seen:
                 continue
             seen.append(sheet_name)
+            request = self._service().spreadsheets().values().get(
+                spreadsheetId=self.sheet_id,
+                range=f"{sheet_name}!{cell_range}",
+            )
             try:
-                result = self._service().spreadsheets().values().get(
-                    spreadsheetId=self.sheet_id,
-                    range=f"{sheet_name}!{cell_range}",
-                ).execute()
+                result = execute_sheet_request(request, getattr(self, "_values_timeout_seconds", None))
+            except TimeoutError:
+                raise
             except Exception:
                 continue
             return sheet_name, result.get("values", [])

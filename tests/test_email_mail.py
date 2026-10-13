@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 
 from getrichbot.cards import build_card_summary
 from getrichbot.cards import parse_payment_config
+from getrichbot.categories import configure_category_config
 from getrichbot.email_mail import INCOME_MISC
 from getrichbot.email_mail import REVERSAL_MISSING_TEXT
 from getrichbot.email_mail import build_expense_row
@@ -830,6 +831,176 @@ class EmailMailTests(unittest.TestCase):
         self.assertEqual(saved, [("sample office", "Income Tax")])
         self.assertNotEqual(decision.category, "Income - A")
         self.assertNotEqual(decision.category, "Income - fx")
+
+    def test_card_ending_to_a_shop_is_an_expense_even_when_lookup_says_income(self):
+        body = "\n".join(
+            (
+                "We refer to your card transaction request dated 13/10/26. We are pleased to confirm that the transaction was completed.",
+                "",
+                "Date & Time: 13 OCT 14:42 (SGT)",
+                "Amount: SGD9.60",
+                "From: DBS/POSB card ending 1111",
+                "To: GPAY NETWORK (S) PTE L Singapore SGP",
+            )
+        )
+        calls = []
+        saved = []
+
+        def category_for(shop, logged_by, body=""):
+            del logged_by, body
+            calls.append(shop)
+            return "Income - misc"
+
+        config = config_with(channels=("Online",), last4="1111")
+        decision = decide_mail(
+            "Card transaction",
+            body,
+            ("person-a@example.com",),
+            forwarders={"person-a@example.com": "Me"},
+            methods=config.payment_methods,
+            categories=("Transport", "Food", "Income - misc"),
+            channels_for=config.channel_options_for,
+            category_for=category_for,
+            today=TODAY,
+            remember_category=lambda keyword, category: saved.append((keyword, category)),
+        )
+
+        self.assertEqual(calls, [])
+        self.assertEqual(decision.action, "log", decision.text)
+        self.assertEqual(decision.category, "Transport")
+        self.assertEqual(decision.shop, "GPAY NETWORK (S) PTE L Singapore SGP")
+        self.assertEqual(decision.amount, Decimal("9.60"))
+        self.assertEqual(decision.last4, "1111")
+        self.assertEqual(decision.expense_date, date(2026, 10, 13))
+        self.assertEqual(decision.payment_method, "UOB Sample Visa")
+        self.assertEqual(saved, [("gpay network (s) pte l singapore sgp", "Transport")])
+        row = build_expense_row(decision, chat_id=-100, now=datetime(2026, 10, 13, 14, 42, tzinfo=SINGAPORE))
+        self.assertEqual(row.transaction_type, "Expense")
+        self.assertEqual(row.payment_method, "UOB Sample Visa")
+        self.assertEqual(row.category, "Transport")
+
+    def test_gpay_without_transport_logs_a_blank_expense(self):
+        body = "\n".join(
+            (
+                "We refer to your card transaction request dated 13/10/26. We are pleased to confirm that the transaction was completed.",
+                "",
+                "Date & Time: 13 OCT 14:42 (SGT)",
+                "Amount: SGD9.60",
+                "From: DBS/POSB card ending 1111",
+                "To: GPAY NETWORK (S) PTE L Singapore SGP",
+            )
+        )
+        calls = []
+        config = config_with(channels=("Online",), last4="1111")
+        decision = decide_mail(
+            "Card transaction",
+            body,
+            ("person-a@example.com",),
+            forwarders={"person-a@example.com": "Me"},
+            methods=config.payment_methods,
+            categories=("Food", "Income - misc"),
+            channels_for=config.channel_options_for,
+            category_for=lambda shop, logged_by, body="": calls.append(shop) or "Income - misc",
+            today=TODAY,
+        )
+        self.assertEqual(calls, [])
+        self.assertEqual(decision.action, "log")
+        self.assertEqual(decision.category, "")
+        self.assertEqual(decision.payment_method, "UOB Sample Visa")
+        self.assertEqual(decision.last4, "1111")
+        row = build_expense_row(decision, chat_id=-100, now=datetime(2026, 10, 13, 14, 42, tzinfo=SINGAPORE))
+        self.assertEqual(row.transaction_type, "Expense")
+        self.assertEqual(row.payment_method, "UOB Sample Visa")
+        self.assertIn("Category is missing", email_logged_text(row))
+
+    def test_gpay_uses_the_category_whose_keyword_is_transport(self):
+        from getrichbot import categories
+
+        original = {
+            "variable_categories": list(categories.VARIABLE_CATEGORIES),
+            "fixed_categories": list(categories.FIXED_CATEGORIES),
+            "category_keywords": {key: list(value) for key, value in categories.CATEGORY_KEYWORDS.items()},
+            "priority_keywords": [
+                {"category": category, "keywords": list(keywords)}
+                for category, keywords in categories.BILL_PRIORITY_KEYWORDS
+            ],
+            "shopping_keywords": list(categories.SHOPPING_KEYWORDS),
+            "shopping_categories": dict(categories.SHOPPING_CATEGORIES),
+            "category_aliases": dict(categories.CATEGORY_ALIASES),
+            "source": "test",
+        }
+        configure_category_config(
+            {
+                "variable_categories": ["Getting around", "Food"],
+                "fixed_categories": ["Rent or mortgage"],
+                "category_keywords": {"Getting around": ["transport"]},
+                "priority_keywords": [],
+                "shopping_keywords": [],
+                "shopping_categories": {},
+                "category_aliases": {},
+                "source": "test",
+            }
+        )
+        try:
+            body = "\n".join(
+                (
+                    "Date & Time: 13 OCT 14:42 (SGT)",
+                    "dated 13/10/26",
+                    "Amount: SGD9.60",
+                    "From: card ending 1111",
+                    "To: GPAY NETWORK (S) PTE L Singapore SGP",
+                )
+            )
+            config = config_with(channels=("Online",), last4="1111")
+            decision = decide_mail(
+                "Card transaction",
+                body,
+                ("person-a@example.com",),
+                forwarders={"person-a@example.com": "Me"},
+                methods=config.payment_methods,
+                categories=("Getting around", "Food", "Income - misc"),
+                channels_for=config.channel_options_for,
+                category_for=lambda shop, logged_by, body="": "Income - misc",
+                today=TODAY,
+            )
+            self.assertEqual(decision.category, "Getting around")
+            self.assertEqual(decision.payment_method, "UOB Sample Visa")
+            row = build_expense_row(decision, chat_id=-100, now=datetime(2026, 10, 13, 14, 42, tzinfo=SINGAPORE))
+            self.assertEqual(row.transaction_type, "Expense")
+        finally:
+            configure_category_config(original)
+
+    def test_other_card_to_shop_mail_drops_an_income_category_and_keeps_the_card(self):
+        body = "\n".join(
+            (
+                "Date & Time: 13 OCT 14:42 (SGT)",
+                "dated 13/10/26",
+                "Amount: SGD9.60",
+                "From: card ending 1111",
+                "To: SAMPLE SHOP",
+            )
+        )
+        config = config_with(channels=("Online",), last4="1111")
+        decision = decide_mail(
+            "Card transaction",
+            body,
+            ("person-a@example.com",),
+            forwarders={"person-a@example.com": "Me"},
+            methods=config.payment_methods,
+            categories=("Food", "Transport", "Income - misc"),
+            channels_for=config.channel_options_for,
+            category_for=lambda shop, logged_by, body="": "Income - misc",
+            today=TODAY,
+        )
+        self.assertEqual(decision.action, "log")
+        self.assertEqual(decision.category, "")
+        self.assertEqual(decision.shop, "SAMPLE SHOP")
+        self.assertEqual(decision.payment_method, "UOB Sample Visa")
+        self.assertEqual(decision.last4, "1111")
+        row = build_expense_row(decision, chat_id=-100, now=datetime(2026, 10, 13, 14, 42, tzinfo=SINGAPORE))
+        self.assertEqual(row.transaction_type, "Expense")
+        self.assertEqual(row.payment_method, "UOB Sample Visa")
+        self.assertIn("Category is missing", email_logged_text(row))
 
     def test_clock_time_is_optional_between_the_date_and_the_shop(self):
         body = (

@@ -63,6 +63,8 @@ _SHOP_LABEL_RE = re.compile(
     r"^(?:transaction\s+details|description|merchant|shop|to)\b\s*:?\s*(.*)$",
     re.IGNORECASE,
 )
+_FROM_LINE_RE = re.compile(r"^from\b\s*:?\s*(.*)$", re.IGNORECASE)
+_TO_LINE_RE = re.compile(r"^to\b\s*:?\s*(.*)$", re.IGNORECASE)
 _UEN_RE = re.compile(r"\s*\(\s*UEN\s+ending\s+[^)]*\)", re.IGNORECASE)
 _EMAIL_RE = re.compile(r"[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}", re.IGNORECASE)
 _MAILBOX_LINE_RE = re.compile(
@@ -362,21 +364,14 @@ def _purchase_decision(
         )
     card = matches[0]
     logged_by = _logged_by(addresses, forwarders) or ""
-    from getrichbot.shop_category import category_named_in_text
-
-    named = category_named_in_text(body, categories)
-    if named:
-        _remember_shop(remember_category, shop, named)
-        category = named
-    else:
-        try:
-            try:
-                category = category_for(shop, logged_by, body) or ""
-            except TypeError:
-                category = category_for(shop, logged_by) or ""
-        except Exception:
-            LOGGER.exception("Could not choose a category. The purchase is still logged with a blank category.")
-            category = ""
+    category = _purchase_category(
+        body,
+        shop,
+        logged_by,
+        categories,
+        category_for,
+        remember_category,
+    )
     if category.casefold().startswith("income -"):
         return EmailDecision(
             action="log",
@@ -599,6 +594,61 @@ def _missing_purchase_pieces(amount, expense_date, last4) -> list[str]:
     if not last4:
         missing.append("card")
     return missing
+
+
+def _card_ending_to_shop(body: str) -> bool:
+    """True when From names a card ending and To names a shop."""
+    has_from_card = False
+    has_to_shop = False
+    lines = (body or "").splitlines()
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        from_match = _FROM_LINE_RE.match(stripped)
+        if from_match and re.search(r"\bcard\b", from_match.group(1), re.IGNORECASE):
+            if _LAST4_RE.search(from_match.group(1)):
+                has_from_card = True
+        to_match = _TO_LINE_RE.match(stripped)
+        if to_match is None:
+            continue
+        raw = to_match.group(1).strip()
+        if not raw:
+            for later in lines[index + 1 :]:
+                if later.strip():
+                    raw = later.strip()
+                    break
+        shop = _clean_shop(raw)
+        if shop and not is_email_shop(shop):
+            has_to_shop = True
+    return has_from_card and has_to_shop
+
+
+def _purchase_category(body, shop, logged_by, categories, category_for, remember_category) -> str:
+    from getrichbot.shop_category import category_named_in_text
+    from getrichbot.shop_category import existing_transport_category
+    from getrichbot.shop_category import is_grab_shop
+
+    if is_grab_shop(shop):
+        transport = existing_transport_category(categories) or ""
+        if transport:
+            _remember_shop(remember_category, shop, transport)
+        return transport
+
+    named = category_named_in_text(body, categories)
+    if named:
+        _remember_shop(remember_category, shop, named)
+        category = named
+    else:
+        try:
+            try:
+                category = category_for(shop, logged_by, body) or ""
+            except TypeError:
+                category = category_for(shop, logged_by) or ""
+        except Exception:
+            LOGGER.exception("Could not choose a category. The purchase is still logged with a blank category.")
+            category = ""
+    if _card_ending_to_shop(body) and category.casefold().startswith("income -"):
+        return ""
+    return category
 
 
 def _remember_shop(remember_category, shop: str, category: str) -> None:

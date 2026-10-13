@@ -448,8 +448,11 @@ function fieldsFor(row) {
 
 function categoryChoices(row) {
   const choices = state.payload.edit_choices || {};
-  if (row.kind === "income") return choices.income_categories || [];
   if (row.kind === "fixed") return choices.fixed_categories || [];
+  if (row.kind === "income" || row.kind === "expense") {
+    if (choices.category_picker && choices.category_picker.length) return choices.category_picker;
+    return (choices.expense_categories || []).concat(choices.income_categories || []);
+  }
   return choices.expense_categories || [];
 }
 

@@ -220,6 +220,86 @@ class ShopCategoryTests(unittest.TestCase):
 
         self.assertEqual(saved, [("sample depot", "Transport")])
 
+    def test_gpay_uses_transport_and_is_not_looked_up(self):
+        queries = []
+        asked = []
+        result = resolve_shop_category(
+            "GPAY NETWORK (S) PTE L Singapore SGP",
+            "Me",
+            "Me",
+            "My wife",
+            ("Transport", "Food", "Income - misc"),
+            lambda query: queries.append(query),
+            lambda *args: asked.append(args) or "Income - misc",
+        )
+        self.assertEqual(result.category, "Transport")
+        self.assertEqual(result.learned_keyword, "gpay network (s) pte l singapore sgp")
+        self.assertEqual(queries, [])
+        self.assertEqual(asked, [])
+
+        missing = resolve_shop_category(
+            "GPAY NETWORK (S) PTE L Singapore SGP",
+            "Me",
+            "Me",
+            "My wife",
+            ("Food", "Income - misc"),
+            lambda query: queries.append(query),
+            lambda *args: asked.append(args) or "Income - misc",
+        )
+        self.assertIsNone(missing.category)
+        self.assertEqual(missing.learned_keyword, "")
+        self.assertEqual(queries, [])
+        self.assertEqual(asked, [])
+
+    def test_grab_keyword_transport_is_used_when_the_name_is_different(self):
+        configure_category_config(
+            {
+                **self.original,
+                "variable_categories": ["Getting around", "Food"],
+                "category_keywords": {"Getting around": ["transport"]},
+                "priority_keywords": [],
+                "shopping_categories": {},
+                "category_aliases": {},
+            }
+        )
+        queries = []
+        result = resolve_shop_category(
+            "Grab ride",
+            "Me",
+            "Me",
+            "My wife",
+            ("Getting around", "Food", "Income - misc"),
+            lambda query: queries.append(query),
+            lambda *_args: "Income - misc",
+        )
+        self.assertEqual(result.category, "Getting around")
+        self.assertEqual(queries, [])
+
+    def test_later_gpay_correction_saves_the_shop_keyword(self):
+        saved = []
+        email = ExpenseRecord(
+            row_number=4,
+            entry_id="abc124",
+            timestamp="14:42:00",
+            expense_date="2026-10-13",
+            month="2026-10",
+            logged_by="Me",
+            raw_input="email: GPAY NETWORK (S) PTE L Singapore SGP",
+            amount=Decimal("9.60"),
+            category="",
+            description="GPAY NETWORK (S) PTE L Singapore SGP",
+            input_type="Email",
+            status="Confirmed",
+            transaction_type="Expense",
+            payment_method="UOB Sample Visa",
+        )
+        remember_email_shop_correction(
+            email,
+            "Transport",
+            lambda keyword, category: saved.append((keyword, category)),
+        )
+        self.assertEqual(saved, [("gpay network (s) pte l singapore sgp", "Transport")])
+
     def test_keyword_sheet_adds_once_and_then_updates_the_same_shop(self):
         added = keyword_upsert_actions([], "sample depot", "Groceries")
         self.assertEqual(added, [("append", 0, ["sample depot", "Groceries", "Priority", "TRUE"])])

@@ -13,12 +13,14 @@ import re
 from dataclasses import dataclass
 
 from getrichbot.categories import ALL_CATEGORIES
+from getrichbot.categories import CATEGORY_KEYWORDS
 from getrichbot.categories import remember_priority_keyword
 from getrichbot.email_mail import category_from_keywords, is_email_shop
 
 LOGGER = logging.getLogger(__name__)
 
 _PREFIX_RE = re.compile(r"^(?:[A-Za-z]{1,12}\s*\*\s*)+")
+_GRAB_SHOP_RE = re.compile(r"\bgpay\b|\bgrab(?:food)?\b", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -46,6 +48,32 @@ def category_named_in_text(text: str, categories: tuple[str, ...]) -> str | None
     return _category_name_in_text(text, tuple(category for category in categories if category))
 
 
+def is_grab_shop(shop: str) -> bool:
+    """GPAY and Grab are the same transport merchant."""
+    return _GRAB_SHOP_RE.search(shop or "") is not None
+
+
+def existing_transport_category(categories: tuple[str, ...]) -> str | None:
+    """A category already on the list whose name or keyword is transport.
+
+    Nothing here invents the name. An income category is not transport.
+    """
+    names = tuple(
+        category
+        for category in categories
+        if category and not category.casefold().startswith("income")
+    )
+    for category in names:
+        folded = category.casefold()
+        if folded == "transport" or folded.startswith("transport ") or folded.startswith("transport-"):
+            return category
+    for category in names:
+        for keyword in CATEGORY_KEYWORDS.get(category, ()):
+            if str(keyword).casefold() == "transport":
+                return category
+    return None
+
+
 def resolve_shop_category(
     shop: str,
     logged_by: str,
@@ -58,6 +86,11 @@ def resolve_shop_category(
     if is_email_shop(shop):
         return ShopCategory(None)
     sheet_categories = tuple(category for category in categories if category)
+    if is_grab_shop(shop):
+        transport = existing_transport_category(sheet_categories)
+        if transport:
+            return ShopCategory(transport, shop_keyword(shop))
+        return ShopCategory(None)
     allowed = tuple(category for category in sheet_categories if not category.casefold().startswith("income"))
     known = category_from_keywords(shop, logged_by, me_label, wife_label)
     if known in allowed:

@@ -6,7 +6,9 @@ from getrichbot.cards import parse_payment_config
 from getrichbot.categories import configure_category_config
 from getrichbot.models import CardUsageRecord, ExpenseRecord
 from getrichbot.row_edits import (
+    category_picker_choices,
     channel_after_card_change,
+    edit_choices,
     find_payment_method,
     format_saved_row,
     parse_finished_amount,
@@ -185,6 +187,48 @@ class PlanEditTests(unittest.TestCase):
         self.assertEqual(planned.error, "ambiguous")
         chosen = plan_edit(kind="expense", field="card", value="Sample Visa", owner="Sam", payment_config=config)
         self.assertEqual(chosen.payment_owner, "Sam")
+
+    def test_picker_lists_expenses_before_income_and_switches_transaction_type(self):
+        original = configure_snapshot()
+        configure_category_config(
+            {
+                "variable_categories": ["Food", "Transport", "Income - Misc"],
+                "fixed_categories": ["Rent or mortgage"],
+                "category_keywords": {"Transport": ["transport"]},
+                "priority_keywords": [],
+                "shopping_keywords": [],
+                "shopping_categories": {},
+                "category_aliases": {},
+                "source": "test",
+            }
+        )
+        try:
+            picker = category_picker_choices("income")
+            self.assertEqual(picker, ("Food", "Transport", "Income - Misc"))
+            self.assertEqual(category_picker_choices("expense"), picker)
+            self.assertEqual(category_picker_choices("fixed"), ("Rent or mortgage",))
+            self.assertEqual(edit_choices(None)["category_picker"], ["Food", "Transport", "Income - Misc"])
+            self.assertLess(
+                edit_choices(None)["category_picker"].index("Transport"),
+                edit_choices(None)["category_picker"].index("Income - Misc"),
+            )
+
+            to_expense = plan_edit(kind="income", field="category", value="Transport")
+            self.assertTrue(to_expense.ok)
+            self.assertEqual(to_expense.category, "Transport")
+            self.assertEqual(to_expense.transaction_type, "Expense")
+            self.assertFalse(to_expense.touch_payment)
+
+            to_income = plan_edit(kind="expense", field="category", value="Income - Misc")
+            self.assertTrue(to_income.ok)
+            self.assertEqual(to_income.category, "Income - Misc")
+            self.assertEqual(to_income.transaction_type, "Income")
+            self.assertEqual(to_income.payment_method, "")
+            self.assertEqual(to_income.payment_owner, "")
+            self.assertEqual(to_income.payment_channel, "")
+            self.assertTrue(to_income.touch_payment)
+        finally:
+            configure_category_config(original)
 
     def test_category_line_stays_the_same_shape(self):
         self.assertEqual(

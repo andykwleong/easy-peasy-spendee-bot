@@ -149,6 +149,72 @@ class EditableSheets(FakeSheets):
         return len(self.records) != before
 
 
+class _CellRequest:
+    def __init__(self, action):
+        self._action = action
+
+    def execute(self):
+        return self._action()
+
+
+class _IncomeGrid:
+    """One income row with a stored card, in the live sheet layout."""
+
+    def __init__(self):
+        self.rows = [
+            [
+                "Entry ID", "Timestamp", "Date", "Month", "Logged By", "Raw Input", "Amount",
+                "Category", "Description", "Payment Owner", "Payment Method", "Payment Channel",
+                "Transaction Type", "Input Type", "Status", "Telegram Chat ID", "Telegram Message ID",
+            ],
+            [
+                "cc3111", "14:42:00", "2026-10-13", "2026-10", "Alex", "email: sample shop", "9.60",
+                "Income - Misc", "Sample Grab Ride", "Alex", "Sample Visa", "All",
+                "Income", "Email", "Confirmed", "1", "email",
+            ],
+        ]
+
+    def spreadsheets(self):
+        return self
+
+    def values(self):
+        return self
+
+    def get(self, **kwargs):
+        cell_range = kwargs.get("range", "")
+
+        def run():
+            if cell_range.endswith("!A1:Q1"):
+                return {"values": [list(self.rows[0])]}
+            if "!A2:Q" in cell_range:
+                return {"values": [list(self.rows[1])]}
+            raise RuntimeError("summary stalled")
+
+        return _CellRequest(run)
+
+    def batchUpdate(self, **kwargs):
+        body = kwargs["body"]
+
+        def run():
+            if "data" not in body:
+                raise RuntimeError("summary stalled")
+            for item in body["data"]:
+                self._write(item["range"], item["values"])
+            return {}
+
+        return _CellRequest(run)
+
+    def _write(self, a1: str, values: list) -> None:
+        cell = a1.split("!", 1)[1]
+        index = 0
+        column = 0
+        while cell[index].isalpha():
+            column = column * 26 + (ord(cell[index].upper()) - 64)
+            index += 1
+        row_number = int(cell[index:]) - 1
+        self.rows[row_number][column - 1] = values[0][0]
+
+
 def labels(user_id: int) -> str | None:
     if user_id == 111:
         return "Alex"
@@ -828,6 +894,88 @@ class DashboardPromptTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(original_row.payment_method, "")
             self.assertEqual(original_row.payment_owner, "")
             self.assertEqual(original_row.payment_channel, "")
+        finally:
+            configure_category_config(original)
+
+    def test_income_transport_edit_returns_a_page_when_the_summary_stalls(self):
+        from getrichbot import categories
+        from getrichbot.categories import configure_category_config
+
+        original = {
+            "variable_categories": list(categories.VARIABLE_CATEGORIES),
+            "fixed_categories": list(categories.FIXED_CATEGORIES),
+            "category_keywords": {key: list(value) for key, value in categories.CATEGORY_KEYWORDS.items()},
+            "priority_keywords": [
+                {"category": category, "keywords": list(keywords)}
+                for category, keywords in categories.BILL_PRIORITY_KEYWORDS
+            ],
+            "shopping_keywords": list(categories.SHOPPING_KEYWORDS),
+            "shopping_categories": dict(categories.SHOPPING_CATEGORIES),
+            "category_aliases": dict(categories.CATEGORY_ALIASES),
+            "source": "test",
+        }
+        configure_category_config(
+            {
+                "variable_categories": ["Food", "Transport", "Income - Misc"],
+                "fixed_categories": ["Rent or mortgage"],
+                "category_keywords": {"Transport": ["transport"]},
+                "priority_keywords": [],
+                "shopping_keywords": [],
+                "shopping_categories": {},
+                "category_aliases": {},
+                "source": "test",
+            }
+        )
+        try:
+            sheets = SheetsClient("sheet-id")
+            sheets.service = _IncomeGrid()
+            app, _sheets = app_for(sheets)
+            server = DashboardHTTPServer("127.0.0.1", 0, app)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                port = server.server_address[1]
+                connection = HTTPConnection("127.0.0.1", port)
+                connection.request(
+                    "POST",
+                    "/api/session/widget",
+                    json.dumps(sign_widget(111)).encode(),
+                    {"Content-Type": "application/json"},
+                )
+                login = connection.getresponse()
+                login.read()
+                cookie = login.getheader("Set-Cookie").split(";", 1)[0]
+                connection.request(
+                    "POST",
+                    "/api/dashboard/edit",
+                    json.dumps({
+                        "id": "cc3111",
+                        "source": "expense",
+                        "field": "category",
+                        "value": "Transport",
+                    }).encode(),
+                    {"Content-Type": "application/json", "Cookie": cookie},
+                )
+                response = connection.getresponse()
+                raw = response.read()
+            finally:
+                server.shutdown()
+                server.server_close()
+
+            self.assertEqual(response.status, 200)
+            page = json.loads(raw.decode())
+            self.assertTrue(page["ok"])
+            saved = next(item for item in page["recent"] if item["id"] == "cc3111")
+            self.assertEqual(saved["kind"], "expense")
+            self.assertEqual(saved["category"], "Transport")
+            self.assertEqual(saved["payment_method"], "Sample Visa")
+            self.assertEqual(saved["payment_owner"], "Alex")
+            record = sheets.get_expense_records("Raw Expenses")[0]
+            self.assertEqual(record.transaction_type, "Expense")
+            self.assertEqual(record.category, "Transport")
+            self.assertEqual(record.payment_method, "Sample Visa")
+            self.assertEqual(record.payment_owner, "Alex")
+            self.assertEqual(record.payment_channel, "All")
         finally:
             configure_category_config(original)
 

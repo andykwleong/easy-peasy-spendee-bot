@@ -3520,13 +3520,35 @@ def _card_summary_month_number(value: str) -> int | None:
 
 
 def load_category_config_from_sheets(settings: Settings, sheets: SheetsClient) -> dict:
-    sheet_category_config = sheets.get_category_config(settings.categories_sheet, settings.category_keywords_sheet)
+    try:
+        sheet_category_config = sheets.get_category_config(settings.categories_sheet, settings.category_keywords_sheet)
+    except TimeoutError as exc:
+        LOGGER.error("Category sheet read timed out. Placeholder categories were not loaded.")
+        raise RuntimeError(
+            "Reading categories from Google Sheets took too long. "
+            "Startup stopped so placeholder categories were not used."
+        ) from exc
     if not sheet_category_config.get("variable_categories"):
         raise RuntimeError(
             "No active categories found in Google Sheets. "
             f"Check sheet tabs '{settings.categories_sheet}' and '{settings.category_keywords_sheet}'."
         )
     return sheet_category_config
+
+
+def open_dashboard_then_load_categories(settings: Settings, sheets: SheetsClient):
+    """Listen for the page before reading the category sheet.
+
+    The page and the Telegram bot share this process. If the category read
+    runs first and the sheet never answers, nothing is listening and the
+    site stays silent.
+    """
+    from getrichbot.dashboard_http import start_dashboard_server
+
+    print("Dashboard page is starting.", flush=True)
+    dashboard_server = start_dashboard_server(settings, sheets)
+    sheet_category_config = load_category_config_from_sheets(settings, sheets)
+    return dashboard_server, sheet_category_config
 
 
 def main() -> None:
@@ -3539,7 +3561,7 @@ def main() -> None:
         service_account_file=settings.service_account_file,
         service_account_json=settings.service_account_json,
     )
-    sheet_category_config = load_category_config_from_sheets(settings, sheets)
+    dashboard_server, sheet_category_config = open_dashboard_then_load_categories(settings, sheets)
     configure_category_config(sheet_category_config)
     LOGGER.info(
         "Loaded %d variable and %d fixed categories from Google Sheets tab %s. Keywords tab: %s.",
@@ -3556,12 +3578,10 @@ def main() -> None:
     from telegram.error import TelegramError
     from telegram.ext import Application, CallbackQueryHandler, CommandHandler, MessageHandler, filters
     # Kept with the delayed Telegram import so loading the bot module does not
-    # start a web server or pull in Telegram before this startup message.
+    # pull in Telegram before this startup message. The page is already listening.
     from getrichbot.dashboard_bot import configure_dashboard_menu, dashboard_command
-    from getrichbot.dashboard_http import start_dashboard_server
     print("Telegram library loaded.", flush=True)
 
-    dashboard_server = start_dashboard_server(settings, sheets)
     if dashboard_server is not None:
         dashboard_server.dashboard_app.gmail_push = email_service.handle_http
 

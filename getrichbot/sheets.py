@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import threading
 from typing import Any
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -10,39 +9,6 @@ from getrichbot.models import CardUsageRecord, CardUsageRow, ExpenseRecord, Expe
 from getrichbot.cards import PaymentConfig, parse_payment_config
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
-SHEETS_TIMEOUT_SECONDS = 30
-
-
-def sheets_http():
-    """One Google call must end. A stalled call is how a page never answers."""
-    import httplib2
-
-    return httplib2.Http(timeout=SHEETS_TIMEOUT_SECONDS)
-
-
-class _LockedResource:
-    """One sheet call at a time. Overlapping calls can stall the shared client."""
-
-    def __init__(self, inner: Any, lock: threading.Lock):
-        self._inner = inner
-        self._lock = lock
-
-    def execute(self, *args, **kwargs):
-        with self._lock:
-            return self._inner.execute(*args, **kwargs)
-
-    def __getattr__(self, name: str):
-        attr = getattr(self._inner, name)
-        if not callable(attr):
-            return attr
-
-        def wrapped(*args, **kwargs):
-            result = attr(*args, **kwargs)
-            if result is None or isinstance(result, (str, int, float, bool, dict, list, tuple)):
-                return result
-            return _LockedResource(result, self._lock)
-
-        return wrapped
 
 
 class SheetsClient:
@@ -51,7 +17,6 @@ class SheetsClient:
         self.service_account_file = service_account_file
         self.service_account_json = service_account_json
         self.service: Any | None = None
-        self._api_lock = threading.Lock()
 
     def _service(self):
         if self.service is None:
@@ -65,8 +30,8 @@ class SheetsClient:
                 credentials = Credentials.from_service_account_file(self.service_account_file, scopes=SCOPES)
             else:
                 raise RuntimeError("Google service account credentials are not configured.")
-            self.service = build("sheets", "v4", credentials=credentials, http=sheets_http())
-        return _LockedResource(self.service, self._api_lock)
+            self.service = build("sheets", "v4", credentials=credentials)
+        return self.service
 
     def append_expense(self, sheet_name: str, row: ExpenseRow) -> None:
         include_payment_owner = self.has_payment_owner_column(sheet_name)
@@ -369,9 +334,6 @@ class SheetsClient:
             valueInputOption="USER_ENTERED",
             body={"values": rows},
         ).execute()
-        value_columns = max((len(row) for row in rows), default=0)
-        if len(rows) <= 1 or value_columns <= 1:
-            return
         self._service().spreadsheets().batchUpdate(
             spreadsheetId=self.sheet_id,
             body={
@@ -381,9 +343,7 @@ class SheetsClient:
                             "range": {
                                 "sheetId": sheet_id,
                                 "startRowIndex": 1,
-                                "endRowIndex": len(rows),
                                 "startColumnIndex": 1,
-                                "endColumnIndex": value_columns,
                             },
                             "cell": {
                                 "userEnteredFormat": {

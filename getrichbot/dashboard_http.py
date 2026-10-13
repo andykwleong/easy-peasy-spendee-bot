@@ -410,14 +410,9 @@ class DashboardApp:
         return 200, dashboard
 
     def _refresh_monthly_summary(self) -> None:
-        try:
-            records = self.context.sheets.get_expense_records(self.context.raw_sheet)
-            table = build_monthly_summary_table(records)
-            self.context.sheets.update_monthly_summary(self.context.monthly_summary_sheet, table)
-        except Exception:
-            LOGGER.exception(
-                "Dashboard saved the row, but the monthly summary could not be refreshed."
-            )
+        records = self.context.sheets.get_expense_records(self.context.raw_sheet)
+        table = build_monthly_summary_table(records)
+        self.context.sheets.update_monthly_summary(self.context.monthly_summary_sheet, table)
 
     def _read_sheet(self, label: str, scope: str, cards_scope: str = "mine") -> dict:
         with self._sheet_lock:
@@ -501,31 +496,20 @@ class _DashboardHandler(BaseHTTPRequestHandler):
         return
 
     def _dispatch(self) -> None:
-        try:
-            length = int(self.headers.get("Content-Length", "0") or "0")
-            if length < 0 or length > _MAX_BODY_BYTES:
-                status, headers, payload = _json(401, {"ok": False, "error": "invalid"})
-                self._send(status, headers, payload)
-                return
-            body = self.rfile.read(length) if length else b""
-            secure = _request_is_https(self.headers)
-            status, headers, payload = self.server.dashboard_app.handle(
-                self.command,
-                self.path,
-                {key: value for key, value in self.headers.items()},
-                body,
-                secure=secure,
-            )
-        except Exception:
-            LOGGER.exception("Dashboard request failed before a page was sent.")
-            status, headers, payload = _json(
-                500,
-                {
-                    "ok": False,
-                    "error": "sheet",
-                    "message": "I could not update the Google Sheet just now. Try again in a moment.",
-                },
-            )
+        length = int(self.headers.get("Content-Length", "0") or "0")
+        if length < 0 or length > _MAX_BODY_BYTES:
+            status, headers, payload = _json(401, {"ok": False, "error": "invalid"})
+            self._send(status, headers, payload)
+            return
+        body = self.rfile.read(length) if length else b""
+        secure = _request_is_https(self.headers)
+        status, headers, payload = self.server.dashboard_app.handle(
+            self.command,
+            self.path,
+            {key: value for key, value in self.headers.items()},
+            body,
+            secure=secure,
+        )
         self._send(status, headers, payload)
 
     def _send(self, status: int, headers: list[tuple[str, str]], payload: bytes) -> None:
@@ -606,13 +590,7 @@ def _json(status: int, payload: dict, extra: list[tuple[str, str]] | None = None
     headers = _page_headers("application/json; charset=utf-8")
     if extra:
         headers.extend(extra)
-    try:
-        body = json.dumps(payload).encode()
-    except (TypeError, ValueError):
-        LOGGER.exception("Dashboard could not send its page.")
-        status = 500
-        body = b'{"ok": false, "error": "sheet", "message": "I could not update the Google Sheet just now. Try again in a moment."}'
-    return status, headers, body
+    return status, headers, json.dumps(payload).encode()
 
 
 def _page_headers(content_type: str) -> list[tuple[str, str]]:

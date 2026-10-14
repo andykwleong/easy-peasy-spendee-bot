@@ -13,7 +13,6 @@ from googleapiclient.discovery import build
 from getrichbot.email_mail import addresses_in_text
 
 LOGGER = logging.getLogger(__name__)
-GMAIL_READONLY = "https://www.googleapis.com/auth/gmail.readonly"
 _HEADER_NAMES = {
     "from",
     "reply-to",
@@ -40,7 +39,7 @@ class FetchedMail:
 
 
 class GmailApiMailbox:
-    """Reads one mailbox with the Gmail readonly scope. The spreadsheet key is not used."""
+    """Reads one mailbox. The spreadsheet key is not used."""
 
     def __init__(self, client_id: str, client_secret: str, refresh_token: str):
         self.client_id = client_id
@@ -119,16 +118,25 @@ class GmailApiMailbox:
 
     def _gmail(self):
         if self._service is None:
-            credentials = Credentials(
-                token=None,
-                refresh_token=self.refresh_token,
-                token_uri="https://oauth2.googleapis.com/token",
-                client_id=self.client_id,
-                client_secret=self.client_secret,
-                scopes=[GMAIL_READONLY],
-            )
+            credentials = user_credentials(self.client_id, self.client_secret, self.refresh_token)
             self._service = build("gmail", "v1", credentials=credentials, cache_discovery=False)
         return self._service
+
+
+def user_credentials(client_id: str, client_secret: str, refresh_token: str) -> Credentials:
+    """User credentials that refresh without naming a scope list.
+
+    The OAuth playground often grants extra scopes beside Gmail read-only.
+    Sending only the read-only scope on refresh makes Google reject the token.
+    Leaving scopes off lets Google keep the scopes it originally granted.
+    """
+    return Credentials(
+        token=None,
+        refresh_token=refresh_token,
+        token_uri="https://oauth2.googleapis.com/token",
+        client_id=client_id,
+        client_secret=client_secret,
+    )
 
 
 def parse_gmail_message(message: dict) -> FetchedMail:

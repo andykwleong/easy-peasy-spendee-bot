@@ -553,6 +553,74 @@ class GmailHistoryTests(unittest.TestCase):
         self.assertNotIn("labelId", history.calls[0])
         self.assertNotIn("historyTypes", history.calls[0])
 
+    def test_push_logs_the_mail_gmail_left_out_of_messages_added(self):
+        def bare_only(_kwargs):
+            return {
+                "historyId": "200",
+                "history": [
+                    {"id": "150", "messages": [{"id": "bare-mail", "threadId": "bare-mail"}]},
+                ],
+            }
+
+        history = _HistoryCall(bare_only)
+        listing = GmailApiMailbox("client", "secret", "refresh")
+        listing._service = _GmailService(history)
+        mail = (
+            "A transaction of SGD 18.50 was made with your card ending 1111 "
+            "on 05/10/2026 at Sample Shop.\n"
+        )
+
+        class Mailbox:
+            def added_since(self, start_history_id):
+                return listing.added_since(start_history_id)
+
+            def fetch(self, message_id):
+                self.fetched = message_id
+                return ("card transaction alert", mail, ("person-a@example.com",))
+
+        config = parse_payment_config(
+            [
+                ["Payment Method", "Owner", "Type", "Cycle Type", "Cycle Start Day", "Active", "Last 4"],
+                ["Sample Visa", "Alex", "Credit Card", "Calendar", "1", "TRUE", "1111"],
+            ],
+            [
+                ["Payment Method", "Owner", "Category", "Payment Channel", "Limit Amount", "Active"],
+            ],
+        )
+        state = MemoryState()
+        state.set(HISTORY_KEY, "100")
+        writer = FakeWriter()
+        mailbox = Mailbox()
+
+        def write(row):
+            writer.rows.append(row)
+            return WriteOutcome(logged=True, text=email_logged_text(row))
+
+        service = EmailService(
+            active_settings(),
+            mailbox,
+            state,
+            Context(config, ()),
+            write,
+            authorize=lambda _headers: True,
+            now=lambda: datetime(2026, 10, 5, 9, 0, tzinfo=SINGAPORE),
+        )
+        encoded = base64.urlsafe_b64encode(
+            json.dumps({"emailAddress": "mailbox@example.com", "historyId": "200"}).encode()
+        ).decode()
+        body = json.dumps({"message": {"data": encoded, "messageId": "1"}, "subscription": "sub"}).encode()
+
+        status, payload = service.handle_http("POST", {"authorization": "Bearer test-token"}, body)
+
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(mailbox.fetched, "bare-mail")
+        self.assertEqual(len(writer.rows), 1)
+        self.assertEqual(writer.rows[0].description, "Sample Shop")
+        self.assertEqual(writer.rows[0].amount, Decimal("18.50"))
+        self.assertEqual(len(service._queued_notices), 1)
+        self.assertIn("Sample Shop", service._queued_notices[0])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -63,10 +63,57 @@ class DashboardApp:
         self._sheet_lock = threading.Lock()
         self._bot_username: str | None = None
         self.gmail_push = None
+        self._gmail_lock = threading.Lock()
+        self._held_gmail_pushes: list[tuple[str, dict[str, str], bytes]] = []
         self._static = {
             path: (content_type, file_path.read_bytes())
             for path, (content_type, file_path) in _STATIC.items()
         }
+
+    def _keep_gmail_push(self, method: str, headers: dict[str, str], body: bytes) -> tuple[int, list[tuple[str, str]], bytes]:
+        """Hold a tap that arrived before the reader can log it.
+
+        Success is returned only after the tap is kept. If it cannot be kept,
+        the response is a retry so Google sends it again. The caller holds
+        ``_gmail_lock``.
+        """
+        if method != "POST" or not body:
+            LOGGER.error("A Gmail tap arrived before the reader was ready and could not be kept.")
+            return _json(503, {"ok": False})
+        try:
+            self._held_gmail_pushes.append((method, dict(headers), bytes(body)))
+        except Exception:
+            LOGGER.exception("A Gmail tap arrived before the reader was ready and could not be kept.")
+            return _json(503, {"ok": False})
+        return _json(200, {"ok": True})
+
+    def attach_gmail_reader(self, handler) -> None:
+        with self._gmail_lock:
+            self.gmail_push = handler
+        self.replay_held_gmail_pushes()
+
+    def replay_held_gmail_pushes(self) -> None:
+        """Log taps that were kept until the reader could write them."""
+        with self._gmail_lock:
+            handler = self.gmail_push
+            pending = list(self._held_gmail_pushes)
+            if handler is None:
+                return
+            self._held_gmail_pushes.clear()
+        failed: list[tuple[str, dict[str, str], bytes]] = []
+        for method, headers, body in pending:
+            try:
+                status, _payload = handler(method, headers, body)
+            except Exception:
+                LOGGER.exception("A kept Gmail tap could not be logged yet. It is still waiting.")
+                failed.append((method, headers, body))
+                continue
+            if not isinstance(status, int) or status >= 500:
+                failed.append((method, headers, body))
+        if not failed:
+            return
+        with self._gmail_lock:
+            self._held_gmail_pushes = failed + list(self._held_gmail_pushes)
 
     def set_bot_username(self, username: str) -> None:
         cleaned = username.strip().lstrip("@")
@@ -100,9 +147,11 @@ class DashboardApp:
         if method == "POST" and path == "/api/dashboard/delete":
             return self._delete(normalized, body)
         if path == "/gmail/push":
-            if self.gmail_push is None:
-                return _json(200, {"ok": True})
-            status, payload = self.gmail_push(method, normalized, body)
+            with self._gmail_lock:
+                handler = self.gmail_push
+                if handler is None:
+                    return self._keep_gmail_push(method, normalized, body)
+            status, payload = handler(method, normalized, body)
             return _json(status, payload if isinstance(payload, dict) else {"ok": False})
         if method not in {"GET", "POST"}:
             return _json(405, {"ok": False, "error": "locked"})

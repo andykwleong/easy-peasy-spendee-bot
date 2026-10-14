@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import calendar
 import logging
+import threading
 import traceback
 import re
 import uuid
@@ -223,6 +224,7 @@ class FinanceBot:
         self.payment_config_cache: CachedPaymentConfig | None = None
         self.recent_logged: list[RecentLoggedExpense] = []
         self.email_service = None
+        self.sheet_categories_ready = False
         self.ai = None
 
     def _ai(self):
@@ -3532,6 +3534,27 @@ def load_category_config_from_sheets(settings: Settings, sheets: SheetsClient) -
     return sheet_category_config
 
 
+def load_category_config_until_ready(
+    settings: Settings,
+    sheets: SheetsClient,
+    *,
+    pause=sleep,
+    retry_seconds: float = CATEGORY_SHEET_RETRY_SECONDS,
+) -> dict:
+    """Read the category sheet. A slow sheet retries. Placeholder categories are not loaded."""
+    if retry_seconds <= 0:
+        raise ValueError("Category sheet retry wait must be greater than zero.")
+    while True:
+        try:
+            return load_category_config_from_sheets(settings, sheets)
+        except TimeoutError:
+            LOGGER.error(
+                "Category sheet did not answer within %s seconds. The page stays up and the read will be tried again. Placeholder categories were not loaded.",
+                CATEGORY_SHEET_READ_TIMEOUT_SECONDS,
+            )
+            pause(retry_seconds)
+
+
 def open_dashboard_then_load_categories(
     settings: Settings,
     sheets: SheetsClient,
@@ -3547,21 +3570,27 @@ def open_dashboard_then_load_categories(
     """
     from getrichbot.dashboard_http import start_dashboard_server
 
-    if retry_seconds <= 0:
-        raise ValueError("Category sheet retry wait must be greater than zero.")
     print("Dashboard page is starting.", flush=True)
     dashboard_server = start_dashboard_server(settings, sheets)
-    while True:
-        try:
-            sheet_category_config = load_category_config_from_sheets(settings, sheets)
-        except TimeoutError:
-            LOGGER.error(
-                "Category sheet did not answer within %s seconds. The page stays up and the read will be tried again. Placeholder categories were not loaded.",
-                CATEGORY_SHEET_READ_TIMEOUT_SECONDS,
-            )
-            pause(retry_seconds)
-            continue
-        return dashboard_server, sheet_category_config
+    sheet_category_config = load_category_config_until_ready(
+        settings,
+        sheets,
+        pause=pause,
+        retry_seconds=retry_seconds,
+    )
+    return dashboard_server, sheet_category_config
+
+
+def listen_for_page_and_gmail(settings: Settings, sheets: SheetsClient, email_service):
+    """Open the page and the Gmail tap before the category sheet is read."""
+    from getrichbot.dashboard_http import start_dashboard_server
+
+    print("Dashboard page is starting.", flush=True)
+    dashboard_server = start_dashboard_server(settings, sheets)
+    if dashboard_server is not None:
+        dashboard_server.dashboard_app.attach_gmail_reader(email_service.handle_http)
+    email_service.start_tap()
+    return dashboard_server
 
 
 def main() -> None:
@@ -3574,17 +3603,36 @@ def main() -> None:
         service_account_file=settings.service_account_file,
         service_account_json=settings.service_account_json,
     )
-    dashboard_server, sheet_category_config = open_dashboard_then_load_categories(settings, sheets)
-    configure_category_config(sheet_category_config)
-    LOGGER.info(
-        "Loaded %d variable and %d fixed categories from Google Sheets tab %s. Keywords tab: %s.",
-        len(VARIABLE_CATEGORIES),
-        len(FIXED_CATEGORIES),
-        sheet_category_config.get("categories_sheet_loaded"),
-        sheet_category_config.get("keywords_sheet_loaded"),
-    )
     finance_bot = FinanceBot(settings, sheets)
     email_service = attach_email(finance_bot, settings, sheets)
+    dashboard_server = listen_for_page_and_gmail(settings, sheets, email_service)
+
+    def load_sheet_categories() -> None:
+        # A separate Sheets connection so a slow category read does not block
+        # the connection the mailbox uses to log a purchase.
+        category_sheets = SheetsClient(
+            settings.google_sheet_id,
+            service_account_file=settings.service_account_file,
+            service_account_json=settings.service_account_json,
+        )
+        try:
+            sheet_category_config = load_category_config_until_ready(settings, category_sheets)
+        except Exception:
+            LOGGER.exception(
+                "Category sheet did not load. Placeholder categories were not used. The page stays up."
+            )
+            return
+        configure_category_config(sheet_category_config)
+        finance_bot.sheet_categories_ready = True
+        LOGGER.info(
+            "Loaded %d variable and %d fixed categories from Google Sheets tab %s. Keywords tab: %s.",
+            len(VARIABLE_CATEGORIES),
+            len(FIXED_CATEGORIES),
+            sheet_category_config.get("categories_sheet_loaded"),
+            sheet_category_config.get("keywords_sheet_loaded"),
+        )
+
+    threading.Thread(target=load_sheet_categories, name="category-sheet", daemon=True).start()
 
     print("Loading Telegram library...", flush=True)
     from telegram import Update
@@ -3595,8 +3643,8 @@ def main() -> None:
     from getrichbot.dashboard_bot import configure_dashboard_menu, dashboard_command
     print("Telegram library loaded.", flush=True)
 
-    if dashboard_server is not None:
-        dashboard_server.dashboard_app.gmail_push = email_service.handle_http
+    if dashboard_server is not None and dashboard_server.dashboard_app.gmail_push is None:
+        dashboard_server.dashboard_app.attach_gmail_reader(email_service.handle_http)
 
     async def post_init(application: Application) -> None:
         try:
@@ -3626,6 +3674,8 @@ def main() -> None:
                 await send_email_notice(text)
         except Exception:
             LOGGER.exception("Email logging did not start. Telegram chat is unchanged.")
+        if dashboard_server is not None:
+            dashboard_server.dashboard_app.replay_held_gmail_pushes()
         if email_service.config.active:
             application.create_task(email_service.run_daily_renewal())
 

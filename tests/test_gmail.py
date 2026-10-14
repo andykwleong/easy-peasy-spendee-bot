@@ -13,6 +13,7 @@ from getrichbot.dashboard_http import DashboardApp
 from getrichbot.dashboard_http import DashboardContext
 from getrichbot.email_mail import INCOME_MISC
 from getrichbot.email_mail import email_logged_text
+from getrichbot.gmail_api import GmailApiMailbox
 from getrichbot.gmail_watch import BACKLOG_KEY
 from getrichbot.gmail_watch import HISTORY_KEY
 from getrichbot.gmail_watch import BotEmailContext
@@ -480,6 +481,77 @@ class EmailWatchTests(unittest.TestCase):
         self.assertEqual(len(service._queued_notices), 1)
         self.assertIn("Sample Shop", service._queued_notices[0])
         self.assertEqual(state.get(BACKLOG_KEY), None)
+
+
+class _HistoryCall:
+    def __init__(self, respond):
+        self.respond = respond
+        self.calls = []
+
+    def list(self, **kwargs):
+        self.calls.append(kwargs)
+        payload = self.respond(kwargs)
+        return type("Request", (), {"execute": lambda _self: payload})()
+
+
+class _Users:
+    def __init__(self, history):
+        self._history = history
+
+    def history(self):
+        return self._history
+
+
+class _GmailService:
+    def __init__(self, history):
+        self._users = _Users(history)
+
+    def users(self):
+        return self._users
+
+
+def _inbox_history(kwargs):
+    """Gmail drops the useful record when the list is filtered, and otherwise omits messagesAdded."""
+    if kwargs.get("labelId") or kwargs.get("historyTypes"):
+        return {"historyId": "200"}
+    return {
+        "historyId": "200",
+        "history": [
+            {"id": "150", "messages": [{"id": "bare-mail", "threadId": "bare-mail"}]},
+            {
+                "id": "160",
+                "labelsAdded": [
+                    {"message": {"id": "inbox-mail", "threadId": "thread-inbox"}, "labelIds": ["INBOX"]}
+                ],
+            },
+            {
+                "id": "170",
+                "labelsAdded": [
+                    {"message": {"id": "sent-mail", "threadId": "thread-sent"}, "labelIds": ["SENT"]}
+                ],
+            },
+            {
+                "id": "180",
+                "messagesDeleted": [{"message": {"id": "gone-mail", "threadId": "thread-gone"}}],
+            },
+            {"id": "190", "messagesAdded": [{"message": {"id": "added-mail", "threadId": "thread-added"}}]},
+        ],
+    }
+
+
+class GmailHistoryTests(unittest.TestCase):
+    def test_inbox_mail_is_found_when_gmail_omits_messages_added(self):
+        history = _HistoryCall(_inbox_history)
+        mailbox = GmailApiMailbox("client", "secret", "refresh")
+        mailbox._service = _GmailService(history)
+
+        message_ids, history_id = mailbox.added_since("100")
+
+        self.assertEqual(message_ids, ["bare-mail", "inbox-mail", "added-mail"])
+        self.assertEqual(history_id, "200")
+        self.assertEqual(len(history.calls), 1)
+        self.assertNotIn("labelId", history.calls[0])
+        self.assertNotIn("historyTypes", history.calls[0])
 
 
 if __name__ == "__main__":

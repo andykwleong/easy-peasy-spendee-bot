@@ -13,7 +13,10 @@ from zoneinfo import ZoneInfo
 
 from getrichbot.cards import PaymentMethod
 from getrichbot.models import ExpenseRow
-from getrichbot.parser import categorize_description
+from getrichbot.parser import resolve_transaction_date
+from getrichbot.shop_category import category_for_purchase
+from getrichbot.shop_category import category_from_keywords
+from getrichbot.shop_category import is_email_shop
 
 LOGGER = logging.getLogger(__name__)
 LAST_BOT_MESSAGE_KEY = "last_bot_message_id"
@@ -41,16 +44,6 @@ _SLASH_DATE = r"\d{1,2}/\d{1,2}/(?:\d{4}|\d{2})"
 _MONTH_DATE = r"\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4}"
 _CLOCK = r"\d{1,2}:\d{2}(?:\s*[AP]M)?"
 _OPTIONAL_CLOCK = rf"(?:\s+(?:at\s+)?{_CLOCK})?"
-_NUMERIC_DATE_RE = re.compile(r"\b(\d{1,2})/(\d{1,2})/(\d{4}|\d{2})\b")
-_SLASH_MONTH_DATE_RE = re.compile(r"\b(\d{1,2})/([A-Za-z]{3,9})/(\d{4}|\d{2})\b")
-_DAY_MONTH_DATE_RE = re.compile(
-    r"\b(\d{1,2})\s+([A-Za-z]{3,9})(?:\s+(\d{4}|\d{2})(?!\d|:))?",
-    re.IGNORECASE,
-)
-_DATE_LABEL_RE = re.compile(
-    r"(?:transaction\s+date|date\s*(?:&(?:amp;)?|and)\s*time|\bdated\b)",
-    re.IGNORECASE,
-)
 _SHOP_AFTER_DATE_RE = re.compile(
     rf"\bon\s+({_SLASH_DATE}){_OPTIONAL_CLOCK}\s+at\s+(.+?)(?=\.|\n|$)",
     re.IGNORECASE,
@@ -63,14 +56,8 @@ _SHOP_LABEL_RE = re.compile(
     r"^(?:transaction\s+details|description|merchant|shop|to)\b\s*:?\s*(.*)$",
     re.IGNORECASE,
 )
-_FROM_LINE_RE = re.compile(r"^from\b\s*:?\s*(.*)$", re.IGNORECASE)
-_TO_LINE_RE = re.compile(r"^to\b\s*:?\s*(.*)$", re.IGNORECASE)
 _UEN_RE = re.compile(r"\s*\(\s*UEN\s+ending\s+[^)]*\)", re.IGNORECASE)
 _EMAIL_RE = re.compile(r"[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}", re.IGNORECASE)
-_MAILBOX_LINE_RE = re.compile(
-    r"[^<>@]+<\s*[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}\s*>",
-    re.IGNORECASE,
-)
 _ONLINE_RE = re.compile(
     r"food\s*panda|foodpanda|deliveroo|\bgrab\b|grabfood|booking\.com|\bagoda\b|\bexpedia\b|\bklook\b|"
     r"\bairbnb\b|hotels\.com|\btraveloka\b|trip\.com|travel\s+booking",
@@ -91,32 +78,6 @@ _REVERSAL_RE = re.compile(r"\breversal\b", re.IGNORECASE)
 REVERSAL_MISSING_TEXT = (
     "I could not find the original charge to reverse. I have not logged a new row."
 )
-_MONTHS = {
-    "jan": 1,
-    "january": 1,
-    "feb": 2,
-    "february": 2,
-    "mar": 3,
-    "march": 3,
-    "apr": 4,
-    "april": 4,
-    "may": 5,
-    "jun": 6,
-    "june": 6,
-    "jul": 7,
-    "july": 7,
-    "aug": 8,
-    "august": 8,
-    "sep": 9,
-    "sept": 9,
-    "september": 9,
-    "oct": 10,
-    "october": 10,
-    "nov": 11,
-    "november": 11,
-    "dec": 12,
-    "december": 12,
-}
 
 
 @dataclass(frozen=True)
@@ -135,15 +96,6 @@ class EmailDecision:
     payment_channel: str = ""
     channels: tuple[str, ...] = ()
     description: str = ""
-
-
-def category_from_keywords(shop: str, logged_by: str, me_label: str, wife_label: str) -> str | None:
-    category, confidence = categorize_description(shop, logged_by, me_label, wife_label)
-    if category is None or confidence < 0.7:
-        return None
-    if category.lower().startswith("income"):
-        return None
-    return category
 
 
 def decide_mail(
@@ -301,17 +253,6 @@ def entry_id_in_text(text: str) -> str | None:
     return match.group(1)
 
 
-def is_email_shop(value: str) -> bool:
-    """True when the text is an email address, not a store name."""
-    text = " ".join((value or "").split())
-    if not text or "@" not in text:
-        return False
-    bare = text.strip("<>").strip()
-    if _EMAIL_RE.fullmatch(bare):
-        return True
-    return _MAILBOX_LINE_RE.fullmatch(text) is not None
-
-
 def addresses_in_text(value: str) -> tuple[str, ...]:
     found: list[str] = []
     for match in _EMAIL_RE.findall(value or ""):
@@ -364,7 +305,7 @@ def _purchase_decision(
         )
     card = matches[0]
     logged_by = _logged_by(addresses, forwarders) or ""
-    category = _purchase_category(
+    category = category_for_purchase(
         body,
         shop,
         logged_by,
@@ -372,18 +313,6 @@ def _purchase_decision(
         category_for,
         remember_category,
     )
-    if category.casefold().startswith("income -"):
-        return EmailDecision(
-            action="log",
-            kind="purchase",
-            amount=amount,
-            shop=shop,
-            last4=last4,
-            expense_date=expense_date,
-            category=category,
-            logged_by=logged_by,
-            description=shop,
-        )
     try:
         channels = tuple(channels_for(card.owner, card.name))
     except Exception:
@@ -424,60 +353,6 @@ def _reversal_decision(body: str, today: date) -> EmailDecision:
         last4=last4,
         expense_date=_mail_date(body, today),
     )
-
-
-def match_reversal(records, methods, *, amount: Decimal | None, last4: str, shop: str):
-    """Return the latest expense whose amount, card last 4, and shop text match."""
-    needle = " ".join((shop or "").casefold().split())
-    if amount is None or len(last4) != 4 or not last4.isdigit() or len(needle) < 3:
-        return None
-    found = None
-    for record in records:
-        if (record.status or "").casefold() != "confirmed":
-            continue
-        if (record.transaction_type or "Expense").casefold() == "income":
-            continue
-        if record.amount != amount:
-            continue
-        if _record_last4(record, methods) != last4:
-            continue
-        if not _shop_contained(needle, record):
-            continue
-        found = record
-    return found
-
-
-def reversal_removed_text(record) -> str:
-    try:
-        when = datetime.fromisoformat(record.expense_date).strftime("%-d %B %Y")
-    except ValueError:
-        when = record.expense_date
-    place = f" at {record.description}" if (record.description or "").strip() else ""
-    return (
-        "The original charge was reversed and removed. "
-        f"Deleted ${record.amount:.2f}{place} logged as {record.category} - {when} [{record.entry_id}]."
-    )
-
-
-def _record_last4(record, methods) -> str:
-    name = (record.payment_method or "").casefold()
-    if not name:
-        return ""
-    owner = (record.payment_owner or record.logged_by or "").casefold()
-    for method in methods:
-        if method.name.casefold() == name and method.owner.casefold() == owner:
-            return method.last4 or ""
-    return ""
-
-
-def _shop_contained(needle: str, record) -> bool:
-    for raw in (record.description, record.raw_input):
-        haystack = " ".join((raw or "").casefold().split())
-        if len(haystack) < 3:
-            continue
-        if needle in haystack or haystack in needle:
-            return True
-    return False
 
 
 def _income_decision(
@@ -596,75 +471,6 @@ def _missing_purchase_pieces(amount, expense_date, last4) -> list[str]:
     return missing
 
 
-def _card_ending_to_shop(body: str) -> bool:
-    """True when From names a card ending and To names a shop."""
-    has_from_card = False
-    has_to_shop = False
-    lines = (body or "").splitlines()
-    for index, line in enumerate(lines):
-        stripped = line.strip()
-        from_match = _FROM_LINE_RE.match(stripped)
-        if from_match and re.search(r"\bcard\b", from_match.group(1), re.IGNORECASE):
-            if _LAST4_RE.search(from_match.group(1)):
-                has_from_card = True
-        to_match = _TO_LINE_RE.match(stripped)
-        if to_match is None:
-            continue
-        raw = to_match.group(1).strip()
-        if not raw:
-            for later in lines[index + 1 :]:
-                if later.strip():
-                    raw = later.strip()
-                    break
-        shop = _clean_shop(raw)
-        if shop and not is_email_shop(shop):
-            has_to_shop = True
-    return has_from_card and has_to_shop
-
-
-def _purchase_category(body, shop, logged_by, categories, category_for, remember_category) -> str:
-    from getrichbot.shop_category import category_named_in_text
-    from getrichbot.shop_category import existing_transport_category
-    from getrichbot.shop_category import is_grab_shop
-
-    if is_grab_shop(shop):
-        transport = existing_transport_category(categories) or ""
-        if transport:
-            _remember_shop(remember_category, shop, transport)
-        return transport
-
-    named = category_named_in_text(body, categories)
-    if named:
-        _remember_shop(remember_category, shop, named)
-        category = named
-    else:
-        try:
-            try:
-                category = category_for(shop, logged_by, body) or ""
-            except TypeError:
-                category = category_for(shop, logged_by) or ""
-        except Exception:
-            LOGGER.exception("Could not choose a category. The purchase is still logged with a blank category.")
-            category = ""
-    if _card_ending_to_shop(body) and category.casefold().startswith("income -"):
-        return ""
-    return category
-
-
-def _remember_shop(remember_category, shop: str, category: str) -> None:
-    if remember_category is None or not shop or not category:
-        return
-    from getrichbot.shop_category import shop_keyword
-
-    keyword = shop_keyword(shop)
-    if not keyword or is_email_shop(shop) or is_email_shop(keyword):
-        return
-    try:
-        remember_category(keyword, category)
-    except Exception:
-        LOGGER.exception("Could not save the shop keyword. The purchase is still logged.")
-
-
 def _missing_purchase_text(missing: list[str]) -> str:
     pieces = [f"the {name}" for name in missing]
     if len(pieces) == 1:
@@ -743,135 +549,14 @@ def _decimal_dot(body: str, index: int) -> bool:
     return index > 0 and index + 1 < len(body) and body[index - 1].isdigit() and body[index + 1].isdigit()
 
 
-@dataclass(frozen=True)
-class _FoundDate:
-    day: int
-    month: int
-    year: int | None
-    start: int
-
-
 def _mail_date(body: str, today: date) -> date | None:
-    found = _found_dates(body)
-    if not found:
-        return None
-    years = {item.year for item in found if item.year is not None}
-    borrowed = next(iter(years)) if len(years) == 1 else None
-    resolved: list[tuple[date, _FoundDate]] = []
-    for item in found:
-        if item.year is not None:
-            year = item.year
-        elif borrowed is not None:
-            year = borrowed
-        else:
-            year = today.year
-        try:
-            resolved.append((date(year, item.month, item.day), item))
-        except ValueError:
-            continue
-    unique = {when for when, _item in resolved}
-    if len(unique) == 1:
-        return next(iter(unique))
-    labeled = [when for when, item in resolved if _date_is_labeled(body, item.start)]
-    labeled_days = set(labeled)
-    if len(labeled_days) == 1:
-        return labeled[0]
-    return None
-
-
-def _found_dates(body: str) -> list[_FoundDate]:
-    text = body or ""
-    matches = []
-    for regex, kind in (
-        (_NUMERIC_DATE_RE, "numeric"),
-        (_SLASH_MONTH_DATE_RE, "slash_month"),
-        (_DAY_MONTH_DATE_RE, "day_month"),
-    ):
-        for match in regex.finditer(text):
-            matches.append((match.start(), match.end(), kind, match))
-    matches.sort(key=lambda item: (item[0], item[0] - item[1]))
-    found: list[_FoundDate] = []
-    occupied_until = -1
-    for start, end, kind, match in matches:
-        if start < occupied_until:
-            continue
-        parts = _date_parts(kind, match)
-        if parts is None:
-            continue
-        day, month, year = parts
-        found.append(_FoundDate(day, month, year, start))
-        occupied_until = end
-    return found
-
-
-def _date_parts(kind: str, match: re.Match[str]) -> tuple[int, int, int | None] | None:
-    if kind == "numeric":
-        day = int(match.group(1))
-        month = int(match.group(2))
-        year = _year(match.group(3))
-    elif kind == "slash_month":
-        month_number = _MONTHS.get(match.group(2).casefold())
-        if month_number is None:
-            return None
-        day = int(match.group(1))
-        month = month_number
-        year = _year(match.group(3))
-    else:
-        month_number = _MONTHS.get(match.group(2).casefold())
-        if month_number is None:
-            return None
-        day = int(match.group(1))
-        month = month_number
-        year = _year(match.group(3)) if match.group(3) else None
-    if not _possible_date(day, month, year):
-        return None
-    return day, month, year
-
-
-def _possible_date(day: int, month: int, year: int | None) -> bool:
-    try:
-        date(year or 2000, month, day)
-    except ValueError:
-        return False
-    return True
-
-
-def _date_is_labeled(body: str, start: int) -> bool:
-    line_start = body.rfind("\n", 0, start) + 1
-    if _DATE_LABEL_RE.search(body[line_start:start]):
-        return True
-    if line_start == 0:
-        return False
-    previous_end = line_start - 1
-    previous_start = body.rfind("\n", 0, previous_end) + 1
-    previous = body[previous_start:previous_end]
-    return _DATE_LABEL_RE.search(previous) is not None
+    when, _span = resolve_transaction_date(body, today, include_numeric=True)
+    return when
 
 
 def _parse_date_text(raw: str) -> date | None:
-    if "/" in raw:
-        day_raw, month_raw, year_raw = raw.split("/")
-        try:
-            return date(_year(year_raw), int(month_raw), int(day_raw))
-        except ValueError:
-            return None
-    parts = raw.split()
-    if len(parts) != 3:
-        return None
-    month = _MONTHS.get(parts[1].casefold())
-    if month is None:
-        return None
-    try:
-        return date(int(parts[2]), month, int(parts[0]))
-    except ValueError:
-        return None
-
-
-def _year(year_raw: str) -> int:
-    year = int(year_raw)
-    if len(year_raw) == 2:
-        return 2000 + year
-    return year
+    when, _span = resolve_transaction_date(raw, date.today(), include_numeric=True)
+    return when
 
 
 def _normalize_subject(subject: str) -> str:

@@ -7,7 +7,7 @@ class FakeKeywordsClient(SheetsClient):
     def __init__(self):
         pass
 
-    def _get_values_first_available(self, sheet_names, cell_range):
+    def _get_values_first_available(self, sheet_names, cell_range, timeout_seconds=None):
         if sheet_names[0] == "Categories":
             return sheet_names[0], [
                 ["Food", "Variable", "TRUE", ""],

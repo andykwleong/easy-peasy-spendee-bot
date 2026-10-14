@@ -173,11 +173,18 @@ class EmailService:
         threading.Thread(target=attempt, name="gmail-tap", daemon=True).start()
 
     def open_gmail_tap(self) -> bool:
+        """Start the Gmail tap and keep its history id without waiting for Telegram."""
         with self._lock:
             if not self.config.active or self._paused():
                 return False
             topic = self.config.topic
-        self.mailbox.watch(topic)
+            had_history = bool(self.state.get(HISTORY_KEY))
+        history_id = self.mailbox.watch(topic)
+        if not history_id or had_history:
+            return True
+        with self._lock:
+            if not self.state.get(HISTORY_KEY):
+                self.state.set(HISTORY_KEY, history_id)
         return True
 
     def start(self) -> list[str]:

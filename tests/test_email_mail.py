@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import time
 import unittest
 from datetime import date
 from datetime import datetime
@@ -1394,6 +1395,98 @@ class EmailWatchTests(unittest.TestCase):
         self.assertEqual(mailbox.watch_calls, 1)
         self.assertEqual(mailbox.history_calls, 0)
         self.assertEqual(state.get(HISTORY_KEY), "50")
+
+    def test_tap_without_telegram_logs_a_purchase_ping(self):
+        config = parse_payment_config(
+            [
+                ["Payment Method", "Owner", "Type", "Cycle Type", "Cycle Start Day", "Active", "Last 4"],
+                ["Sample Visa", "Alex", "Credit Card", "Calendar", "1", "TRUE", "1111"],
+            ],
+            [
+                ["Payment Method", "Owner", "Category", "Payment Channel", "Limit Amount", "Active"],
+                ["Sample Visa", "Alex", "All", "All", "", "TRUE"],
+            ],
+        )
+
+        class QuietCategory:
+            def __init__(self, payment_config):
+                self.payment_config = payment_config
+
+            def methods(self):
+                return self.payment_config.payment_methods
+
+            def categories(self):
+                return ()
+
+            def has_income_misc(self):
+                return False
+
+            def channels_for(self, owner, payment_method):
+                return self.payment_config.channel_options_for(owner, payment_method)
+
+            def category_for(self, shop, logged_by, body=""):
+                return None
+
+        mailbox = FakeMailbox()
+        mailbox.next_history = "80"
+        state = MemoryState()
+        writer = FakeWriter()
+
+        def write(row):
+            writer.rows.append(row)
+            return WriteOutcome(logged=True, text=email_logged_text(row))
+
+        service = EmailService(
+            active_settings(),
+            mailbox,
+            state,
+            QuietCategory(config),
+            write,
+            authorize=lambda _headers: True,
+            now=lambda: datetime(2026, 10, 5, 9, 0, tzinfo=SINGAPORE),
+        )
+        self.assertFalse(service._notifier_bound)
+        self.assertIsNone(state.get(HISTORY_KEY))
+        mail = (
+            "A transaction of SGD 18.50 was made with your card ending 1111 "
+            "on 05/10/2026 at Sample Shop.\n"
+        )
+        mailbox.added = ["buy"]
+        mailbox.messages["buy"] = ("card transaction alert", mail, ("person-a@example.com",))
+        encoded = base64.urlsafe_b64encode(
+            json.dumps({"emailAddress": "mailbox@example.com", "historyId": "81"}).encode()
+        ).decode()
+        body = json.dumps(
+            {
+                "message": {"data": encoded, "messageId": "1"},
+                "subscription": "projects/your-project-id/subscriptions/gmail-push",
+            }
+        ).encode()
+
+        early_status, early_payload = service.handle_http("POST", {"authorization": "Bearer test-token"}, body)
+        self.assertEqual(early_status, 503)
+        self.assertFalse(early_payload["ok"])
+        self.assertEqual(writer.rows, [])
+
+        service.start_tap()
+        deadline = time.monotonic() + 2
+        while state.get(HISTORY_KEY) != "80" and time.monotonic() < deadline:
+            time.sleep(0.01)
+
+        self.assertEqual(state.get(HISTORY_KEY), "80")
+        self.assertFalse(service._notifier_bound)
+        status, payload = service.handle_http("POST", {"authorization": "Bearer test-token"}, body)
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(len(writer.rows), 1)
+        row = writer.rows[0]
+        self.assertEqual(row.amount, Decimal("18.50"))
+        self.assertEqual(row.description, "Sample Shop")
+        self.assertEqual(row.payment_method, "Sample Visa")
+        self.assertEqual(row.timestamp.date(), date(2026, 10, 5))
+        self.assertEqual(len(service._queued_notices), 1)
+        self.assertIn("Sample Shop", service._queued_notices[0])
+        self.assertEqual(state.get(BACKLOG_KEY), None)
 
 
 if __name__ == "__main__":

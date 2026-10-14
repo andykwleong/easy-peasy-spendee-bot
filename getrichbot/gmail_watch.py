@@ -5,6 +5,7 @@ import base64
 import json
 import logging
 import threading
+import time
 from dataclasses import dataclass
 from datetime import date
 from datetime import datetime
@@ -122,6 +123,8 @@ class EmailService:
         self.renew_every_seconds = renew_every_seconds
         self._now = now or (lambda: datetime.now(SINGAPORE_TZ))
         self._notify = lambda _text: None
+        self._notifier_bound = False
+        self._queued_notices: list[str] = []
         self._lock = threading.RLock()
 
     def bind_notifier(self, loop, send) -> None:
@@ -130,7 +133,52 @@ class EmailService:
                 return
             asyncio.run_coroutine_threadsafe(send(text), loop)
 
-        self._notify = notify
+        with self._lock:
+            self._notify = notify
+            self._notifier_bound = True
+            queued = list(self._queued_notices)
+            self._queued_notices.clear()
+        for text in queued:
+            notify(text)
+
+    def _tell(self, text: str) -> None:
+        if not text:
+            return
+        with self._lock:
+            if not self._notifier_bound:
+                self._queued_notices.append(text)
+                return
+            notify = self._notify
+        notify(text)
+
+    def start_tap(self, *, pause: Callable[[float], None] | None = None, retry_seconds: float = 15) -> None:
+        """Ask Gmail to tap this process. A slow category sheet does not delay this."""
+        if pause is None:
+            pause = time.sleep
+        if retry_seconds <= 0:
+            raise ValueError("Gmail tap retry wait must be greater than zero.")
+
+        def attempt() -> None:
+            while True:
+                try:
+                    self.open_gmail_tap()
+                except Exception:
+                    LOGGER.exception(
+                        "Gmail tap did not start. The page stays up and the tap will be tried again."
+                    )
+                    pause(retry_seconds)
+                    continue
+                return
+
+        threading.Thread(target=attempt, name="gmail-tap", daemon=True).start()
+
+    def open_gmail_tap(self) -> bool:
+        with self._lock:
+            if not self.config.active or self._paused():
+                return False
+            topic = self.config.topic
+        self.mailbox.watch(topic)
+        return True
 
     def start(self) -> list[str]:
         with self._lock:
@@ -334,11 +382,24 @@ class EmailService:
         if note is None:
             return 400, {"ok": False}
         try:
+            if self._push_must_wait():
+                return 503, {"ok": False}
             self.process_notification(note.history_id)
         except Exception:
             LOGGER.exception("Gmail notification could not be handled")
             return 500, {"ok": False}
         return 200, {"ok": True}
+
+    def _push_must_wait(self) -> bool:
+        """A live tap with no mailbox bookmark must not be answered as success.
+
+        Google does not retry a success. The caller keeps the tap, or receives
+        a retry response when it cannot be kept.
+        """
+        with self._lock:
+            if not self.config.active or self._paused():
+                return False
+            return not bool(self.state.get(HISTORY_KEY))
 
     def process_notification(self, pushed_history_id: str) -> None:
         with self._lock:
@@ -359,13 +420,13 @@ class EmailService:
             extra = [message_id for message_id in fresh if message_id not in self._backlog_ids()]
             if extra:
                 self._hold(extra)
-                self._notify("More mail arrived while a pile is waiting. I have not logged it.")
+                self._tell("More mail arrived while a pile is waiting. I have not logged it.")
             if history_id:
                 self.state.set(HISTORY_KEY, history_id)
             return
         for message_id in fresh:
             for text in self._consume(message_id):
-                self._notify(text)
+                self._tell(text)
         if history_id:
             self.state.set(HISTORY_KEY, history_id)
 
@@ -578,6 +639,8 @@ class BotEmailContext:
         return self.bot._load_payment_config().payment_methods
 
     def categories(self) -> tuple[str, ...]:
+        if not getattr(self.bot, "sheet_categories_ready", False):
+            return ()
         return tuple(ALL_CATEGORIES)
 
     def has_income_misc(self) -> bool:
@@ -601,6 +664,8 @@ class BotEmailContext:
 
     def category_for(self, shop: str, logged_by: str, body: str = "") -> str | None:
         del body
+        if not self.categories():
+            return None
         settings = self.bot.settings
 
         def save(keyword: str, category: str) -> None:

@@ -10,6 +10,8 @@ from zoneinfo import ZoneInfo
 
 from getrichbot.cards import build_card_summary
 from getrichbot.cards import parse_payment_config
+from getrichbot.dashboard_http import DashboardApp
+from getrichbot.dashboard_http import DashboardContext
 from getrichbot.categories import configure_category_config
 from getrichbot.email_mail import INCOME_MISC
 from getrichbot.email_mail import REVERSAL_MISSING_TEXT
@@ -24,6 +26,7 @@ from getrichbot.sheets import expense_message_column
 from getrichbot.shop_category import categorize_email_shop
 from getrichbot.gmail_watch import BACKLOG_KEY
 from getrichbot.gmail_watch import HISTORY_KEY
+from getrichbot.gmail_watch import BotEmailContext
 from getrichbot.gmail_watch import EmailService
 from getrichbot.gmail_watch import EmailSettings
 from getrichbot.gmail_watch import WriteOutcome
@@ -476,6 +479,7 @@ class EmailMailTests(unittest.TestCase):
         mailbox.messages["reverse"] = ("Card transaction", body, ("person-a@example.com",))
         sent = []
         service._notify = sent.append
+        service._notifier_bound = True
         service.process_notification("999")
 
         self.assertEqual(writer.rows, [])
@@ -517,6 +521,7 @@ class EmailMailTests(unittest.TestCase):
         mailbox.messages["reverse"] = ("Card transaction", body, ("person-a@example.com",))
         sent = []
         service._notify = sent.append
+        service._notifier_bound = True
         service.process_notification("999")
         self.assertEqual(writer.rows, [])
         self.assertEqual(sent, [REVERSAL_MISSING_TEXT])
@@ -1146,6 +1151,7 @@ class EmailWatchTests(unittest.TestCase):
         }
         sent = []
         service._notify = sent.append
+        service._notifier_bound = True
         service.process_notification("999")
         self.assertEqual(writer.updates, [])
         categories = [row.category for row in writer.rows]
@@ -1265,6 +1271,129 @@ class EmailWatchTests(unittest.TestCase):
         self.assertEqual(mailbox.fetch_calls, 1)
         self.assertEqual(writer.rows[0].category, "Food")
         self.assertEqual(mailbox.start_history, "50")
+
+    def test_push_during_the_not_ready_window_is_kept_and_then_logged(self):
+        encoded = base64.urlsafe_b64encode(
+            json.dumps({"emailAddress": "mailbox@example.com", "historyId": "55"}).encode()
+        ).decode()
+        body = json.dumps(
+            {
+                "message": {"data": encoded, "messageId": "1"},
+                "subscription": "projects/your-project-id/subscriptions/gmail-push",
+            }
+        ).encode()
+        app = DashboardApp(
+            DashboardContext(
+                bot_token="test-token",
+                allowed_user_ids={111},
+                label_for_user=lambda user_id: "Alex",
+                raw_sheet="Raw Expenses",
+                card_usage_sheet="Card Usage",
+                payment_methods_sheet="Payment Methods",
+                card_limits_sheet="Card Limits",
+                sheets=object(),
+            )
+        )
+        status, _headers, payload = app.handle("POST", "/gmail/push", {}, body, secure=False)
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(payload), {"ok": True})
+        self.assertEqual([item[2] for item in app._held_gmail_pushes], [body])
+
+        empty_status, _empty_headers, empty_payload = app.handle("POST", "/gmail/push", {}, b"", secure=False)
+        self.assertEqual(empty_status, 503)
+        self.assertEqual(json.loads(empty_payload)["ok"], False)
+        self.assertEqual([item[2] for item in app._held_gmail_pushes], [body])
+
+        unread = type("Bot", (), {"sheet_categories_ready": False})()
+        sheet_context = BotEmailContext(unread)
+        self.assertEqual(sheet_context.categories(), ())
+        self.assertIsNone(sheet_context.category_for("Sample Shop", "Alex", "card ending 1111"))
+
+        config = parse_payment_config(
+            [
+                ["Payment Method", "Owner", "Type", "Cycle Type", "Cycle Start Day", "Active", "Last 4"],
+                ["Sample Visa", "Alex", "Credit Card", "Calendar", "1", "TRUE", "1111"],
+            ],
+            [
+                ["Payment Method", "Owner", "Category", "Payment Channel", "Limit Amount", "Active"],
+                ["Sample Visa", "Alex", "All", "All", "", "TRUE"],
+            ],
+        )
+
+        class NotReadyContext:
+            def __init__(self, payment_config):
+                self.payment_config = payment_config
+
+            def methods(self):
+                return self.payment_config.payment_methods
+
+            def categories(self):
+                return ()
+
+            def has_income_misc(self):
+                return False
+
+            def channels_for(self, owner, payment_method):
+                return self.payment_config.channel_options_for(owner, payment_method)
+
+            def category_for(self, shop, logged_by, body=""):
+                return None
+
+        mailbox = FakeMailbox()
+        state = MemoryState()
+        writer = FakeWriter()
+
+        def write(row):
+            writer.rows.append(row)
+            return WriteOutcome(logged=True, text=email_logged_text(row))
+
+        service = EmailService(
+            active_settings(),
+            mailbox,
+            state,
+            NotReadyContext(config),
+            write,
+            authorize=lambda _headers: True,
+            now=lambda: datetime(2026, 10, 5, 9, 0, tzinfo=SINGAPORE),
+        )
+        mail = (
+            "A transaction of SGD 18.50 was made with your card ending 1111 "
+            "on 05/10/2026 at Sample Shop.\n"
+        )
+        mailbox.added = ["buy"]
+        mailbox.messages["buy"] = ("card transaction alert", mail, ("person-a@example.com",))
+
+        app.attach_gmail_reader(service.handle_http)
+        self.assertEqual([item[2] for item in app._held_gmail_pushes], [body])
+        self.assertEqual(writer.rows, [])
+        self.assertEqual(mailbox.fetch_calls, 0)
+
+        state.set(HISTORY_KEY, "50")
+        app.replay_held_gmail_pushes()
+
+        self.assertEqual(app._held_gmail_pushes, [])
+        self.assertEqual(state.get(BACKLOG_KEY), None)
+        self.assertEqual(len(writer.rows), 1)
+        row = writer.rows[0]
+        self.assertEqual(row.amount, Decimal("18.50"))
+        self.assertEqual(row.description, "Sample Shop")
+        self.assertEqual(row.payment_method, "Sample Visa")
+        self.assertEqual(row.payment_owner, "Alex")
+        self.assertEqual(row.category, "")
+        self.assertEqual(row.timestamp.date(), date(2026, 10, 5))
+        self.assertEqual(len(service._queued_notices), 1)
+        self.assertIn("Sample Shop", service._queued_notices[0])
+        self.assertIn("Sample Visa", service._queued_notices[0])
+        self.assertIn("Category is missing", service._queued_notices[0])
+        self.assertEqual(service.handle_command("log email backlog"), ["There is no mail pile waiting."])
+
+    def test_open_gmail_tap_does_not_move_the_history_bookmark(self):
+        service, mailbox, state, _writer = service_for(config_with())
+        state.set(HISTORY_KEY, "50")
+        self.assertTrue(service.open_gmail_tap())
+        self.assertEqual(mailbox.watch_calls, 1)
+        self.assertEqual(mailbox.history_calls, 0)
+        self.assertEqual(state.get(HISTORY_KEY), "50")
 
 
 if __name__ == "__main__":

@@ -4,6 +4,7 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.cursor/skills/verify-getrichbot/artifacts/
 .DS_Store
 service-account*.json
 *.json

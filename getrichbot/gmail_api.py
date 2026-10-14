@@ -72,30 +72,19 @@ class GmailApiMailbox:
         page_token = None
         history_id = start_history_id
         for _page in range(5):
+            request = {"userId": "me", "startHistoryId": start_history_id}
+            if page_token:
+                request["pageToken"] = page_token
             try:
-                response = (
-                    self._gmail()
-                    .users()
-                    .history()
-                    .list(
-                        userId="me",
-                        startHistoryId=start_history_id,
-                        historyTypes=["messageAdded"],
-                        labelId="INBOX",
-                        pageToken=page_token,
-                    )
-                    .execute()
-                )
+                response = self._gmail().users().history().list(**request).execute()
             except Exception as exc:
                 if _is_not_found(exc):
                     raise HistoryExpired(start_history_id) from exc
                 raise
             history_id = str(response.get("historyId") or history_id)
-            for item in response.get("history", []):
-                for added in item.get("messagesAdded", []):
-                    message = added.get("message") or {}
-                    message_id = str(message.get("id") or "")
-                    if message_id and message_id not in message_ids:
+            for item in response.get("history") or []:
+                for message_id in _inbox_message_ids(item):
+                    if message_id not in message_ids:
                         message_ids.append(message_id)
             page_token = response.get("nextPageToken")
             if not page_token:
@@ -129,6 +118,32 @@ class GmailApiMailbox:
             )
             self._service = build("gmail", "v1", credentials=credentials, cache_discovery=False)
         return self._service
+
+
+def _inbox_message_ids(item: dict) -> list[str]:
+    found: list[str] = []
+    for added in item.get("messagesAdded") or []:
+        _append_message_id(found, (added.get("message") or {}).get("id"))
+    for added in item.get("labelsAdded") or []:
+        labels = [str(label) for label in added.get("labelIds") or []]
+        if "INBOX" not in labels:
+            continue
+        _append_message_id(found, (added.get("message") or {}).get("id"))
+    if _history_item_names_a_change(item):
+        return found
+    for message in item.get("messages") or []:
+        _append_message_id(found, message.get("id"))
+    return found
+
+
+def _history_item_names_a_change(item: dict) -> bool:
+    return any(item.get(key) for key in ("messagesAdded", "messagesDeleted", "labelsAdded", "labelsRemoved"))
+
+
+def _append_message_id(found: list[str], raw: object) -> None:
+    message_id = str(raw or "")
+    if message_id and message_id not in found:
+        found.append(message_id)
 
 
 def parse_gmail_message(message: dict) -> FetchedMail:

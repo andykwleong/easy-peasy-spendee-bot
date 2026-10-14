@@ -12,19 +12,17 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Callable
 
+from getrichbot import categories as category_lists
 from getrichbot.email_mail import EmailDecision
 from getrichbot.email_mail import INCOME_MISC
 from getrichbot.email_mail import SINGAPORE_TZ
 from getrichbot.email_mail import build_expense_row
-from getrichbot.categories import ALL_CATEGORIES
 from getrichbot.shop_category import apply_shop_keyword
 from getrichbot.shop_category import categorize_email_shop
 from getrichbot.shop_lookup import lookup_shop_text
 from getrichbot.ai import pick_existing_category
 from getrichbot.email_mail import REVERSAL_MISSING_TEXT
 from getrichbot.email_mail import decide_mail
-from getrichbot.email_mail import match_reversal
-from getrichbot.email_mail import reversal_removed_text
 from getrichbot.gmail_api import GmailApiMailbox
 from getrichbot.gmail_api import HistoryExpired
 from getrichbot.gmail_api import verify_pubsub_token
@@ -161,31 +159,35 @@ class EmailService:
         def attempt() -> None:
             while True:
                 try:
-                    self.open_gmail_tap()
+                    ready = self.open_gmail_tap()
                 except Exception:
                     LOGGER.exception(
                         "Gmail tap did not start. The page stays up and the tap will be tried again."
                     )
                     pause(retry_seconds)
                     continue
-                return
+                if ready:
+                    return
+                pause(retry_seconds)
 
         threading.Thread(target=attempt, name="gmail-tap", daemon=True).start()
 
     def open_gmail_tap(self) -> bool:
-        """Start the Gmail tap and keep its history id without waiting for Telegram."""
+        """Register the Gmail tap. True means a history bookmark is already in place."""
         with self._lock:
             if not self.config.active or self._paused():
-                return False
+                return True
             topic = self.config.topic
             had_history = bool(self.state.get(HISTORY_KEY))
         history_id = self.mailbox.watch(topic)
-        if not history_id or had_history:
+        if had_history:
             return True
+        if not history_id:
+            return False
         with self._lock:
             if not self.state.get(HISTORY_KEY):
                 self.state.set(HISTORY_KEY, history_id)
-        return True
+            return bool(self.state.get(HISTORY_KEY))
 
     def start(self) -> list[str]:
         with self._lock:
@@ -400,8 +402,7 @@ class EmailService:
     def _push_must_wait(self) -> bool:
         """A live tap with no mailbox bookmark must not be answered as success.
 
-        Google does not retry a success. The caller keeps the tap, or receives
-        a retry response when it cannot be kept.
+        Google retries a failure. Success is returned only after the mail can be handled.
         """
         with self._lock:
             if not self.config.active or self._paused():
@@ -453,8 +454,7 @@ class EmailService:
                 self.state.set(_message_key(message_id), "asked")
             return [decision.text] if decision.text else []
         if decision.action == "reverse":
-            text = self._reverse(decision)
-            removed = "reversed and removed" in text
+            removed, text = self._reverse(decision)
             self.state.set(_message_key(message_id), "logged" if removed else "asked")
             return [text] if text else []
         if decision.action == "log":
@@ -462,13 +462,13 @@ class EmailService:
             return [text] if text else []
         return []
 
-    def _reverse(self, decision: EmailDecision) -> str:
+    def _reverse(self, decision: EmailDecision) -> tuple[bool, str]:
         try:
             records = list(self.context.expense_records())
             methods = tuple(self.context.methods())
         except Exception:
             LOGGER.exception("Could not read expenses for a reversal. Nothing was written.")
-            return "I could not read the sheet, so I have not removed a row and I have not logged a new one."
+            return False, "I could not read the sheet, so I have not removed a row and I have not logged a new one."
         match = match_reversal(
             records,
             methods,
@@ -477,15 +477,15 @@ class EmailService:
             shop=decision.shop,
         )
         if match is None:
-            return REVERSAL_MISSING_TEXT
+            return False, REVERSAL_MISSING_TEXT
         try:
             deleted = bool(self.context.delete_expense(match.entry_id))
         except Exception:
             LOGGER.exception("Could not remove the reversed charge. Nothing new was written.")
-            return "I found the original charge but could not remove it. I have not logged a new row."
+            return False, "I found the original charge but could not remove it. I have not logged a new row."
         if not deleted:
-            return REVERSAL_MISSING_TEXT
-        return reversal_removed_text(match)
+            return False, REVERSAL_MISSING_TEXT
+        return True, reversal_removed_text(match)
 
     def _write(self, decision: EmailDecision, message_id: str) -> str:
         if decision.category == INCOME_MISC and not self.context.has_income_misc():
@@ -626,6 +626,60 @@ class EmailService:
         return [f"A purchase at {shop} is still waiting for a channel. Reply {choices}."]
 
 
+def match_reversal(records, methods, *, amount: Decimal | None, last4: str, shop: str):
+    """Return the latest expense whose amount, card last 4, and shop text match."""
+    needle = " ".join((shop or "").casefold().split())
+    if amount is None or len(last4) != 4 or not last4.isdigit() or len(needle) < 3:
+        return None
+    found = None
+    for record in records:
+        if (record.status or "").casefold() != "confirmed":
+            continue
+        if (record.transaction_type or "Expense").casefold() == "income":
+            continue
+        if record.amount != amount:
+            continue
+        if _record_last4(record, methods) != last4:
+            continue
+        if not _shop_contained(needle, record):
+            continue
+        found = record
+    return found
+
+
+def reversal_removed_text(record) -> str:
+    try:
+        when = datetime.fromisoformat(record.expense_date).strftime("%-d %B %Y")
+    except ValueError:
+        when = record.expense_date
+    place = f" at {record.description}" if (record.description or "").strip() else ""
+    return (
+        "The original charge was reversed and removed. "
+        f"Deleted ${record.amount:.2f}{place} logged as {record.category} - {when} [{record.entry_id}]."
+    )
+
+
+def _record_last4(record, methods) -> str:
+    name = (record.payment_method or "").casefold()
+    if not name:
+        return ""
+    owner = (record.payment_owner or record.logged_by or "").casefold()
+    for method in methods:
+        if method.name.casefold() == name and method.owner.casefold() == owner:
+            return method.last4 or ""
+    return ""
+
+
+def _shop_contained(needle: str, record) -> bool:
+    for raw in (record.description, record.raw_input):
+        haystack = " ".join((raw or "").casefold().split())
+        if len(haystack) < 3:
+            continue
+        if needle in haystack or haystack in needle:
+            return True
+    return False
+
+
 class SheetBotState:
     def __init__(self, sheets, sheet_name: str):
         self.sheets = sheets
@@ -646,9 +700,9 @@ class BotEmailContext:
         return self.bot._load_payment_config().payment_methods
 
     def categories(self) -> tuple[str, ...]:
-        if not getattr(self.bot, "sheet_categories_ready", False):
+        if category_lists.CONFIG_SOURCE == "fallback":
             return ()
-        return tuple(ALL_CATEGORIES)
+        return tuple(category_lists.ALL_CATEGORIES)
 
     def has_income_misc(self) -> bool:
         return INCOME_MISC in self.categories()

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
 
@@ -15,13 +16,19 @@ DAY_MONTH_RE = re.compile(
     r"\b(\d{1,2})(?:st|nd|rd|th)?\s+"
     r"(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|"
     r"sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)"
-    r"(?:\s+(\d{2,4})(?!\.\d))?\b",
+    r"(?:\s+(\d{2,4})(?!\.\d|:))?\b",
     re.IGNORECASE,
 )
 MONTH_DAY_RE = re.compile(
     r"\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|"
     r"sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)"
-    r"\s+(\d{1,2})(?:st|nd|rd|th)?(?:\s+(\d{2,4})(?!\.\d))?\b",
+    r"\s+(\d{1,2})(?:st|nd|rd|th)?(?:\s+(\d{2,4})(?!\.\d|:))?\b",
+    re.IGNORECASE,
+)
+_NUMERIC_DAY_FIRST_RE = re.compile(r"\b(\d{1,2})/(\d{1,2})/(\d{4}|\d{2})\b")
+_SLASH_MONTH_RE = re.compile(r"\b(\d{1,2})/([A-Za-z]{3,9})/(\d{4}|\d{2})\b", re.IGNORECASE)
+_DATE_LABEL_RE = re.compile(
+    r"(?:transaction\s+date|date\s*(?:&(?:amp;)?|and)\s*time|\bdated\b)",
     re.IGNORECASE,
 )
 MONTHS = {
@@ -50,6 +57,137 @@ MONTHS = {
     "dec": 12,
     "december": 12,
 }
+
+
+@dataclass(frozen=True)
+class FoundDate:
+    day: int
+    month: int
+    year: int | None
+    start: int
+    end: int
+
+
+def found_dates(text: str, *, include_numeric: bool = False) -> list[FoundDate]:
+    """Dates in text. A decimal amount and a clock time are not a year."""
+    raw = text or ""
+    matches: list[FoundDate] = []
+
+    def add(start: int, end: int, day: int, month: int, year: int | None) -> None:
+        if not _possible_calendar_date(day, month, year):
+            return
+        matches.append(FoundDate(day, month, year, start, end))
+
+    if include_numeric:
+        for match in _NUMERIC_DAY_FIRST_RE.finditer(raw):
+            add(match.start(), match.end(), int(match.group(1)), int(match.group(2)), _year_or_none(match.group(3)))
+        for match in _SLASH_MONTH_RE.finditer(raw):
+            month = MONTHS.get(match.group(2).lower())
+            if month is None:
+                continue
+            add(match.start(), match.end(), int(match.group(1)), month, _year_or_none(match.group(3)))
+
+    for match in DAY_MONTH_RE.finditer(raw):
+        month = MONTHS.get(match.group(2).lower())
+        if month is None:
+            continue
+        add(
+            match.start(),
+            match.end(),
+            int(match.group(1)),
+            month,
+            _year_or_none(match.group(3)) if match.group(3) else None,
+        )
+    for match in MONTH_DAY_RE.finditer(raw):
+        month = MONTHS.get(match.group(1).lower())
+        if month is None:
+            continue
+        add(
+            match.start(),
+            match.end(),
+            int(match.group(2)),
+            month,
+            _year_or_none(match.group(3)) if match.group(3) else None,
+        )
+
+    matches.sort(key=lambda item: (item.start, item.start - item.end))
+    found: list[FoundDate] = []
+    occupied_until = -1
+    for item in matches:
+        if item.start < occupied_until:
+            continue
+        found.append(item)
+        occupied_until = item.end
+    return found
+
+
+def resolve_transaction_date(
+    text: str,
+    today: date,
+    *,
+    include_numeric: bool = False,
+) -> tuple[date | None, tuple[int, int] | None]:
+    """One transaction date.
+
+    A month with no year uses the year from the only other dated line, otherwise
+    this year. If the dates disagree, the one next to a transaction-date label wins.
+    """
+    found = found_dates(text, include_numeric=include_numeric)
+    if not found:
+        return None, None
+    years = {item.year for item in found if item.year is not None}
+    borrowed = next(iter(years)) if len(years) == 1 else None
+    resolved: list[tuple[date, FoundDate]] = []
+    for item in found:
+        if item.year is not None:
+            year = item.year
+        elif borrowed is not None:
+            year = borrowed
+        else:
+            year = today.year
+        try:
+            resolved.append((date(year, item.month, item.day), item))
+        except ValueError:
+            continue
+    unique = {when for when, _item in resolved}
+    if len(unique) == 1:
+        when, item = resolved[0]
+        return when, (item.start, item.end)
+    labeled = [(when, item) for when, item in resolved if _date_is_labeled(text or "", item.start)]
+    labeled_days = {when for when, _item in labeled}
+    if len(labeled_days) == 1:
+        when, item = labeled[0]
+        return when, (item.start, item.end)
+    return None, None
+
+
+def _year_or_none(year_raw: str | None) -> int | None:
+    if not year_raw:
+        return None
+    year = int(year_raw)
+    if year < 100:
+        return 2000 + year
+    return year
+
+
+def _possible_calendar_date(day: int, month: int, year: int | None) -> bool:
+    try:
+        date(year or 2000, month, day)
+    except ValueError:
+        return False
+    return True
+
+
+def _date_is_labeled(body: str, start: int) -> bool:
+    line_start = body.rfind("\n", 0, start) + 1
+    if _DATE_LABEL_RE.search(body[line_start:start]):
+        return True
+    if line_start == 0:
+        return False
+    previous_end = line_start - 1
+    previous_start = body.rfind("\n", 0, previous_end) + 1
+    previous = body[previous_start:previous_end]
+    return _DATE_LABEL_RE.search(previous) is not None
 
 
 def parse_expense(
@@ -238,16 +376,10 @@ def _extract_expense_date(text: str, today: date) -> tuple[date | None, str, boo
             return None, text, True
         return parsed, (text[: match.start()] + text[match.end() :]).strip(), False
 
-    for regex, builder in (
-        (DAY_MONTH_RE, lambda m: _date_from_parts(m.group(1), m.group(2), m.group(3), today)),
-        (MONTH_DAY_RE, lambda m: _date_from_parts(m.group(2), m.group(1), m.group(3), today)),
-    ):
-        match = regex.search(text)
-        if match is not None:
-            parsed = builder(match)
-            if parsed is None:
-                continue
-            return parsed, (text[: match.start()] + text[match.end() :]).strip(), False
+    parsed, span = resolve_transaction_date(text, today)
+    if parsed is not None and span is not None:
+        start, end = span
+        return parsed, (text[:start] + text[end:]).strip(), False
 
     match = SLASH_DATE_RE.search(text)
     if match is not None:
@@ -256,16 +388,6 @@ def _extract_expense_date(text: str, today: date) -> tuple[date | None, str, boo
         return parsed, remaining, needs_confirmation
 
     return None, text, False
-
-
-def _date_from_parts(day_raw: str, month_raw: str, year_raw: str | None, today: date) -> date | None:
-    day = int(day_raw)
-    month = MONTHS[month_raw.lower()]
-    year = _normalize_year(year_raw, today.year)
-    try:
-        return date(year, month, day)
-    except ValueError:
-        return None
 
 
 def _slash_date(match: re.Match[str], today: date) -> tuple[date | None, bool]:

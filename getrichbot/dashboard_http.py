@@ -25,6 +25,7 @@ from getrichbot.dashboard_auth import (
 )
 from getrichbot.dashboard_view import build_dashboard_payload
 from getrichbot.row_edits import expense_kind, format_saved_row, plan_edit
+from getrichbot.sheets import CATEGORY_SHEET_READ_TIMEOUT_SECONDS
 from getrichbot.shop_category import apply_email_shop_correction
 from getrichbot.summary import build_monthly_summary_table
 
@@ -64,56 +65,10 @@ class DashboardApp:
         self._bot_username: str | None = None
         self.gmail_push = None
         self._gmail_lock = threading.Lock()
-        self._held_gmail_pushes: list[tuple[str, dict[str, str], bytes]] = []
         self._static = {
             path: (content_type, file_path.read_bytes())
             for path, (content_type, file_path) in _STATIC.items()
         }
-
-    def _keep_gmail_push(self, method: str, headers: dict[str, str], body: bytes) -> tuple[int, list[tuple[str, str]], bytes]:
-        """Hold a tap that arrived before the reader can log it.
-
-        Success is returned only after the tap is kept. If it cannot be kept,
-        the response is a retry so Google sends it again. The caller holds
-        ``_gmail_lock``.
-        """
-        if method != "POST" or not body:
-            LOGGER.error("A Gmail tap arrived before the reader was ready and could not be kept.")
-            return _json(503, {"ok": False})
-        try:
-            self._held_gmail_pushes.append((method, dict(headers), bytes(body)))
-        except Exception:
-            LOGGER.exception("A Gmail tap arrived before the reader was ready and could not be kept.")
-            return _json(503, {"ok": False})
-        return _json(200, {"ok": True})
-
-    def attach_gmail_reader(self, handler) -> None:
-        with self._gmail_lock:
-            self.gmail_push = handler
-        self.replay_held_gmail_pushes()
-
-    def replay_held_gmail_pushes(self) -> None:
-        """Log taps that were kept until the reader could write them."""
-        with self._gmail_lock:
-            handler = self.gmail_push
-            pending = list(self._held_gmail_pushes)
-            if handler is None:
-                return
-            self._held_gmail_pushes.clear()
-        failed: list[tuple[str, dict[str, str], bytes]] = []
-        for method, headers, body in pending:
-            try:
-                status, _payload = handler(method, headers, body)
-            except Exception:
-                LOGGER.exception("A kept Gmail tap could not be logged yet. It is still waiting.")
-                failed.append((method, headers, body))
-                continue
-            if not isinstance(status, int) or status >= 500:
-                failed.append((method, headers, body))
-        if not failed:
-            return
-        with self._gmail_lock:
-            self._held_gmail_pushes = failed + list(self._held_gmail_pushes)
 
     def set_bot_username(self, username: str) -> None:
         cleaned = username.strip().lstrip("@")
@@ -149,8 +104,8 @@ class DashboardApp:
         if path == "/gmail/push":
             with self._gmail_lock:
                 handler = self.gmail_push
-                if handler is None:
-                    return self._keep_gmail_push(method, normalized, body)
+            if handler is None:
+                return _json(503, {"ok": False})
             status, payload = handler(method, normalized, body)
             return _json(status, payload if isinstance(payload, dict) else {"ok": False})
         if method not in {"GET", "POST"}:
@@ -356,8 +311,10 @@ class DashboardApp:
                         record,
                         planned.category,
                     )
-                # The next normal summary refresh rebuilds the month. Doing it
-                # inside this save can sit forever, and the page never returns.
+                try:
+                    self._refresh_monthly_summary(timeout_seconds=CATEGORY_SHEET_READ_TIMEOUT_SECONDS)
+                except Exception:
+                    LOGGER.exception("Monthly summary was not rewritten. The row is already saved.")
             else:
                 self.context.sheets.update_card_usage_record(
                     self.context.card_usage_sheet,
@@ -458,10 +415,17 @@ class DashboardApp:
         dashboard["message"] = "Deleted that row."
         return 200, dashboard
 
-    def _refresh_monthly_summary(self) -> None:
-        records = self.context.sheets.get_expense_records(self.context.raw_sheet)
+    def _refresh_monthly_summary(self, *, timeout_seconds: float | None = None) -> None:
+        records = self.context.sheets.get_expense_records(
+            self.context.raw_sheet,
+            timeout_seconds=timeout_seconds,
+        )
         table = build_monthly_summary_table(records)
-        self.context.sheets.update_monthly_summary(self.context.monthly_summary_sheet, table)
+        self.context.sheets.update_monthly_summary(
+            self.context.monthly_summary_sheet,
+            table,
+            timeout_seconds=timeout_seconds,
+        )
 
     def _read_sheet(self, label: str, scope: str, cards_scope: str = "mine") -> dict:
         with self._sheet_lock:
@@ -585,7 +549,14 @@ def context_from_settings(settings, sheets) -> DashboardContext:
     )
 
 
-def start_dashboard_server(settings, sheets, *, host: str = "0.0.0.0", port: int | None = None) -> DashboardHTTPServer | None:
+def start_dashboard_server(
+    settings,
+    sheets,
+    *,
+    host: str = "0.0.0.0",
+    port: int | None = None,
+    gmail_push=None,
+) -> DashboardHTTPServer | None:
     if port is None:
         raw_port = os.getenv("PORT", "8080").strip() or "8080"
         try:
@@ -594,6 +565,7 @@ def start_dashboard_server(settings, sheets, *, host: str = "0.0.0.0", port: int
             LOGGER.warning("PORT is not a number. The dashboard page did not start. Telegram chat is unchanged.")
             return None
     app = DashboardApp(context_from_settings(settings, sheets))
+    app.gmail_push = gmail_push
     try:
         server = DashboardHTTPServer(host, port, app)
     except OSError:

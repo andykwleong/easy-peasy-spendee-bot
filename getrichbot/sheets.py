@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-import threading
+import socket
 from typing import Any
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -15,49 +15,31 @@ SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 CATEGORY_SHEET_READ_TIMEOUT_SECONDS = 20
 
 
-def _request_http(request: Any) -> Any | None:
-    http = getattr(request, "http", None)
-    inner = getattr(http, "http", None)
-    if inner is not None and hasattr(inner, "timeout"):
-        return inner
-    if http is not None and hasattr(http, "timeout"):
-        return http
-    return None
-
-
-def execute_sheet_request(request: Any, timeout_seconds: float | None = None) -> Any:
-    """Run one Sheets call. A timeout stops a read that would otherwise never return."""
-    if timeout_seconds is None:
-        return request.execute()
+def authorized_sheets_http(credentials: Any, timeout_seconds: float):
+    """A Sheets connection that stops when the deadline passes."""
     if timeout_seconds <= 0:
         raise ValueError("Sheet read timeout must be greater than zero.")
-    http = _request_http(request)
-    previous_timeout = getattr(http, "timeout", None) if http is not None else None
-    if http is not None:
-        http.timeout = timeout_seconds
-    outcome: dict[str, Any] = {}
+    import httplib2
+    from google_auth_httplib2 import AuthorizedHttp
 
-    def run() -> None:
-        try:
-            outcome["value"] = request.execute()
-        except Exception as exc:
-            outcome["error"] = exc
+    return AuthorizedHttp(credentials, http=httplib2.Http(timeout=timeout_seconds))
 
-    worker = threading.Thread(target=run, name="sheet-read", daemon=True)
+
+def build_authorized_sheets(credentials: Any, timeout_seconds: float | None):
+    from googleapiclient.discovery import build
+
+    if timeout_seconds is None:
+        return build("sheets", "v4", credentials=credentials)
+    return build("sheets", "v4", http=authorized_sheets_http(credentials, timeout_seconds))
+
+
+def _run_sheet_request(request: Any, timeout_seconds: float | None) -> Any:
     try:
-        worker.start()
-        worker.join(timeout_seconds)
-        if worker.is_alive():
-            raise TimeoutError(f"Google Sheet read exceeded {timeout_seconds:g} seconds.")
-    finally:
-        if http is not None:
-            http.timeout = previous_timeout
-    if "error" in outcome:
-        error = outcome["error"]
-        if isinstance(error, TimeoutError):
-            raise TimeoutError(f"Google Sheet read exceeded {timeout_seconds:g} seconds.") from error
-        raise error
-    return outcome.get("value")
+        return request.execute()
+    except (TimeoutError, socket.timeout) as exc:
+        if timeout_seconds is None:
+            raise
+        raise TimeoutError(f"Google Sheet read exceeded {timeout_seconds:g} seconds.") from exc
 
 
 class SheetsClient:
@@ -67,19 +49,22 @@ class SheetsClient:
         self.service_account_json = service_account_json
         self.service: Any | None = None
 
-    def _service(self):
-        if self.service is None:
-            from google.oauth2.service_account import Credentials
-            from googleapiclient.discovery import build
+    def _credentials(self):
+        from google.oauth2.service_account import Credentials
 
-            if self.service_account_json:
-                info = json.loads(self.service_account_json)
-                credentials = Credentials.from_service_account_info(info, scopes=SCOPES)
-            elif self.service_account_file:
-                credentials = Credentials.from_service_account_file(self.service_account_file, scopes=SCOPES)
-            else:
-                raise RuntimeError("Google service account credentials are not configured.")
-            self.service = build("sheets", "v4", credentials=credentials)
+        if self.service_account_json:
+            info = json.loads(self.service_account_json)
+            return Credentials.from_service_account_info(info, scopes=SCOPES)
+        if self.service_account_file:
+            return Credentials.from_service_account_file(self.service_account_file, scopes=SCOPES)
+        raise RuntimeError("Google service account credentials are not configured.")
+
+    def _service(self, timeout_seconds: float | None = None):
+        if timeout_seconds is not None and (self.service_account_json or self.service_account_file):
+            return build_authorized_sheets(self._credentials(), timeout_seconds)
+        if self.service is not None:
+            return self.service
+        self.service = build_authorized_sheets(self._credentials(), None)
         return self.service
 
     def append_expense(self, sheet_name: str, row: ExpenseRow) -> None:
@@ -156,19 +141,16 @@ class SheetsClient:
     ) -> dict[str, Any]:
         if timeout_seconds <= 0:
             raise ValueError("Category sheet read timeout must be greater than zero.")
-        previous_timeout = getattr(self, "_values_timeout_seconds", None)
-        self._values_timeout_seconds = timeout_seconds
-        try:
-            category_source, category_rows = self._get_values_first_available(
-                [categories_sheet, "Categories", "categories"],
-                "A2:D",
-            )
-            keyword_source, keyword_rows = self._get_values_first_available(
-                [keywords_sheet, "Category Keywords", "Category Keyword", "Categories Keyword", "categories keyword"],
-                "A2:D",
-            )
-        finally:
-            self._values_timeout_seconds = previous_timeout
+        category_source, category_rows = self._get_values_first_available(
+            [categories_sheet, "Categories", "categories"],
+            "A2:D",
+            timeout_seconds=timeout_seconds,
+        )
+        keyword_source, keyword_rows = self._get_values_first_available(
+            [keywords_sheet, "Category Keywords", "Category Keyword", "Categories Keyword", "categories keyword"],
+            "A2:D",
+            timeout_seconds=timeout_seconds,
+        )
 
         variable_categories: list[str] = []
         fixed_categories: list[str] = []
@@ -311,11 +293,14 @@ class SheetsClient:
             deleted_count += 1
         return deleted_count
 
-    def get_expense_records(self, sheet_name: str) -> list[ExpenseRecord]:
-        result = self._service().spreadsheets().values().get(
-            spreadsheetId=self.sheet_id,
-            range=f"{sheet_name}!A2:Q",
-        ).execute()
+    def get_expense_records(self, sheet_name: str, *, timeout_seconds: float | None = None) -> list[ExpenseRecord]:
+        result = _run_sheet_request(
+            self._service(timeout_seconds).spreadsheets().values().get(
+                spreadsheetId=self.sheet_id,
+                range=f"{sheet_name}!A2:Q",
+            ),
+            timeout_seconds,
+        )
         rows = result.get("values", [])
         records: list[ExpenseRecord] = []
 
@@ -383,44 +368,60 @@ class SheetsClient:
             )
         return records
 
-    def update_monthly_summary(self, sheet_name: str, rows: list[list[str]]) -> None:
+    def update_monthly_summary(
+        self,
+        sheet_name: str,
+        rows: list[list[str]],
+        *,
+        timeout_seconds: float | None = None,
+    ) -> None:
         sheet_id = self._ensure_sheet(sheet_name)
-        self._service().spreadsheets().values().clear(
-            spreadsheetId=self.sheet_id,
-            range=f"{sheet_name}!A:ZZ",
-            body={},
-        ).execute()
-        self._service().spreadsheets().values().update(
-            spreadsheetId=self.sheet_id,
-            range=f"{sheet_name}!A1",
-            valueInputOption="USER_ENTERED",
-            body={"values": rows},
-        ).execute()
-        self._service().spreadsheets().batchUpdate(
-            spreadsheetId=self.sheet_id,
-            body={
-                "requests": [
-                    {
-                        "repeatCell": {
-                            "range": {
-                                "sheetId": sheet_id,
-                                "startRowIndex": 1,
-                                "startColumnIndex": 1,
-                            },
-                            "cell": {
-                                "userEnteredFormat": {
-                                    "numberFormat": {
-                                        "type": "CURRENCY",
-                                        "pattern": "$#,##0.00",
+        service = self._service(timeout_seconds)
+        _run_sheet_request(
+            service.spreadsheets().values().clear(
+                spreadsheetId=self.sheet_id,
+                range=f"{sheet_name}!A:ZZ",
+                body={},
+            ),
+            timeout_seconds,
+        )
+        _run_sheet_request(
+            service.spreadsheets().values().update(
+                spreadsheetId=self.sheet_id,
+                range=f"{sheet_name}!A1",
+                valueInputOption="USER_ENTERED",
+                body={"values": rows},
+            ),
+            timeout_seconds,
+        )
+        _run_sheet_request(
+            service.spreadsheets().batchUpdate(
+                spreadsheetId=self.sheet_id,
+                body={
+                    "requests": [
+                        {
+                            "repeatCell": {
+                                "range": {
+                                    "sheetId": sheet_id,
+                                    "startRowIndex": 1,
+                                    "startColumnIndex": 1,
+                                },
+                                "cell": {
+                                    "userEnteredFormat": {
+                                        "numberFormat": {
+                                            "type": "CURRENCY",
+                                            "pattern": "$#,##0.00",
+                                        }
                                     }
-                                }
-                            },
-                            "fields": "userEnteredFormat.numberFormat",
+                                },
+                                "fields": "userEnteredFormat.numberFormat",
+                            }
                         }
-                    }
-                ]
-            },
-        ).execute()
+                    ]
+                },
+            ),
+            timeout_seconds,
+        )
 
     def get_state_value(self, sheet_name: str, key: str) -> str | None:
         self._ensure_sheet(sheet_name)
@@ -621,18 +622,23 @@ class SheetsClient:
                 return properties["sheetId"]
         return None
 
-    def _get_values_first_available(self, sheet_names: list[str], cell_range: str) -> tuple[str | None, list[list[str]]]:
+    def _get_values_first_available(
+        self,
+        sheet_names: list[str],
+        cell_range: str,
+        timeout_seconds: float | None = None,
+    ) -> tuple[str | None, list[list[str]]]:
         seen = []
         for sheet_name in sheet_names:
             if not sheet_name or sheet_name in seen:
                 continue
             seen.append(sheet_name)
-            request = self._service().spreadsheets().values().get(
+            request = self._service(timeout_seconds).spreadsheets().values().get(
                 spreadsheetId=self.sheet_id,
                 range=f"{sheet_name}!{cell_range}",
             )
             try:
-                result = execute_sheet_request(request, getattr(self, "_values_timeout_seconds", None))
+                result = _run_sheet_request(request, timeout_seconds)
             except TimeoutError:
                 raise
             except Exception:

@@ -15,12 +15,17 @@ from dataclasses import dataclass
 from getrichbot.categories import ALL_CATEGORIES
 from getrichbot.categories import CATEGORY_KEYWORDS
 from getrichbot.categories import remember_priority_keyword
-from getrichbot.email_mail import category_from_keywords, is_email_shop
+from getrichbot.parser import categorize_description
 
 LOGGER = logging.getLogger(__name__)
 
 _PREFIX_RE = re.compile(r"^(?:[A-Za-z]{1,12}\s*\*\s*)+")
 _GRAB_SHOP_RE = re.compile(r"\bgpay\b|\bgrab(?:food)?\b", re.IGNORECASE)
+_EMAIL_RE = re.compile(r"[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}", re.IGNORECASE)
+_MAILBOX_LINE_RE = re.compile(
+    r"[^<>@]+<\s*[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}\s*>",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -46,6 +51,70 @@ def shop_keyword(shop: str) -> str:
 def category_named_in_text(text: str, categories: tuple[str, ...]) -> str | None:
     """Longest unique sheet category written in the text, including income names."""
     return _category_name_in_text(text, tuple(category for category in categories if category))
+
+
+def is_email_shop(value: str) -> bool:
+    """True when the text is an email address, not a store name."""
+    text = " ".join((value or "").split())
+    if not text or "@" not in text:
+        return False
+    bare = text.strip("<>").strip()
+    if _EMAIL_RE.fullmatch(bare):
+        return True
+    return _MAILBOX_LINE_RE.fullmatch(text) is not None
+
+
+def category_from_keywords(shop: str, logged_by: str, me_label: str, wife_label: str) -> str | None:
+    category, confidence = categorize_description(shop, logged_by, me_label, wife_label)
+    if category is None or confidence < 0.7:
+        return None
+    if category.lower().startswith("income"):
+        return None
+    return category
+
+
+def category_for_purchase(body, shop, logged_by, categories, category_for, remember_category=None) -> str:
+    """Category for a card purchase. Mail kind is already purchase.
+
+    Grab and GPAY use the transport category and are not looked up. A category
+    name that starts with ``income -`` does not turn the purchase into income.
+    """
+    sheet = tuple(category for category in categories if category)
+    if is_grab_shop(shop):
+        transport = existing_transport_category(sheet) or ""
+        if transport:
+            _remember_purchase_shop(remember_category, shop, transport)
+        return transport
+    expense_names = tuple(category for category in sheet if not category.casefold().startswith("income -"))
+    named = category_named_in_text(body, expense_names)
+    if named:
+        _remember_purchase_shop(remember_category, shop, named)
+        return named
+    try:
+        try:
+            category = category_for(shop, logged_by, body) or ""
+        except TypeError:
+            category = category_for(shop, logged_by) or ""
+    except Exception:
+        LOGGER.exception("Could not choose a category. The purchase is still logged with a blank category.")
+        category = ""
+    if str(category).casefold().startswith("income -"):
+        return ""
+    if category:
+        _remember_purchase_shop(remember_category, shop, category)
+    return str(category or "")
+
+
+def _remember_purchase_shop(remember_category, shop: str, category: str) -> None:
+    if remember_category is None or not shop or not category:
+        return
+    keyword = shop_keyword(shop)
+    if not keyword:
+        return
+    try:
+        remember_category(keyword, category)
+    except Exception:
+        LOGGER.exception("Could not save the shop keyword. The purchase is still logged.")
 
 
 def is_grab_shop(shop: str) -> bool:

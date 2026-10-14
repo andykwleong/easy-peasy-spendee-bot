@@ -76,7 +76,7 @@ class FakeSheets:
             ],
         )
 
-    def get_expense_records(self, sheet_name):
+    def get_expense_records(self, sheet_name, timeout_seconds=None):
         self.calls.append("get_expense_records")
         return list(self.records)
 
@@ -135,7 +135,7 @@ class EditableSheets(FakeSheets):
     def update_card_usage_record(self, sheet_name, row_number, **kwargs):
         self.writes.append(("card_usage", row_number, kwargs))
 
-    def update_monthly_summary(self, sheet_name, rows):
+    def update_monthly_summary(self, sheet_name, rows, timeout_seconds=None):
         self.summary_rows = rows
 
     def delete_entry_by_id(self, sheet_name, entry_id, logged_by=None):
@@ -759,8 +759,11 @@ class DashboardPromptTests(unittest.IsolatedAsyncioTestCase):
                 )
             )
 
-            def rewrite_month(sheet_name, rows):
-                raise AssertionError("the save must not rewrite Monthly Summary")
+            rewrite_calls = []
+
+            def rewrite_month(sheet_name, rows, timeout_seconds=None):
+                rewrite_calls.append(timeout_seconds)
+                raise TimeoutError("Monthly summary rewrite exceeded 20 seconds.")
 
             sheets.update_monthly_summary = rewrite_month
             app, _sheets = app_for(sheets)
@@ -806,6 +809,7 @@ class DashboardPromptTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(shown["category"], "Transport")
             self.assertEqual(shown["kind"], "expense")
             self.assertEqual(shown["payment_method"], "Sample Visa")
+            self.assertEqual(rewrite_calls[0], 20)
             self.assertFalse(hasattr(sheets, "summary_rows"))
             self.assertEqual(changed.payment_owner, "Alex")
             self.assertEqual(

@@ -4,7 +4,7 @@ import json
 import logging
 import os
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -31,6 +31,37 @@ from getrichbot.summary import build_monthly_summary_table
 
 LOGGER = logging.getLogger(__name__)
 SINGAPORE_TZ = ZoneInfo("Asia/Singapore")
+
+
+def _edited_expense(record, planned):
+    """The row already written, used when the sheet cannot be read back."""
+    changes = {}
+    if planned.amount is not None:
+        changes["amount"] = planned.amount
+    if planned.category is not None:
+        changes["category"] = planned.category
+    if planned.transaction_type is not None:
+        changes["transaction_type"] = planned.transaction_type
+    if planned.touch_payment:
+        changes["payment_method"] = planned.payment_method or ""
+        changes["payment_owner"] = planned.payment_owner or ""
+        changes["payment_channel"] = planned.payment_channel or ""
+    if not changes:
+        return record
+    return replace(record, **changes)
+
+
+def _edited_card_usage(record, planned):
+    changes = {}
+    if planned.amount is not None:
+        changes["amount"] = planned.amount
+    if planned.touch_payment:
+        changes["payment_method"] = planned.payment_method or ""
+        changes["payment_owner"] = planned.payment_owner or ""
+        changes["payment_channel"] = planned.payment_channel or ""
+    if not changes:
+        return record
+    return replace(record, **changes)
 _MAX_BODY_BYTES = 20_000
 _PACKAGE_DIR = Path(__file__).resolve().parent
 _STATIC = {
@@ -335,7 +366,33 @@ class DashboardApp:
                 payment_channel=planned.payment_channel if planned.touch_payment else current_channel,
                 showed_payment=planned.touch_payment,
             )
-            dashboard = self._read_sheet_unlocked(label, scope, cards_scope)
+            try:
+                dashboard = self._read_sheet_unlocked(label, scope, cards_scope)
+            except ValueError:
+                raise
+            except Exception:
+                LOGGER.exception("The row is already saved. The page could not be reloaded from the sheet.")
+                if source == "expense":
+                    records = [
+                        _edited_expense(item, planned) if item.row_number == row_number else item
+                        for item in records
+                    ]
+                else:
+                    card_usage = [
+                        _edited_card_usage(item, planned) if item.row_number == row_number else item
+                        for item in card_usage
+                    ]
+                today = self.context.today() if self.context.today is not None else datetime.now(SINGAPORE_TZ).date()
+                dashboard = build_dashboard_payload(
+                    viewer_label=label,
+                    scope=scope,
+                    records=records,
+                    card_usage=card_usage,
+                    payment_config=payment_config,
+                    today=today,
+                    cards_scope=cards_scope,
+                    household_labels=self._household_labels(),
+                )
         dashboard["ok"] = True
         dashboard["message"] = saved
         return 200, dashboard

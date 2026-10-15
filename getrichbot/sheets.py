@@ -231,6 +231,21 @@ class SheetsClient:
                 body={"values": append_rows},
             ).execute()
 
+    def deactivate_category_keyword(self, sheet_name: str, keyword: str) -> None:
+        cleaned = " ".join(keyword.strip().split()).casefold()
+        if not cleaned:
+            return
+        result = self._service().spreadsheets().values().get(
+            spreadsheetId=self.sheet_id,
+            range=f"{sheet_name}!A2:D",
+        ).execute()
+        rows = result.get("values", [])
+        updates = [
+            {"range": f"{sheet_name}!D{row_number}", "values": [["FALSE"]]}
+            for row_number in keyword_deactivate_actions(rows, cleaned)
+        ]
+        self._batch_update_cells(updates)
+
     def delete_last_matching_row(self, sheet_name: str, logged_by: str) -> bool:
         record = self.get_last_matching_record(sheet_name, logged_by)
         if record is None:
@@ -653,6 +668,21 @@ def expense_message_column(has_owner: bool, has_channel: bool) -> str:
     if has_owner:
         return "P"
     return "O"
+
+
+def keyword_deactivate_actions(rows: list[list[str]], keyword: str) -> list[int]:
+    """Sheet rows whose Active cell should be turned off for this shop."""
+    cleaned = " ".join(keyword.strip().split()).casefold()
+    if not cleaned:
+        return []
+    row_numbers = []
+    for index, row in enumerate(rows):
+        if _cell(row, 0).casefold() != cleaned:
+            continue
+        if _cell(row, 3).casefold() in {"false", "no", "n", "0"}:
+            continue
+        row_numbers.append(index + 2)
+    return row_numbers
 
 
 def keyword_upsert_actions(

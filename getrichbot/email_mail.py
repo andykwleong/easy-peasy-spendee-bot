@@ -16,6 +16,7 @@ from getrichbot.models import ExpenseRow
 from getrichbot.parser import resolve_transaction_date
 from getrichbot.shop_category import category_for_purchase
 from getrichbot.shop_category import category_from_keywords
+from getrichbot.shop_category import purchase_category
 from getrichbot.shop_category import is_email_shop
 
 LOGGER = logging.getLogger(__name__)
@@ -78,6 +79,8 @@ _REVERSAL_RE = re.compile(r"\breversal\b", re.IGNORECASE)
 REVERSAL_MISSING_TEXT = (
     "I could not find the original charge to reverse. I have not logged a new row."
 )
+MIXED_SHOP_ASK = "This shop has been more than one category. Which one is this?"
+_CATEGORY_MISSING_TEXT = "Category is missing. Reply to this message with the category."
 
 
 @dataclass(frozen=True)
@@ -96,6 +99,7 @@ class EmailDecision:
     payment_channel: str = ""
     channels: tuple[str, ...] = ()
     description: str = ""
+    shop_choices: tuple[str, ...] = ()
 
 
 def decide_mail(
@@ -110,6 +114,8 @@ def decide_mail(
     category_for,
     today: date,
     remember_category=None,
+    expense_records=None,
+    stop_keyword=None,
 ) -> EmailDecision:
     kind = classify_kind(subject, body)
     if kind == "statement":
@@ -128,6 +134,8 @@ def decide_mail(
         category_for=category_for,
         today=today,
         remember_category=remember_category,
+        expense_records=expense_records,
+        stop_keyword=stop_keyword,
     )
     if purchase.action == "log":
         return purchase
@@ -231,12 +239,21 @@ def email_logged_text(row: ExpenseRow) -> str:
     if not (row.category or "").strip():
         return (
             f"Logged ${row.amount:.2f}{place} - {when} via {row.payment_method} ({channel}) [{row.entry_id}]\n"
-            "Category is missing. Reply to this message with the category."
+            f"{_CATEGORY_MISSING_TEXT}"
         )
     return (
         f"Logged ${row.amount:.2f}{place} to {row.category} - "
         f"{when} via {row.payment_method} ({channel}) [{row.entry_id}]"
     )
+
+
+def mixed_shop_notice(text: str) -> str:
+    """Ask which past category this charge is, instead of saying the category is missing."""
+    if _CATEGORY_MISSING_TEXT in text:
+        return text.replace(_CATEGORY_MISSING_TEXT, MIXED_SHOP_ASK)
+    if MIXED_SHOP_ASK in text:
+        return text
+    return f"{text}\n{MIXED_SHOP_ASK}"
 
 
 def logged_notice_entry_id(text: str) -> str | None:
@@ -273,6 +290,8 @@ def _purchase_decision(
     category_for,
     today: date,
     remember_category=None,
+    expense_records=None,
+    stop_keyword=None,
 ) -> EmailDecision:
     clause = _first_purchase_clause(body)
     if clause is None:
@@ -305,14 +324,17 @@ def _purchase_decision(
         )
     card = matches[0]
     logged_by = _logged_by(addresses, forwarders) or ""
-    category = category_for_purchase(
+    chosen_category = purchase_category(
         body,
         shop,
         logged_by,
         categories,
         category_for,
         remember_category,
+        expense_records,
+        stop_keyword,
     )
+    category = chosen_category.category
     try:
         channels = tuple(channels_for(card.owner, card.name))
     except Exception:
@@ -332,6 +354,7 @@ def _purchase_decision(
         payment_owner=card.owner,
         payment_channel=channel,
         description=shop,
+        shop_choices=chosen_category.choices,
     )
 
 

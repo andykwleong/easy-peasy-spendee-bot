@@ -310,6 +310,7 @@ class DashboardApp:
                         self.context.category_keywords_sheet,
                         record,
                         planned.category,
+                        records,
                     )
                 try:
                     self._refresh_monthly_summary(timeout_seconds=CATEGORY_SHEET_READ_TIMEOUT_SECONDS)

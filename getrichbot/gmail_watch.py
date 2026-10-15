@@ -19,10 +19,13 @@ from getrichbot.email_mail import SINGAPORE_TZ
 from getrichbot.email_mail import build_expense_row
 from getrichbot.shop_category import apply_shop_keyword
 from getrichbot.shop_category import categorize_email_shop
+from getrichbot.shop_category import shop_choice_state_key
+from getrichbot.shop_category import stop_shop_keyword
 from getrichbot.shop_lookup import lookup_shop_text
 from getrichbot.ai import pick_existing_category
 from getrichbot.email_mail import REVERSAL_MISSING_TEXT
 from getrichbot.email_mail import decide_mail
+from getrichbot.email_mail import mixed_shop_notice
 from getrichbot.gmail_api import GmailApiMailbox
 from getrichbot.gmail_api import HistoryExpired
 from getrichbot.gmail_api import verify_pubsub_token
@@ -497,7 +500,14 @@ class EmailService:
         row = build_expense_row(decision, chat_id=self.config.chat_id, now=self._now())
         outcome = self.writer(row)
         self.state.set(_message_key(message_id), "logged" if outcome.logged else "asked")
-        return outcome.text
+        text = outcome.text
+        if outcome.logged and decision.shop_choices:
+            text = mixed_shop_notice(text)
+            try:
+                self.state.set(shop_choice_state_key(row.entry_id), json.dumps(list(decision.shop_choices)))
+            except Exception:
+                LOGGER.exception("Could not store the shop category buttons. The purchase is still logged.")
+        return text
 
     def _decide(self, subject: str, body: str, addresses: tuple[str, ...]) -> EmailDecision:
         try:
@@ -521,6 +531,8 @@ class EmailService:
             category_for=self.context.category_for,
             today=self._now().date(),
             remember_category=getattr(self.context, "remember_category", None),
+            expense_records=getattr(self.context, "expense_records", None),
+            stop_keyword=getattr(self.context, "stop_shop_keyword", None),
         )
 
     def _authorized(self, headers: dict[str, str]) -> bool:
@@ -722,6 +734,10 @@ class BotEmailContext:
     def remember_category(self, keyword: str, category: str) -> None:
         settings = self.bot.settings
         apply_shop_keyword(self.bot.sheets, settings.category_keywords_sheet, keyword, category)
+
+    def stop_shop_keyword(self, shop: str) -> None:
+        settings = self.bot.settings
+        stop_shop_keyword(self.bot.sheets, settings.category_keywords_sheet, shop)
 
     def category_for(self, shop: str, logged_by: str, body: str = "") -> str | None:
         del body

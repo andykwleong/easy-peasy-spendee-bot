@@ -598,6 +598,46 @@ class GmailHistoryTests(unittest.TestCase):
         self.assertEqual(message_ids, ["new-mail"])
         self.assertEqual(history_id, "200")
 
+    def test_extra_history_page_does_not_move_past_mail_that_was_not_listed(self):
+        pages = []
+        for index in range(6):
+            page = {
+                "historyId": "999",
+                "history": [
+                    {
+                        "id": str(150 + index),
+                        "messagesAdded": [
+                            {
+                                "message": {
+                                    "id": f"mail-{index}",
+                                    "threadId": f"mail-{index}",
+                                    "labelIds": ["INBOX"],
+                                }
+                            }
+                        ],
+                    }
+                ],
+            }
+            if index < 5:
+                page["nextPageToken"] = f"page-{index + 1}"
+            pages.append(page)
+
+        def respond(kwargs):
+            token = kwargs.get("pageToken")
+            if not token:
+                return pages[0]
+            return pages[int(str(token).split("-")[1])]
+
+        history = _HistoryCall(respond)
+        mailbox = GmailApiMailbox("client", "secret", "refresh")
+        mailbox._service = _GmailService(history)
+
+        message_ids, history_id = mailbox.added_since("100")
+
+        self.assertEqual(message_ids, [f"mail-{index}" for index in range(5)])
+        self.assertEqual(history_id, "154")
+        self.assertNotEqual(history_id, "999")
+
     def test_push_logs_the_mail_gmail_left_out_of_messages_added(self):
         def bare_only(_kwargs):
             return {

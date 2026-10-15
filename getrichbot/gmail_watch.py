@@ -12,6 +12,8 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Callable
 
+from google.auth.exceptions import RefreshError
+
 from getrichbot import categories as category_lists
 from getrichbot.email_mail import EmailDecision
 from getrichbot.email_mail import INCOME_MISC
@@ -39,6 +41,10 @@ _DAY_SECONDS = 24 * 60 * 60
 _BACKLOG_TEXT = (
     "There is mail I have not logged. "
     "Reply log email backlog to log it, or skip email backlog to leave it."
+)
+KEY_REJECTED_TEXT = (
+    "Email logging stopped. Google rejected the Gmail key. "
+    "Make a new refresh token and save it as GMAIL_OAUTH_REFRESH_TOKEN in Railway."
 )
 
 
@@ -113,7 +119,7 @@ class EmailService:
         now: Callable[[], datetime] | None = None,
     ):
         self.config = config
-        self.mailbox = mailbox
+        self.mailbox = _KeyWatchedMailbox(mailbox, self._key_rejected)
         self.state = state
         self.context = context
         self.writer = writer
@@ -123,6 +129,7 @@ class EmailService:
         self._notify = lambda _text: None
         self._notifier_bound = False
         self._queued_notices: list[str] = []
+        self._key_notice_sent = False
         self._lock = threading.RLock()
 
     def bind_notifier(self, loop, send) -> None:
@@ -148,6 +155,14 @@ class EmailService:
                 return
             notify = self._notify
         notify(text)
+
+    def _key_rejected(self) -> None:
+        with self._lock:
+            if self._key_notice_sent:
+                return
+            self._key_notice_sent = True
+        LOGGER.error("Google rejected the Gmail refresh token. Email logging is stopped until it is replaced.")
+        self._tell(KEY_REJECTED_TEXT)
 
     def start_tap(self, *, pause: Callable[[float], None] | None = None, retry_seconds: float = 15) -> None:
         """Ask Gmail to tap this process. A slow category sheet does not delay this."""
@@ -771,6 +786,28 @@ def attach_email(bot, settings, sheets) -> EmailService:
     )
     bot.email_service = service
     return service
+
+
+class _KeyWatchedMailbox:
+    """Passes every Gmail call through and reports a rejected refresh token before re-raising."""
+
+    def __init__(self, mailbox, on_rejected: Callable[[], None]):
+        self._mailbox = mailbox
+        self._on_rejected = on_rejected
+
+    def __getattr__(self, name: str):
+        target = getattr(self._mailbox, name)
+        if not callable(target):
+            return target
+
+        def call(*args, **kwargs):
+            try:
+                return target(*args, **kwargs)
+            except RefreshError:
+                self._on_rejected()
+                raise
+
+        return call
 
 
 class InactiveMailbox:

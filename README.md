@@ -357,6 +357,8 @@ The first time email logging starts, or if mail piled up while it was paused, th
 
 Once a day, while email logging is on and not paused, the bot renews the tap. Google stops tapping after 7 days, which is why this daily job exists. The job only renews the tap. It does not read the mailbox when there is nothing new. It does not run when email logging is off, and it does not run while email is paused, because renewing while paused would turn the tap back on. You turn the whole thing off with `pause email` or by setting `EMAIL_LOGGING_ENABLED` to false. There is no separate switch for only the daily renewal.
 
+If Google rejects the Gmail refresh token (for example, a token made while the Google sign-in app is in Testing mode stops working after 7 days), email logging stops and the bot sends one Telegram message to `TELEGRAM_CHAT_ID`: "Email logging stopped. Google rejected the Gmail key. Make a new refresh token and save it as GMAIL_OAUTH_REFRESH_TOKEN in Railway." It sends that message once per run, not on every retry. Saving the new token in Railway restarts the bot.
+
 `GMAIL_PUBSUB_AUDIENCE` is the address Google uses for the tap. If you leave it blank, the bot uses `DASHBOARD_PUBLIC_URL` with `/gmail/push` on the end. If both are blank, the bot still starts, and taps are refused until one of them is set.
 
 ## Telegram Usage

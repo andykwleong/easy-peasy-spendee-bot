@@ -32,6 +32,10 @@ class HistoryExpired(Exception):
     pass
 
 
+class HistoryUnlisted(Exception):
+    """Another history page was announced, but this page named no record to stop on."""
+
+
 @dataclass(frozen=True)
 class FetchedMail:
     subject: str
@@ -81,14 +85,18 @@ class GmailApiMailbox:
                 if _is_not_found(exc):
                     raise HistoryExpired(start_history_id) from exc
                 raise
-            history_id = str(response.get("historyId") or history_id)
-            for item in response.get("history") or []:
+            records = response.get("history") or []
+            for item in records:
                 for message_id in _inbox_message_ids(item):
                     if message_id not in message_ids:
                         message_ids.append(message_id)
             page_token = response.get("nextPageToken")
             if not page_token:
-                break
+                # The mailbox history id is safe to store only after every page has been read.
+                return message_ids, str(response.get("historyId") or history_id)
+            history_id = _last_record_id(records)
+            if not history_id:
+                raise HistoryUnlisted(start_history_id)
         return message_ids, history_id
 
     def recent_ids(self, limit: int = 20) -> list[str]:
@@ -123,17 +131,48 @@ class GmailApiMailbox:
 def _inbox_message_ids(item: dict) -> list[str]:
     found: list[str] = []
     for added in item.get("messagesAdded") or []:
-        _append_message_id(found, (added.get("message") or {}).get("id"))
-    for added in item.get("labelsAdded") or []:
-        labels = [str(label) for label in added.get("labelIds") or []]
-        if "INBOX" not in labels:
+        message = added.get("message") or {}
+        if _explicit_labels_omit_inbox(message.get("labelIds")):
             continue
-        _append_message_id(found, (added.get("message") or {}).get("id"))
+        _append_message_id(found, message.get("id"))
+    for added in item.get("labelsAdded") or []:
+        message = added.get("message") or {}
+        if not _labels_mark_inbox(message.get("labelIds"), added.get("labelIds")):
+            continue
+        _append_message_id(found, message.get("id"))
     if _history_item_names_a_change(item):
         return found
     for message in item.get("messages") or []:
+        if _explicit_labels_omit_inbox(message.get("labelIds")):
+            continue
         _append_message_id(found, message.get("id"))
     return found
+
+
+def _explicit_labels_omit_inbox(labels: object) -> bool:
+    """A message with its own labels and no INBOX is not inbox mail. Missing labels are not a refusal."""
+    if not isinstance(labels, list) or not labels:
+        return False
+    return all(str(label) != "INBOX" for label in labels)
+
+
+def _labels_mark_inbox(own_labels: object, added_labels: object) -> bool:
+    """INBOX on the message itself counts. Added labels count only when the message has none of its own."""
+    if isinstance(own_labels, list) and own_labels:
+        return any(str(label) == "INBOX" for label in own_labels)
+    if not isinstance(added_labels, list):
+        return False
+    return any(str(label) == "INBOX" for label in added_labels)
+
+
+def _last_record_id(records: list) -> str:
+    for item in reversed(records):
+        if not isinstance(item, dict):
+            continue
+        record_id = str(item.get("id") or "")
+        if record_id:
+            return record_id
+    return ""
 
 
 def _history_item_names_a_change(item: dict) -> bool:

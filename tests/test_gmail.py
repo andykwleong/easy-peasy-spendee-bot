@@ -553,6 +553,51 @@ class GmailHistoryTests(unittest.TestCase):
         self.assertNotIn("labelId", history.calls[0])
         self.assertNotIn("historyTypes", history.calls[0])
 
+    def test_inbox_mail_is_found_when_inbox_is_only_on_the_message(self):
+        def inbox_on_the_message(_kwargs):
+            return {
+                "historyId": "200",
+                "history": [
+                    {
+                        "id": "160",
+                        "messages": [{"id": "new-mail", "threadId": "thread-new"}],
+                        "labelsAdded": [
+                            {
+                                "message": {
+                                    "id": "new-mail",
+                                    "threadId": "thread-new",
+                                    "labelIds": ["UNREAD", "CATEGORY_UPDATES", "INBOX"],
+                                },
+                                "labelIds": ["UNREAD", "CATEGORY_UPDATES"],
+                            }
+                        ],
+                    },
+                    {
+                        "id": "170",
+                        "messages": [{"id": "sent-mail", "threadId": "thread-sent"}],
+                        "labelsAdded": [
+                            {
+                                "message": {
+                                    "id": "sent-mail",
+                                    "threadId": "thread-sent",
+                                    "labelIds": ["SENT"],
+                                },
+                                "labelIds": ["UNREAD"],
+                            }
+                        ],
+                    },
+                ],
+            }
+
+        history = _HistoryCall(inbox_on_the_message)
+        mailbox = GmailApiMailbox("client", "secret", "refresh")
+        mailbox._service = _GmailService(history)
+
+        message_ids, history_id = mailbox.added_since("100")
+
+        self.assertEqual(message_ids, ["new-mail"])
+        self.assertEqual(history_id, "200")
+
     def test_push_logs_the_mail_gmail_left_out_of_messages_added(self):
         def bare_only(_kwargs):
             return {

@@ -481,6 +481,67 @@ class DashboardHttpTests(unittest.TestCase):
         self.assertIn(".raw-frame", css)
         self.assertIn("overflow: scroll", css)
 
+    def test_saved_row_stays_saved_when_the_month_rewrite_cannot_reread_the_sheet(self):
+        sheets = EditableSheets()
+        sheets.records[0] = replace(
+            sheets.records[0],
+            description="Sample stall",
+            amount=Decimal("9.99"),
+            category="Food",
+            payment_method="Sample Store Card",
+            payment_owner="Alex",
+            logged_by="Alex",
+        )
+        reads = {"count": 0}
+        original = sheets.get_expense_records
+
+        def fail_after_the_row_is_loaded(sheet_name, timeout_seconds=None):
+            reads["count"] += 1
+            if reads["count"] > 1:
+                raise TimeoutError("Google Sheet read exceeded 20 seconds.")
+            return original(sheet_name, timeout_seconds)
+
+        sheets.get_expense_records = fail_after_the_row_is_loaded
+        app, _sheets = app_for(sheets)
+        _status, headers, _payload = app.handle(
+            "POST",
+            "/api/session/widget",
+            {"Content-Type": "application/json"},
+            json.dumps(sign_widget(111)).encode(),
+            secure=True,
+        )
+        cookie = dict(headers)["Set-Cookie"].split(";", 1)[0]
+
+        status, _, payload = app.handle(
+            "POST",
+            "/api/dashboard/edit",
+            {"Content-Type": "application/json", "Cookie": cookie},
+            json.dumps({
+                "id": "aa1001",
+                "source": "expense",
+                "field": "category",
+                "value": "Groceries",
+            }).encode(),
+            secure=True,
+        )
+
+        saved = body_json(payload)
+        self.assertEqual(status, 200, saved)
+        self.assertTrue(saved["ok"])
+        self.assertNotIn("could not update the Google Sheet", saved["message"])
+        shown = next(item for item in saved["recent"] if item["id"] == "aa1001")
+        self.assertEqual(shown["category"], "Groceries")
+        self.assertEqual(shown["amount"], "9.99")
+        self.assertEqual(shown["payment_method"], "Sample Store Card")
+        self.assertEqual(shown["payment_owner"], "Alex")
+        self.assertFalse(any(card["name"] == "Sample Store Card" for card in saved["edit_choices"]["cards"]))
+        stored = sheets.records[0]
+        self.assertEqual(stored.category, "Groceries")
+        self.assertEqual(stored.payment_method, "Sample Store Card")
+        self.assertEqual(stored.payment_owner, "Alex")
+        self.assertIsNone(sheets.writes[0][2]["payment_method"])
+        self.assertIsNone(sheets.writes[0][2]["payment_owner"])
+
 
 class DashboardPromptTests(unittest.IsolatedAsyncioTestCase):
     def test_button_stays_off_until_an_https_address_is_set(self):

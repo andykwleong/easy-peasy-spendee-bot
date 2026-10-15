@@ -15,6 +15,7 @@ from getrichbot.dashboard_http import DashboardApp
 from getrichbot.dashboard_http import DashboardContext
 from getrichbot.categories import configure_category_config
 from getrichbot.email_mail import INCOME_MISC
+from getrichbot.email_mail import MIXED_SHOP_ASK
 from getrichbot.email_mail import REVERSAL_MISSING_TEXT
 from getrichbot.email_mail import build_expense_row
 from getrichbot.email_mail import category_from_keywords
@@ -25,6 +26,7 @@ from getrichbot.row_edits import category_for_linked_message
 from getrichbot.row_edits import record_for_message_id
 from getrichbot.sheets import expense_message_column
 from getrichbot.shop_category import categorize_email_shop
+from getrichbot.shop_category import shop_choice_state_key
 from getrichbot.gmail_watch import BACKLOG_KEY
 from getrichbot.gmail_watch import HISTORY_KEY
 from getrichbot.gmail_watch import BotEmailContext
@@ -1065,6 +1067,67 @@ class EmailMailTests(unittest.TestCase):
         self.assertEqual(expense_message_column(True, True), "Q")
         self.assertEqual(expense_message_column(True, False), "P")
         self.assertEqual(expense_message_column(False, False), "O")
+
+    def test_mixed_shop_mail_asks_and_stores_the_button_categories(self):
+        categories = ("Shopping - Alex", "Home - Alex", "Baby bills - Alex", INCOME_MISC)
+        service, mailbox, state, writer = service_for(config_with(("All",)), categories)
+        records = (
+            ExpenseRecord(
+                row_number=2,
+                entry_id="aaa111",
+                timestamp="09:00:00",
+                expense_date="2026-10-01",
+                month="2026-10",
+                logged_by="Me",
+                raw_input="email: Sample Stall",
+                amount=Decimal("4.00"),
+                category="Shopping - Alex",
+                description="Sample Stall",
+                input_type="Email",
+                status="Confirmed",
+            ),
+            ExpenseRecord(
+                row_number=3,
+                entry_id="bbb222",
+                timestamp="09:00:00",
+                expense_date="2026-10-02",
+                month="2026-10",
+                logged_by="Me",
+                raw_input="email: Sample Stall",
+                amount=Decimal("5.00"),
+                category="Home - Alex",
+                description="Sample Stall",
+                input_type="Email",
+                status="Confirmed",
+            ),
+        )
+        calls = []
+        stopped = []
+        service.context.expense_records = lambda: records
+        service.context.stop_shop_keyword = lambda shop: stopped.append(shop)
+        service.context.category_for = lambda *args, **kwargs: calls.append(args)
+
+        def write(row):
+            writer.rows.append(row)
+            return WriteOutcome(logged=True, text=email_logged_text(row))
+
+        service.writer = write
+        mailbox.messages["m1"] = (
+            "Card alert",
+            "A transaction of SGD 9.99 was made with your card ending 1234 on 05/10/2026 at Sample Stall.\n",
+            ("person-a@example.com",),
+        )
+
+        notes = service._consume("m1")
+
+        self.assertEqual(calls, [])
+        self.assertEqual(stopped, ["Sample Stall"])
+        self.assertEqual(writer.rows[0].category, "")
+        self.assertEqual(writer.rows[0].description, "Sample Stall")
+        self.assertIn(MIXED_SHOP_ASK, notes[0])
+        self.assertNotIn("Category is missing", notes[0])
+        stored = json.loads(state.values[shop_choice_state_key(writer.rows[0].entry_id)])
+        self.assertEqual(stored, ["Shopping - Alex", "Home - Alex"])
 
 
 if __name__ == "__main__":

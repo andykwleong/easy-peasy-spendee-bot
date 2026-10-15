@@ -3,10 +3,18 @@ import unittest
 from getrichbot import categories
 from getrichbot.categories import configure_category_config
 from getrichbot.models import ExpenseRecord
+from getrichbot.sheets import keyword_deactivate_actions
 from getrichbot.sheets import keyword_upsert_actions
+from getrichbot.shop_category import apply_email_shop_correction
 from getrichbot.shop_category import categorize_email_shop
+from getrichbot.shop_category import category_from_keywords
+from getrichbot.shop_category import purchase_category
+from getrichbot.shop_category import record_shop_category_choice
 from getrichbot.shop_category import remember_email_shop_correction
 from getrichbot.shop_category import resolve_shop_category
+from getrichbot.shop_category import resolve_shop_category_tap
+from getrichbot.shop_category import shop_category_callback
+from getrichbot.shop_category import shop_choices_from_state
 from getrichbot.shop_lookup import EXA_SEARCH_URL
 from getrichbot.shop_lookup import exa_description
 from getrichbot.shop_lookup import exa_search_body
@@ -346,3 +354,212 @@ class ShopCategoryTests(unittest.TestCase):
         self.assertNotIn("1234", str(seen[0][1]))
         self.assertNotIn("test-exa-key", seen[0][0])
         self.assertNotIn("test-exa-key", str(seen[0][1]))
+
+    def test_one_past_category_is_kept_and_the_shop_is_not_looked_up(self):
+        calls = []
+        saved = []
+        stopped = []
+        records = (
+            _row("fp*Sample Stall", "Shopping - Alex"),
+            _row("Sample Stall", "", entry_id="blank1", row_number=3),
+            _row("Sample Stall", "Income - misc", entry_id="inc001", row_number=4, transaction_type="Income"),
+            _row("Other Depot", "Home - Alex", entry_id="other1", row_number=5),
+            _row("Sample Stall", "Shopping - Alex", entry_id="pend01", row_number=6, status="Pending"),
+        )
+
+        result = purchase_category(
+            "A charge at Sample Stall",
+            "Sample Stall",
+            "Alex",
+            ("Shopping - Alex", "Home - Alex", "Baby bills - Alex"),
+            lambda *args: calls.append(args),
+            lambda *args: saved.append(args),
+            records,
+            lambda shop: stopped.append(shop),
+        )
+
+        self.assertEqual(result.category, "Shopping - Alex")
+        self.assertEqual(result.choices, ())
+        self.assertEqual(calls, [])
+        self.assertEqual(saved, [])
+        self.assertEqual(stopped, [])
+
+    def test_mixed_shop_asks_with_past_categories_and_does_not_look_up(self):
+        calls = []
+        saved = []
+        stopped = []
+        records = (
+            _row("Sample Stall", "Shopping - Alex", entry_id="aaa111"),
+            _row("Sample Stall", "Home - Alex", entry_id="bbb222", row_number=3),
+            _row("Sample Stall", "Baby bills - Alex", entry_id="ccc333", row_number=4),
+        )
+
+        result = purchase_category(
+            "Food at Sample Stall",
+            "Sample Stall",
+            "Alex",
+            ("Shopping - Alex", "Home - Alex", "Baby bills - Alex", "Food"),
+            lambda *args: calls.append(args),
+            lambda *args: saved.append(args),
+            records,
+            lambda shop: stopped.append(shop),
+        )
+
+        self.assertEqual(result.category, "")
+        self.assertEqual(result.choices, ("Shopping - Alex", "Home - Alex", "Baby bills - Alex"))
+        self.assertEqual(calls, [])
+        self.assertEqual(saved, [])
+        self.assertEqual(stopped, ["Sample Stall"])
+
+    def test_shop_with_no_past_rows_still_uses_the_keyword_and_lookup_path(self):
+        self._use_sample_categories()
+        keyworded = purchase_category(
+            "A charge at Sample Stall",
+            "Sample Stall",
+            "Alex",
+            ("Shopping - Alex", "Home - Alex", "Baby bills - Alex"),
+            lambda shop, logged_by, body="": category_from_keywords(shop, logged_by, "Alex", "Sam"),
+            expense_records=(),
+        )
+        self.assertEqual(keyworded.category, "Shopping - Alex")
+        self.assertEqual(keyworded.choices, ())
+
+        calls = []
+
+        def lookup(shop, logged_by, body=""):
+            del logged_by, body
+            calls.append(shop)
+            return "Baby bills - Alex"
+
+        looked_up = purchase_category(
+            "A charge at Sample Depot",
+            "Sample Depot",
+            "Alex",
+            ("Shopping - Alex", "Home - Alex", "Baby bills - Alex"),
+            lookup,
+            expense_records=(),
+        )
+        self.assertEqual(calls, ["Sample Depot"])
+        self.assertEqual(looked_up.category, "Baby bills - Alex")
+
+        def fail():
+            raise TimeoutError("sheet")
+
+        fallback = purchase_category(
+            "A charge at Sample Depot",
+            "Sample Depot",
+            "Alex",
+            ("Shopping - Alex", "Home - Alex", "Baby bills - Alex"),
+            lambda *args: "Home - Alex",
+            expense_records=fail,
+        )
+        self.assertEqual(fallback.category, "Home - Alex")
+
+    def test_second_category_stops_the_keyword_and_the_next_charge_asks(self):
+        self._use_sample_categories()
+        sheets = _KeywordSheet()
+        first = _row("Sample Stall", "Shopping - Alex", entry_id="aaa111", row_number=2)
+        second = _row("Sample Stall", "Shopping - Alex", entry_id="bbb222", row_number=3)
+        apply_email_shop_correction(sheets, "Category Keywords", second, "Home - Alex", (first, second))
+
+        self.assertEqual(sheets.upserts, [])
+        self.assertEqual(sheets.deactivated, [("Category Keywords", "sample stall")])
+        self.assertEqual(
+            keyword_deactivate_actions(
+                [["sample stall", "Shopping - Alex", "Priority", "TRUE"]],
+                "Sample Stall",
+            ),
+            [2],
+        )
+        self.assertIsNone(category_from_keywords("Sample Stall", "Alex", "Alex", "Sam"))
+
+        calls = []
+        later = purchase_category(
+            "Another charge at Sample Stall",
+            "Sample Stall",
+            "Alex",
+            ("Shopping - Alex", "Home - Alex", "Baby bills - Alex"),
+            lambda *args: calls.append(args),
+            expense_records=(first, _row("Sample Stall", "Home - Alex", entry_id="bbb222", row_number=3)),
+        )
+        self.assertEqual(calls, [])
+        self.assertEqual(later.category, "")
+        self.assertEqual(later.choices, ("Shopping - Alex", "Home - Alex"))
+
+    def test_fix_tagging_one_email_row_still_saves_the_keyword(self):
+        self._use_sample_categories()
+        sheets = _KeywordSheet()
+        only = _row("Sample Stall", "Shopping - Alex")
+        apply_email_shop_correction(sheets, "Category Keywords", only, "Home - Alex", (only,))
+        self.assertEqual(sheets.deactivated, [])
+        self.assertEqual(sheets.upserts, [("Category Keywords", "sample stall", "Home - Alex")])
+
+    def test_only_the_submitter_can_choose_and_the_tap_does_not_pin_the_shop(self):
+        record = _row("Sample Stall", "", logged_by="Alex", entry_id="abc123")
+        choices = ("Shopping - Alex", "Home - Alex", "Baby bills - Alex")
+        chosen = resolve_shop_category_tap("abc123", 2, choices, record, "Alex")
+        blocked = resolve_shop_category_tap("abc123", 2, choices, record, "Sam")
+        self.assertEqual(chosen.status, "ok")
+        self.assertEqual(chosen.category, "Baby bills - Alex")
+        self.assertEqual(blocked.status, "wrong_person")
+        callback = shop_category_callback(record.entry_id, 2)
+        self.assertEqual(callback, "shopcat|abc123|2")
+        self.assertLessEqual(len(callback.encode()), 64)
+        self.assertEqual(shop_choices_from_state('["Shopping - Alex", "Home - Alex"]'), choices[:2])
+
+        sheets = _KeywordSheet()
+        record_shop_category_choice(sheets, "Raw Expenses", record, chosen.category)
+        self.assertEqual(sheets.upserts, [])
+        self.assertEqual(sheets.deactivated, [])
+        self.assertEqual(sheets.updates, [{"category": "Baby bills - Alex", "transaction_type": "Expense"}])
+
+    def _use_sample_categories(self):
+        configure_category_config(
+            {
+                **self.original,
+                "variable_categories": ["Shopping - Alex", "Home - Alex", "Baby bills - Alex"],
+                "fixed_categories": [],
+                "category_keywords": {"Shopping - Alex": ["sample stall"]},
+                "priority_keywords": [{"category": "Shopping - Alex", "keywords": ["sample stall"]}],
+                "shopping_keywords": [],
+                "shopping_categories": {},
+                "category_aliases": {"sample stall": "Shopping - Alex"},
+            }
+        )
+
+
+def _row(description, category, **overrides):
+    values = {
+        "row_number": 2,
+        "entry_id": "abc123",
+        "timestamp": "09:00:00",
+        "expense_date": "2026-10-05",
+        "month": "2026-10",
+        "logged_by": "Alex",
+        "raw_input": f"email: {description}",
+        "amount": Decimal("9.99"),
+        "category": category,
+        "description": description,
+        "input_type": "Email",
+        "status": "Confirmed",
+        "transaction_type": "Expense",
+    }
+    values.update(overrides)
+    return ExpenseRecord(**values)
+
+
+class _KeywordSheet:
+    def __init__(self):
+        self.upserts = []
+        self.deactivated = []
+        self.updates = []
+
+    def upsert_category_keyword(self, sheet_name, keyword, category):
+        self.upserts.append((sheet_name, keyword, category))
+
+    def deactivate_category_keyword(self, sheet_name, keyword):
+        self.deactivated.append((sheet_name, keyword))
+
+    def update_expense_record(self, sheet_name, row_number, **updates):
+        del sheet_name, row_number
+        self.updates.append(updates)

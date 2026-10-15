@@ -8,12 +8,14 @@ existing names, or nothing.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from dataclasses import dataclass
 
 from getrichbot.categories import ALL_CATEGORIES
 from getrichbot.categories import CATEGORY_KEYWORDS
+from getrichbot.categories import forget_shop_keyword
 from getrichbot.categories import remember_priority_keyword
 from getrichbot.parser import categorize_description
 
@@ -33,6 +35,22 @@ class ShopCategory:
     category: str | None
     learned_keyword: str = ""
     lookup_query: str = ""
+
+
+@dataclass(frozen=True)
+class PurchaseCategory:
+    category: str = ""
+    choices: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class ShopTap:
+    status: str
+    category: str = ""
+    entry_id: str = ""
+
+
+SHOP_CATEGORY_CALLBACK = "shopcat"
 
 
 def strip_payment_prefix(shop: str) -> str:
@@ -73,23 +91,64 @@ def category_from_keywords(shop: str, logged_by: str, me_label: str, wife_label:
     return category
 
 
-def category_for_purchase(body, shop, logged_by, categories, category_for, remember_category=None) -> str:
-    """Category for a card purchase. Mail kind is already purchase.
+def category_for_purchase(
+    body,
+    shop,
+    logged_by,
+    categories,
+    category_for,
+    remember_category=None,
+    expense_records=None,
+    stop_keyword=None,
+) -> str:
+    """Category for a card purchase. Mail kind is already purchase."""
+    return purchase_category(
+        body,
+        shop,
+        logged_by,
+        categories,
+        category_for,
+        remember_category,
+        expense_records,
+        stop_keyword,
+    ).category
 
-    Grab and GPAY use the transport category and are not looked up. A category
-    name that starts with ``income -`` does not turn the purchase into income.
+
+def purchase_category(
+    body,
+    shop,
+    logged_by,
+    categories,
+    category_for,
+    remember_category=None,
+    expense_records=None,
+    stop_keyword=None,
+) -> PurchaseCategory:
+    """Category for a card purchase, including a mixed shop that must be asked.
+
+    Past confirmed expense rows for the same shop come first. One category is
+    reused. More than one category is not guessed and is not looked up. A shop
+    with no past rows still uses the keyword, the category name, and the lookup.
+    Grab and GPAY use the transport category only on that no-history path.
     """
+    history = _shop_history(expense_records, shop)
+    if len(history) == 1:
+        return PurchaseCategory(history[0])
+    if len(history) > 1:
+        _stop_shop_keyword(stop_keyword, shop)
+        return PurchaseCategory("", history)
+
     sheet = tuple(category for category in categories if category)
     if is_grab_shop(shop):
         transport = existing_transport_category(sheet) or ""
         if transport:
             _remember_purchase_shop(remember_category, shop, transport)
-        return transport
+        return PurchaseCategory(transport)
     expense_names = tuple(category for category in sheet if not category.casefold().startswith("income -"))
     named = category_named_in_text(body, expense_names)
     if named:
         _remember_purchase_shop(remember_category, shop, named)
-        return named
+        return PurchaseCategory(named)
     try:
         try:
             category = category_for(shop, logged_by, body) or ""
@@ -99,10 +158,69 @@ def category_for_purchase(body, shop, logged_by, categories, category_for, remem
         LOGGER.exception("Could not choose a category. The purchase is still logged with a blank category.")
         category = ""
     if str(category).casefold().startswith("income -"):
-        return ""
+        return PurchaseCategory("")
     if category:
         _remember_purchase_shop(remember_category, shop, category)
-    return str(category or "")
+    return PurchaseCategory(str(category or ""))
+
+
+def confirmed_shop_categories(records, shop: str) -> tuple[str, ...]:
+    """Distinct expense categories already confirmed for this shop, first seen first."""
+    return _categories_for_shop(records, shop)
+
+
+def shop_is_mixed_after(records, record, category: str) -> bool:
+    """True when this correction leaves the shop with more than one category."""
+    categories = _categories_for_shop(records, getattr(record, "description", ""), edited=record, new_category=category)
+    return len(categories) > 1
+
+
+def shop_choice_state_key(entry_id: str) -> str:
+    cleaned = "".join(character for character in (entry_id or "") if character.isalnum())
+    return f"shop_category_choices:{cleaned}"
+
+
+def shop_choices_from_state(raw: str | None) -> tuple[str, ...]:
+    if not raw:
+        return ()
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return ()
+    if not isinstance(data, list):
+        return ()
+    choices = []
+    for item in data:
+        text = " ".join(str(item).split())
+        if text and text not in choices:
+            choices.append(text)
+    return tuple(choices)
+
+
+def shop_category_callback(entry_id: str, index: int) -> str:
+    return f"{SHOP_CATEGORY_CALLBACK}|{entry_id}|{index}"
+
+
+def resolve_shop_category_tap(entry_id: str, index: int, choices: tuple[str, ...], record, actor: str | None) -> ShopTap:
+    """Only the person who submitted the mail may choose, and only a listed category."""
+    if record is None or not entry_id:
+        return ShopTap("missing")
+    logged_by = str(getattr(record, "logged_by", "") or "")
+    if not actor or actor != logged_by:
+        return ShopTap("wrong_person", entry_id=entry_id)
+    if index < 0 or index >= len(choices):
+        return ShopTap("invalid", entry_id=entry_id)
+    return ShopTap("ok", category=choices[index], entry_id=str(getattr(record, "entry_id", "") or entry_id))
+
+
+def record_shop_category_choice(sheets, sheet_name: str, record, category: str) -> None:
+    """Update this expense row only. The shop is not saved as a keyword."""
+    sheets.update_expense_record(
+        sheet_name,
+        record.row_number,
+        category=category,
+        transaction_type="Expense",
+    )
 
 
 def _remember_purchase_shop(remember_category, shop: str, category: str) -> None:
@@ -228,17 +346,111 @@ def apply_shop_keyword(sheets, sheet_name: str, keyword: str, category: str) -> 
     remember_priority_keyword(keyword, category)
 
 
-def apply_email_shop_correction(sheets, sheet_name: str, record, category: str | None) -> None:
+def stop_shop_keyword(sheets, sheet_name: str, shop: str) -> None:
+    """Turn off a shop keyword so the next charge is not pinned to one category."""
+    keyword = shop_keyword(shop)
+    if not keyword:
+        return
+    try:
+        sheets.deactivate_category_keyword(sheet_name, keyword)
+    except Exception:
+        LOGGER.exception("Could not turn off the shop keyword. This charge will still ask.")
+    forget_shop_keyword(keyword)
+
+
+def apply_email_shop_correction(sheets, sheet_name: str, record, category: str | None, records=None) -> None:
     if not category:
         return
+    keyword = shop_keyword(getattr(record, "description", ""))
+    if (
+        keyword
+        and str(getattr(record, "input_type", "")).casefold() == "email"
+        and records is not None
+        and shop_is_mixed_after(records, record, category)
+    ):
+        try:
+            stop_shop_keyword(sheets, sheet_name, keyword)
+        except Exception:
+            LOGGER.exception("Could not stop the shop keyword. The row change is already saved.")
+        return
 
-    def save(keyword: str, new_category: str) -> None:
-        apply_shop_keyword(sheets, sheet_name, keyword, new_category)
+    def save(saved_keyword: str, new_category: str) -> None:
+        apply_shop_keyword(sheets, sheet_name, saved_keyword, new_category)
 
     try:
         remember_email_shop_correction(record, category, save)
     except Exception:
         LOGGER.exception("Could not update the shop keyword. The row change is already saved.")
+
+
+def _shop_history(expense_records, shop: str) -> tuple[str, ...]:
+    if expense_records is None or not shop_keyword(shop):
+        return ()
+    try:
+        records = expense_records() if callable(expense_records) else expense_records
+    except Exception:
+        LOGGER.exception("Could not read past expenses for this shop. The usual category check still runs.")
+        return ()
+    return confirmed_shop_categories(records, shop)
+
+
+def _stop_shop_keyword(stop_keyword, shop: str) -> None:
+    if stop_keyword is None or not shop_keyword(shop):
+        return
+    try:
+        stop_keyword(shop)
+    except Exception:
+        LOGGER.exception("Could not stop the shop keyword. This charge will still ask.")
+
+
+def _categories_for_shop(records, shop: str, *, edited=None, new_category: str | None = None) -> tuple[str, ...]:
+    keyword = shop_keyword(shop)
+    if not keyword:
+        return ()
+    found: list[str] = []
+    seen = False
+    for record in records or ():
+        same = edited is not None and _same_row(record, edited)
+        if same:
+            seen = True
+        if not _confirmed_expense(record):
+            continue
+        if shop_keyword(getattr(record, "description", "")) != keyword:
+            continue
+        category = new_category if same and new_category is not None else getattr(record, "category", "")
+        _add_category(found, category)
+    if edited is not None and not seen and new_category is not None:
+        if _confirmed_expense(edited) and shop_keyword(getattr(edited, "description", "")) == keyword:
+            _add_category(found, new_category)
+    return tuple(found)
+
+
+def _confirmed_expense(record) -> bool:
+    if str(getattr(record, "status", "")).casefold() != "confirmed":
+        return False
+    kind = str(getattr(record, "transaction_type", "") or "Expense").casefold()
+    if kind in {"income", "fixed"}:
+        return False
+    if str(getattr(record, "input_type", "")).casefold() == "fixed":
+        return False
+    return True
+
+
+def _add_category(found: list[str], category) -> None:
+    text = " ".join(str(category or "").split())
+    if not text or text.casefold().startswith("income"):
+        return
+    if text not in found:
+        found.append(text)
+
+
+def _same_row(left, right) -> bool:
+    left_id = str(getattr(left, "entry_id", "") or "")
+    right_id = str(getattr(right, "entry_id", "") or "")
+    if left_id and right_id:
+        return left_id.casefold() == right_id.casefold()
+    left_row = getattr(left, "row_number", None)
+    return left_row is not None and left_row == getattr(right, "row_number", None)
 
 
 def _category_name_in_text(text: str, categories: tuple[str, ...]) -> str | None:

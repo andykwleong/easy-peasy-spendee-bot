@@ -18,11 +18,18 @@ from zoneinfo import ZoneInfo
 from getrichbot.categories import ALL_CATEGORIES, CATEGORY_ALIASES, FIXED_CATEGORIES, VARIABLE_CATEGORIES, category_config_status, configure_category_config
 from getrichbot.config import Settings
 from getrichbot.email_mail import LAST_BOT_MESSAGE_KEY
+from getrichbot.email_mail import MIXED_SHOP_ASK
 from getrichbot.email_mail import email_logged_text
 from getrichbot.email_mail import entry_id_in_text
 from getrichbot.email_mail import logged_notice_entry_id
 from getrichbot.gmail_watch import WriteOutcome, attach_email, is_email_command
+from getrichbot.shop_category import SHOP_CATEGORY_CALLBACK
 from getrichbot.shop_category import apply_email_shop_correction
+from getrichbot.shop_category import record_shop_category_choice
+from getrichbot.shop_category import resolve_shop_category_tap
+from getrichbot.shop_category import shop_category_callback
+from getrichbot.shop_category import shop_choice_state_key
+from getrichbot.shop_category import shop_choices_from_state
 from getrichbot.cards import PaymentConfig, build_card_summary, format_card_summary
 from getrichbot.image_utils import prepare_image_for_vision
 from getrichbot.logging_utils import configure_logging
@@ -495,6 +502,78 @@ class FinanceBot:
         logged_line = await self._append_or_hold_duplicate(update, row)
         if logged_line:
             await query.edit_message_text(logged_line)
+
+    def shop_category_markup(self, text: str):
+        if MIXED_SHOP_ASK not in (text or ""):
+            return None
+        entry_id = logged_notice_entry_id(text)
+        if not entry_id or not hasattr(self.sheets, "get_state_value"):
+            return None
+        raw = self.sheets.get_state_value(self.settings.bot_state_sheet, shop_choice_state_key(entry_id))
+        choices = tuple(category for category in shop_choices_from_state(raw) if category in ALL_CATEGORIES)
+        if len(choices) < 2:
+            return None
+        return self._shop_category_keyboard(entry_id, choices)
+
+    def _shop_category_keyboard(self, entry_id: str, categories: tuple[str, ...]):
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+        buttons = [
+            InlineKeyboardButton(category, callback_data=shop_category_callback(entry_id, index))
+            for index, category in enumerate(categories)
+        ]
+        return InlineKeyboardMarkup([[button] for button in buttons])
+
+    async def handle_shop_category_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        query = update.callback_query
+        if query is None or update.effective_user is None:
+            return
+
+        parts = (query.data or "").split("|")
+        if len(parts) != 3 or parts[0] != SHOP_CATEGORY_CALLBACK:
+            return
+        entry_id = parts[1]
+        try:
+            option_index = int(parts[2])
+        except ValueError:
+            await query.answer("That category option is invalid.", show_alert=True)
+            return
+
+        raw = None
+        if hasattr(self.sheets, "get_state_value"):
+            raw = self.sheets.get_state_value(self.settings.bot_state_sheet, shop_choice_state_key(entry_id))
+        choices = shop_choices_from_state(raw)
+        record = None
+        if hasattr(self.sheets, "get_record_by_id"):
+            record = self.sheets.get_record_by_id(self.settings.raw_expenses_sheet, entry_id)
+        actor = self.settings.label_for_user(update.effective_user.id)
+        tap = resolve_shop_category_tap(entry_id, option_index, choices, record, actor)
+        if tap.status == "wrong_person":
+            await query.answer("Only the person who submitted this mail can choose the category.", show_alert=True)
+            return
+        if tap.status != "ok" or record is None or tap.category not in ALL_CATEGORIES:
+            await query.answer("That category option is no longer available.", show_alert=True)
+            return
+
+        await query.answer()
+        record_shop_category_choice(self.sheets, self.settings.raw_expenses_sheet, record, tap.category)
+        try:
+            self.sheets.set_state_value(self.settings.bot_state_sheet, shop_choice_state_key(entry_id), "")
+        except Exception:
+            LOGGER.exception("Could not clear the shop category buttons. The row is already updated.")
+        self._refresh_monthly_summary()
+        await query.edit_message_text(
+            format_saved_row(
+                amount=record.amount,
+                category=tap.category,
+                expense_date=record.expense_date,
+                entry_id=record.entry_id,
+                kind="expense",
+                payment_method=record.payment_method,
+                payment_owner=record.payment_owner or record.logged_by,
+                payment_channel=record.payment_channel,
+            )
+        )
 
     async def pending_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if update.message is None:
@@ -1519,6 +1598,7 @@ class FinanceBot:
             self.settings.category_keywords_sheet,
             record,
             category,
+            records,
         )
         self._refresh_monthly_summary()
         kind = "income" if transaction_type == "Income" else expense_kind(transaction_type, record.input_type)
@@ -1625,6 +1705,7 @@ class FinanceBot:
                     self.settings.category_keywords_sheet,
                     record,
                     planned.category,
+                    records,
                 )
             if planned.amount is not None or planned.category is not None:
                 self._refresh_monthly_summary()
@@ -1739,6 +1820,7 @@ class FinanceBot:
             return False
 
         self.pending_edits.pop(key, None)
+        records = self.sheets.get_expense_records(self.settings.raw_expenses_sheet)
         updated_lines = []
         for change in pending.changes:
             self.sheets.update_expense_record(
@@ -1756,6 +1838,7 @@ class FinanceBot:
                     self.settings.category_keywords_sheet,
                     change.record,
                     change.category,
+                    records,
                 )
             updated_lines.append(f"Updated {self._edit_after_line(change)}")
         self._refresh_monthly_summary()
@@ -2044,7 +2127,7 @@ class FinanceBot:
             await update.message.reply_text("Email logging is off.")
             return
         for reply in service.handle_command(text):
-            await update.message.reply_text(reply)
+            await update.message.reply_text(reply, reply_markup=self.shop_category_markup(reply))
 
     def log_email_row(self, row: ExpenseRow) -> WriteOutcome:
         if row.transaction_type.lower() != "income":
@@ -3561,7 +3644,11 @@ def main() -> None:
             if settings.telegram_chat_id is None:
                 LOGGER.warning("An email notice was not sent because TELEGRAM_CHAT_ID is not set.")
                 return
-            sent = await application.bot.send_message(chat_id=settings.telegram_chat_id, text=text)
+            sent = await application.bot.send_message(
+                chat_id=settings.telegram_chat_id,
+                text=text,
+                reply_markup=finance_bot.shop_category_markup(text),
+            )
             message_id = getattr(sent, "message_id", None)
             if message_id is not None:
                 finance_bot.remember_email_notice(text, message_id)
@@ -3596,6 +3683,12 @@ def main() -> None:
         CallbackQueryHandler(
             finance_bot.handle_income_category_callback,
             pattern=rf"^{INCOME_CATEGORY_CALLBACK}\|",
+        )
+    )
+    application.add_handler(
+        CallbackQueryHandler(
+            finance_bot.handle_shop_category_callback,
+            pattern=rf"^{SHOP_CATEGORY_CALLBACK}\|",
         )
     )
     application.add_handler(

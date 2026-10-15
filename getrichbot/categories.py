@@ -245,3 +245,24 @@ def remember_priority_keyword(keyword: str, category: str) -> None:
         if remaining:
             kept.append((name, remaining))
     BILL_PRIORITY_KEYWORDS[:] = [(category, [cleaned]), *kept]
+
+
+def forget_shop_keyword(keyword: str) -> None:
+    """Stop a shop keyword from choosing a category on its own.
+
+    The sheet row is turned off separately. This only clears the copy the
+    running bot is using, so the next charge is not pinned before a restart.
+    """
+    cleaned = " ".join(keyword.casefold().split())
+    if not cleaned:
+        return
+    for name, words in list(CATEGORY_KEYWORDS.items()):
+        CATEGORY_KEYWORDS[name] = [word for word in words if word.casefold() != cleaned]
+    for alias in [key for key in CATEGORY_ALIASES if key.casefold() == cleaned]:
+        CATEGORY_ALIASES.pop(alias, None)
+    kept: list[tuple[str, list[str]]] = []
+    for name, words in BILL_PRIORITY_KEYWORDS:
+        remaining = [word for word in words if word.casefold() != cleaned]
+        if remaining:
+            kept.append((name, remaining))
+    BILL_PRIORITY_KEYWORDS[:] = kept

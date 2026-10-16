@@ -108,6 +108,7 @@ This file contains project-specific instructions for coding agents working on Ge
 - Email channel rules match card channels: Foodpanda-style delivery is Online, a restaurant is PayWave, one non-All channel is used automatically, and both channels with neither shop type still log the row with a blank channel. Telegram shows All for that blank channel. The dashboard can set the channel afterwards.
 - `pause email` calls Gmail users.stop. `resume email` starts the watch again. First start and mail that piled up while paused ask before logging. Replies are `log email backlog` and `skip email backlog`.
 - Bot State stores `gmail_history_id`, pause, backlog ids, `last_bot_message_id`, and `gmail_message_id:<id>` so a restart does not log the same mail twice and a category reply can find the previous bot message. A pending channel question is also stored there, without the mail body or last 4.
+- When any Gmail call fails with a Google `RefreshError` (such as `invalid_grant` from an expired refresh token), send one Telegram message to `TELEGRAM_CHAT_ID`: "Email logging stopped. Google rejected the Gmail key. Make a new refresh token and save it as GMAIL_OAUTH_REFRESH_TOKEN in Railway." Send it once per process, not on every retry. Other error handling stays the same.
 - A daily job renews the Gmail watch once a day because Google stops tapping after 7 days. It only renews the tap. It does not read the mailbox when there is nothing new. Skip it when email logging is off or paused.
 
 ## Deployment

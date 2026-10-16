@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import base64
 import json
+import threading
 import time
 import unittest
 from datetime import date
 from datetime import datetime
 from decimal import Decimal
+
+from google.auth.exceptions import RefreshError
 
 from getrichbot import categories as category_lists
 from getrichbot.dashboard_http import DashboardApp
@@ -16,6 +19,7 @@ from getrichbot.email_mail import email_logged_text
 from getrichbot.gmail_api import GmailApiMailbox
 from getrichbot.gmail_watch import BACKLOG_KEY
 from getrichbot.gmail_watch import HISTORY_KEY
+from getrichbot.gmail_watch import KEY_REJECTED_TEXT
 from getrichbot.gmail_watch import BotEmailContext
 from getrichbot.gmail_watch import EmailService
 from getrichbot.gmail_watch import EmailSettings
@@ -245,6 +249,47 @@ class EmailWatchTests(unittest.TestCase):
         self.assertEqual(mailbox.fetch_calls, 1)
         self.assertEqual(writer.rows[0].category, "Food")
         self.assertEqual(mailbox.start_history, "50")
+
+    def test_rejected_gmail_key_during_push_sends_one_notice(self):
+        service, mailbox, state, writer = service_for(config_with())
+        state.set(HISTORY_KEY, "50")
+
+        def rejected(_start_history_id):
+            mailbox.history_calls += 1
+            raise RefreshError("invalid_grant: Token has been expired or revoked.")
+
+        mailbox.added_since = rejected
+        for _ in range(3):
+            status, payload = service.handle_http("POST", {"authorization": "Bearer test-token"}, _push_body("51"))
+            self.assertEqual(status, 500)
+            self.assertFalse(payload["ok"])
+        self.assertEqual(mailbox.history_calls, 3)
+        self.assertEqual(service._queued_notices, [KEY_REJECTED_TEXT])
+        self.assertEqual(writer.rows, [])
+
+    def test_rejected_gmail_key_during_tap_start_sends_one_notice(self):
+        service, mailbox, state, writer = service_for(config_with())
+        tries = threading.Event()
+        hold = threading.Event()
+        pauses = []
+
+        def rejected(_topic):
+            mailbox.watch_calls += 1
+            raise RefreshError("invalid_grant: Token has been expired or revoked.")
+
+        def pause(seconds):
+            pauses.append(seconds)
+            if len(pauses) >= 3:
+                tries.set()
+                hold.wait()
+
+        mailbox.watch = rejected
+        service.start_tap(pause=pause, retry_seconds=1)
+        self.assertTrue(tries.wait(2))
+        self.assertEqual(mailbox.watch_calls, 3)
+        self.assertEqual(service._queued_notices, [KEY_REJECTED_TEXT])
+        self.assertIsNone(state.get(HISTORY_KEY))
+        hold.set()
 
     def test_push_before_the_reader_or_history_id_is_a_retry(self):
         encoded = base64.urlsafe_b64encode(
@@ -508,6 +553,18 @@ class _GmailService:
 
     def users(self):
         return self._users
+
+
+def _push_body(history_id: str) -> bytes:
+    encoded = base64.urlsafe_b64encode(
+        json.dumps({"emailAddress": "mailbox@example.com", "historyId": history_id}).encode()
+    ).decode()
+    return json.dumps(
+        {
+            "message": {"data": encoded, "messageId": "1"},
+            "subscription": "projects/your-project-id/subscriptions/gmail-push",
+        }
+    ).encode()
 
 
 def _inbox_history(kwargs):

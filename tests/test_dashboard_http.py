@@ -15,6 +15,7 @@ from urllib.parse import urlencode
 from telegram.error import TelegramError
 
 from getrichbot.cards import CardLimit, CardLimitUsage, parse_payment_config
+from getrichbot.sheet_changes import SheetChanges
 from getrichbot.sheets import SheetsClient
 from getrichbot.dashboard_auth import issue_session_token
 from getrichbot.dashboard_bot import _DASHBOARD_REPLY_TEXT, configure_dashboard_menu, dashboard_prompt, reply_with_dashboard
@@ -582,6 +583,183 @@ class DashboardHttpTests(unittest.TestCase):
         self.assertEqual(stored.payment_owner, "Alex")
         self.assertIsNone(sheets.writes[0][2]["payment_method"])
         self.assertIsNone(sheets.writes[0][2]["payment_owner"])
+
+    def test_changes_wait_does_not_read_the_sheet_when_the_mark_matches(self):
+        sheets = FakeSheets()
+        sheets.changes = _FastChanges(frozenset({"Raw Expenses", "Card Usage"}))
+        app, _sheets = app_for(sheets)
+        shown = sheets.changes.mark()
+
+        status, _, payload = app.handle(
+            "GET",
+            "/api/dashboard/changes?since=" + shown,
+            {"X-Telegram-Init-Data": sign_webapp(111)},
+            b"",
+            secure=False,
+        )
+
+        body = body_json(payload)
+        self.assertEqual(status, 200)
+        self.assertTrue(body["ok"])
+        self.assertEqual(body["mark"], shown)
+        self.assertEqual(sheets.calls, [])
+
+    def test_changes_route_checks_identity_and_a_full_wait_queue(self):
+        app, sheets = app_for()
+        locked, _, locked_body = app.handle("GET", "/api/dashboard/changes?since=boot.0", {}, b"", secure=False)
+        self.assertEqual(locked, 401)
+        self.assertEqual(body_json(locked_body)["error"], "locked")
+        self.assertEqual(sheets.calls, [])
+
+        denied, _sheets = app_for()
+        denied.context.label_for_user = lambda user_id: None
+        status, _, payload = denied.handle(
+            "GET",
+            "/api/dashboard/changes?since=boot.0",
+            {"X-Telegram-Init-Data": sign_webapp(111)},
+            b"",
+            secure=False,
+        )
+        self.assertEqual(status, 401)
+        self.assertEqual(body_json(payload)["error"], "not_allowed")
+
+        missing, missing_sheets = app_for()
+        with self.assertLogs("getrichbot.dashboard_http", level="ERROR") as logs:
+            first, _, first_body = missing.handle(
+                "GET",
+                "/api/dashboard/changes?since=boot.0",
+                {"X-Telegram-Init-Data": sign_webapp(111)},
+                b"",
+                secure=False,
+            )
+            second, _, second_body = missing.handle(
+                "GET",
+                "/api/dashboard/changes?since=boot.0",
+                {"X-Telegram-Init-Data": sign_webapp(111)},
+                b"",
+                secure=False,
+            )
+        self.assertEqual(first, 503)
+        self.assertEqual(second, 503)
+        self.assertEqual(body_json(first_body)["error"], "changes")
+        self.assertEqual(body_json(second_body)["error"], "changes")
+        self.assertEqual(len(logs.records), 1)
+        self.assertEqual(missing_sheets.calls, [])
+
+        busy_sheets = FakeSheets()
+        busy_sheets.changes = _BusyChanges()
+        busy, _busy_sheets = app_for(busy_sheets)
+        status, _, payload = busy.handle(
+            "GET",
+            "/api/dashboard/changes?since=boot.0",
+            {"X-Telegram-Init-Data": sign_webapp(111)},
+            b"",
+            secure=False,
+        )
+        self.assertEqual(status, 429)
+        self.assertEqual(body_json(payload)["error"], "busy")
+        self.assertEqual(busy_sheets.calls, [])
+
+    def test_change_mark_is_taken_before_the_sheet_read(self):
+        sheets = FakeSheets()
+        sheets.changes = SheetChanges(frozenset({"Raw Expenses", "Card Usage"}))
+        original = sheets.get_expense_records
+
+        def read_and_move(sheet_name, timeout_seconds=None):
+            sheets.sampled = sheets.changes.mark()
+            sheets.changes.note_write("Raw Expenses")
+            return original(sheet_name, timeout_seconds)
+
+        sheets.get_expense_records = read_and_move
+        app, _sheets = app_for(sheets)
+
+        status, _, payload = app.handle(
+            "GET",
+            "/api/dashboard?scope=mine&cards=mine",
+            {"X-Telegram-Init-Data": sign_webapp(111)},
+            b"",
+            secure=False,
+        )
+
+        body = body_json(payload)
+        self.assertEqual(status, 200)
+        self.assertEqual(body["change_mark"], sheets.sampled)
+        self.assertNotEqual(body["change_mark"], sheets.changes.mark())
+
+    def test_edit_and_delete_replies_carry_the_change_mark(self):
+        sheets = EditableSheets()
+        sheets.changes = SheetChanges(frozenset({"Raw Expenses", "Card Usage"}))
+        app, _sheets = app_for(sheets)
+        headers = {
+            "Content-Type": "application/json",
+            "X-Telegram-Init-Data": sign_webapp(111),
+        }
+
+        edit_status, _, edit_body = app.handle(
+            "POST",
+            "/api/dashboard/edit",
+            headers,
+            json.dumps({"id": "aa1001", "source": "expense", "field": "amount", "value": "9.00"}).encode(),
+            secure=False,
+        )
+        edited = body_json(edit_body)
+        self.assertEqual(edit_status, 200, edited)
+        self.assertEqual(edited["change_mark"], sheets.changes.mark())
+
+        delete_status, _, delete_body = app.handle(
+            "POST",
+            "/api/dashboard/delete",
+            headers,
+            json.dumps({"id": "aa1001", "source": "expense", "confirm": True}).encode(),
+            secure=False,
+        )
+        deleted = body_json(delete_body)
+        self.assertEqual(delete_status, 200, deleted)
+        self.assertEqual(deleted["change_mark"], sheets.changes.mark())
+        self.assertTrue(all(item["id"] != "aa1001" for item in deleted["recent"]))
+
+    def test_edit_fallback_keeps_the_mark_from_just_after_the_write(self):
+        sheets = EditableSheets()
+        changes = SheetChanges(frozenset({"Raw Expenses", "Card Usage"}))
+        sheets.changes = changes
+        before = changes.mark()
+        reads = {"count": 0}
+        original = sheets.get_expense_records
+
+        def fail_after_the_row_is_loaded(sheet_name, timeout_seconds=None):
+            reads["count"] += 1
+            if reads["count"] > 1:
+                changes.note_write("Raw Expenses")
+                raise TimeoutError("Google Sheet read exceeded 20 seconds.")
+            return original(sheet_name, timeout_seconds)
+
+        sheets.get_expense_records = fail_after_the_row_is_loaded
+        app, _sheets = app_for(sheets)
+
+        status, _, payload = app.handle(
+            "POST",
+            "/api/dashboard/edit",
+            {"Content-Type": "application/json", "X-Telegram-Init-Data": sign_webapp(111)},
+            json.dumps({"id": "aa1001", "source": "expense", "field": "amount", "value": "9.00"}).encode(),
+            secure=False,
+        )
+
+        saved = body_json(payload)
+        self.assertEqual(status, 200, saved)
+        self.assertEqual(saved["change_mark"], before)
+        self.assertNotEqual(changes.mark(), before)
+        shown = next(item for item in saved["recent"] if item["id"] == "aa1001")
+        self.assertEqual(shown["amount"], "9.00")
+
+
+class _FastChanges(SheetChanges):
+    def wait_past(self, since: str, *, timeout: float = 25.0) -> str | None:
+        return super().wait_past(since, timeout=0.05)
+
+
+class _BusyChanges:
+    def wait_past(self, since: str, *, timeout: float = 25.0) -> str | None:
+        return None
 
 
 class DashboardPromptTests(unittest.IsolatedAsyncioTestCase):

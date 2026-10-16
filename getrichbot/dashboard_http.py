@@ -94,6 +94,7 @@ class DashboardApp:
         self._username_lock = threading.Lock()
         self._sheet_lock = threading.Lock()
         self._bot_username: str | None = None
+        self._changes_missing_logged = False
         self.gmail_push = None
         self._gmail_lock = threading.Lock()
         self._static = {
@@ -128,6 +129,8 @@ class DashboardApp:
             return self._login_widget(body, secure)
         if method == "GET" and path == "/api/dashboard":
             return self._dashboard(normalized, query)
+        if method == "GET" and path == "/api/dashboard/changes":
+            return self._changes(normalized, query)
         if method == "POST" and path == "/api/dashboard/edit":
             return self._edit(normalized, body)
         if method == "POST" and path == "/api/dashboard/delete":
@@ -209,6 +212,24 @@ class DashboardApp:
             LOGGER.exception("Dashboard could not read the Google Sheet. Nothing was changed.")
             return _json(500, {"ok": False, "error": "sheet"})
         return _json(200, payload)
+
+    def _changes(self, headers: dict[str, str], query: dict[str, str]) -> tuple[int, list[tuple[str, str]], bytes]:
+        """Same identity check as the dashboard. This wait never reads Google Sheets."""
+        identity = self._identity_from_headers(headers)
+        if identity is None:
+            return _json(401, {"ok": False, "error": "locked"})
+        if self.context.label_for_user(identity.user_id) is None:
+            return _json(401, {"ok": False, "error": "not_allowed"})
+        changes = getattr(self.context.sheets, "changes", None)
+        if changes is None:
+            if not self._changes_missing_logged:
+                self._changes_missing_logged = True
+                LOGGER.error("Dashboard change mark is missing. Open pages will stop watching.")
+            return _json(503, {"ok": False, "error": "changes"})
+        mark = changes.wait_past(query.get("since", ""))
+        if mark is None:
+            return _json(429, {"ok": False, "error": "busy"})
+        return _json(200, {"ok": True, "mark": mark})
 
     def _edit(self, headers: dict[str, str], body: bytes) -> tuple[int, list[tuple[str, str]], bytes]:
         identity = self._identity_from_headers(headers)
@@ -338,6 +359,7 @@ class DashboardApp:
                     payment_owner=planned.payment_owner if planned.touch_payment else None,
                     payment_channel=planned.payment_channel if planned.touch_payment else None,
                 )
+                mark_after_write = _sheet_change_mark(self.context.sheets)
                 if planned.category is not None:
                     apply_email_shop_correction(
                         self.context.sheets,
@@ -359,6 +381,7 @@ class DashboardApp:
                     payment_owner=planned.payment_owner if planned.touch_payment else None,
                     payment_channel=planned.payment_channel if planned.touch_payment else None,
                 )
+                mark_after_write = _sheet_change_mark(self.context.sheets)
             saved = format_saved_row(
                 amount=planned.amount if planned.amount is not None else current_amount,
                 category=planned.category if planned.category is not None else current_category,
@@ -398,6 +421,8 @@ class DashboardApp:
                     household_labels=self._household_labels(),
                     missing_category=missing_category,
                 )
+                if mark_after_write is not None:
+                    dashboard["change_mark"] = mark_after_write
         dashboard["ok"] = True
         dashboard["message"] = saved
         return 200, dashboard
@@ -496,6 +521,7 @@ class DashboardApp:
             return self._read_sheet_unlocked(label, scope, cards_scope, missing_category)
 
     def _read_sheet_unlocked(self, label: str, scope: str, cards_scope: str, missing_category: bool = False) -> dict:
+        change_mark = _sheet_change_mark(self.context.sheets)
         records = self.context.sheets.get_expense_records(self.context.raw_sheet)
         card_usage = self.context.sheets.get_card_usage_records(self.context.card_usage_sheet)
         payment_config = None
@@ -509,7 +535,7 @@ class DashboardApp:
             LOGGER.warning("Dashboard could not read payment setup. Other sections are still shown.")
             cards_error = "Card setup could not be read. Nothing was changed."
         today = self.context.today() if self.context.today is not None else datetime.now(SINGAPORE_TZ).date()
-        return build_dashboard_payload(
+        payload = build_dashboard_payload(
             viewer_label=label,
             scope=scope,
             records=records,
@@ -521,6 +547,9 @@ class DashboardApp:
             household_labels=self._household_labels(),
             missing_category=missing_category,
         )
+        if change_mark is not None:
+            payload["change_mark"] = change_mark
+        return payload
 
     def _household_labels(self) -> tuple[str, ...]:
         labels: list[str] = []
@@ -640,6 +669,16 @@ def start_dashboard_server(
     thread.start()
     LOGGER.info("Dashboard page is listening on port %s.", server.server_address[1])
     return server
+
+
+def _sheet_change_mark(sheets: object) -> str | None:
+    changes = getattr(sheets, "changes", None)
+    if changes is None:
+        return None
+    mark = changes.mark()
+    if not isinstance(mark, str) or not mark:
+        return None
+    return mark
 
 
 def _missing_category_flag(value: object) -> bool:

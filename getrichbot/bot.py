@@ -26,6 +26,7 @@ from getrichbot.gmail_watch import WriteOutcome, attach_email, is_email_command
 from getrichbot.shop_category import SHOP_CATEGORY_CALLBACK
 from getrichbot.shop_category import apply_email_shop_correction
 from getrichbot.shop_category import record_shop_category_choice
+from getrichbot.shop_category import resolve_shop_category_reply
 from getrichbot.shop_category import resolve_shop_category_tap
 from getrichbot.shop_category import shop_category_callback
 from getrichbot.shop_category import shop_choice_state_key
@@ -756,6 +757,9 @@ class FinanceBot:
 
         if lowered.startswith(("confirm fixed", "confirmfixed", "fixed expenses")) or lowered in {"log fixed", "log fixed expenses"}:
             await self._start_fixed_review(update, text)
+            return True
+
+        if await self._apply_offered_shop_category(update, text):
             return True
 
         if await self._apply_linked_category(update, text):
@@ -1556,6 +1560,54 @@ class FinanceBot:
             update,
             [PendingEditChange(record=record, expense_date=parsed_date.isoformat())],
         )
+
+    async def _apply_offered_shop_category(self, update: Update, text: str) -> bool:
+        """A reply to the mixed-shop question that names one of the offered categories."""
+        if update.message is None or update.effective_user is None:
+            return False
+        reply = getattr(update.message, "reply_to_message", None)
+        if reply is None:
+            return False
+        replied_text = getattr(reply, "text", None) or getattr(reply, "caption", None) or ""
+        if MIXED_SHOP_ASK not in replied_text:
+            return False
+        entry_id = logged_notice_entry_id(replied_text) or entry_id_in_text(replied_text)
+        if not entry_id or not hasattr(self.sheets, "get_state_value") or not hasattr(self.sheets, "get_record_by_id"):
+            return False
+        raw = self.sheets.get_state_value(self.settings.bot_state_sheet, shop_choice_state_key(entry_id))
+        choices = tuple(category for category in shop_choices_from_state(raw) if category in ALL_CATEGORIES)
+        if len(choices) < 2:
+            return False
+        record = self.sheets.get_record_by_id(self.settings.raw_expenses_sheet, entry_id)
+        actor = self.settings.label_for_user(update.effective_user.id)
+        if actor is None:
+            await update.message.reply_text("I do not recognize this Telegram user ID yet.")
+            return True
+        chosen = resolve_shop_category_reply(text, choices, record, actor)
+        if chosen.status == "wrong_person":
+            await update.message.reply_text("Only the person who submitted this mail can choose the category.")
+            return True
+        if chosen.status != "ok" or record is None or chosen.category not in ALL_CATEGORIES:
+            return False
+        record_shop_category_choice(self.sheets, self.settings.raw_expenses_sheet, record, chosen.category)
+        try:
+            self.sheets.set_state_value(self.settings.bot_state_sheet, shop_choice_state_key(entry_id), "")
+        except Exception:
+            LOGGER.exception("Could not clear the shop category buttons. The row is already updated.")
+        self._refresh_monthly_summary()
+        await update.message.reply_text(
+            format_saved_row(
+                amount=record.amount,
+                category=chosen.category,
+                expense_date=record.expense_date,
+                entry_id=record.entry_id,
+                kind="expense",
+                payment_method=record.payment_method,
+                payment_owner=record.payment_owner or record.logged_by,
+                payment_channel=record.payment_channel,
+            )
+        )
+        return True
 
     async def _apply_linked_category(self, update: Update, text: str) -> bool:
         if update.message is None or match_category(text, tuple(ALL_CATEGORIES)) is None:

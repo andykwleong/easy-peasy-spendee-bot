@@ -215,6 +215,8 @@ class DashboardViewTests(unittest.TestCase):
         self.assertNotIn("Sample Mastercard", capped)
         self.assertNotIn("Sample Cash", {**capped, **uncapped})
         self.assertEqual(next(row for row in mine["raw_expenses"] if row["id"] == "aa1001")["payment_owner"], "")
+        self.assertIn("aa1012", [row["id"] for row in mine["raw_expenses"]])
+        self.assertIn("cc1002", [row["id"] for row in mine["card_usage"]])
 
     def test_paynow_recent_row_keeps_a_blank_payment_owner(self):
         records = [
@@ -244,8 +246,6 @@ class DashboardViewTests(unittest.TestCase):
         raw = payload["raw_expenses"][0]
         self.assertEqual(raw["payment_owner"], "")
         self.assertEqual(raw["payment_method"], "PayNow")
-        self.assertIn("aa1012", [row["id"] for row in mine["raw_expenses"]])
-        self.assertIn("cc1002", [row["id"] for row in mine["card_usage"]])
 
     def test_recent_and_raw_lists_say_when_they_are_shortened(self):
         records = [

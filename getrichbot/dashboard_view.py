@@ -5,7 +5,7 @@ from decimal import Decimal
 
 from getrichbot.cards import CardLimit, PaymentConfig, build_card_summary
 from getrichbot.categories import ALL_CATEGORIES
-from getrichbot.models import CardUsageRecord, ExpenseRecord
+from getrichbot.models import CardUsageRecord, ExpenseRecord, is_paynow_method
 from getrichbot.row_edits import edit_choices
 from getrichbot.summary import SummaryPeriod, _is_income_category, build_spending_summary
 
@@ -201,7 +201,10 @@ def _recent_expense(record: ExpenseRecord) -> dict:
     kind = _expense_kind(record)
     payment_owner = ""
     if kind != "income" and record.payment_method:
-        payment_owner = record.payment_owner or record.logged_by
+        if is_paynow_method(record.payment_method):
+            payment_owner = record.payment_owner
+        else:
+            payment_owner = record.payment_owner or record.logged_by
     return {
         "id": record.entry_id,
         "date": record.expense_date,

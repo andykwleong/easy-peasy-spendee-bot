@@ -12,6 +12,7 @@ from decimal import InvalidOperation
 from zoneinfo import ZoneInfo
 
 from getrichbot.cards import PaymentMethod
+from getrichbot.models import PAYNOW_METHOD
 from getrichbot.models import ExpenseRow
 from getrichbot.parser import resolve_transaction_date
 from getrichbot.shop_category import category_for_purchase
@@ -32,11 +33,15 @@ STATEMENT_SUBJECT = "your estatement/eadvice is ready for viewing"
 PAYNOW_SUBJECT = "uob-paynow transfer received"
 
 _AMOUNT_RE = re.compile(
-    r"(?:SGD|S\$|\$)\s*([0-9]{1,3}(?:,[0-9]{3})*(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?)",
+    r"(?:SGD|S\$|\$)\s*((?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})?)",
     re.IGNORECASE,
 )
 _LAST4_RE = re.compile(
-    r"(?:card\s+ending|a/c\s+ending|last\s*4(?:\s*digits)?|(?<![A-Za-z])ending)\s*[:\-]?\s*(\d{4})\b",
+    r"(?:card\s+ending|last\s*4(?:\s*digits)?|(?<![A-Za-z])ending)\s*[:\-]?\s*(\d{4})\b",
+    re.IGNORECASE,
+)
+_ACCOUNT_ENDING_RE = re.compile(
+    r"(?<![A-Za-z])(?:a/c|account)\s+ending\s*[:\-]?\s*(\d{4})\b",
     re.IGNORECASE,
 )
 _MASKED_GROUP_LAST4_RE = re.compile(r"(?:[*xX]{2,4}(?:[-\s]+[*xX]{2,4}){2,}[-\s]+)(\d{4})\b")
@@ -303,6 +308,20 @@ def _purchase_decision(
         expense_date = clause.expense_date
         sentence = clause.sentence
     amount = _chosen_amount(body, sentence)
+    if _is_bank_account_payment(body):
+        return _bank_account_decision(
+            body,
+            addresses,
+            forwarders=forwarders,
+            categories=categories,
+            category_for=category_for,
+            shop=shop,
+            amount=amount,
+            expense_date=expense_date,
+            remember_category=remember_category,
+            expense_records=expense_records,
+            stop_keyword=stop_keyword,
+        )
     last4 = _chosen_last4(body, sentence)
     missing = _missing_purchase_pieces(amount, expense_date, last4)
     if missing:
@@ -353,6 +372,62 @@ def _purchase_decision(
         payment_method=card.name,
         payment_owner=card.owner,
         payment_channel=channel,
+        description=shop,
+        shop_choices=chosen_category.choices,
+    )
+
+
+def _is_bank_account_payment(body: str) -> bool:
+    return bool(_ACCOUNT_ENDING_RE.search(body or "")) and not _last4s(body)
+
+
+def _bank_account_decision(
+    body: str,
+    addresses: tuple[str, ...],
+    *,
+    forwarders: dict[str, str],
+    categories: tuple[str, ...],
+    category_for,
+    shop: str,
+    amount: Decimal | None,
+    expense_date: date | None,
+    remember_category=None,
+    expense_records=None,
+    stop_keyword=None,
+) -> EmailDecision:
+    missing = []
+    if amount is None:
+        missing.append("amount")
+    if expense_date is None:
+        missing.append("date")
+    if missing:
+        if amount is None:
+            return EmailDecision(action="ignore", kind="purchase")
+        return EmailDecision(
+            action="ask",
+            kind="purchase",
+            text=_missing_purchase_text(missing),
+        )
+    logged_by = _logged_by(addresses, forwarders) or ""
+    chosen_category = purchase_category(
+        body,
+        shop,
+        logged_by,
+        categories,
+        category_for,
+        remember_category,
+        expense_records,
+        stop_keyword,
+    )
+    return EmailDecision(
+        action="log",
+        kind="purchase",
+        amount=amount,
+        shop=shop,
+        expense_date=expense_date,
+        category=chosen_category.category,
+        logged_by=logged_by,
+        payment_method=PAYNOW_METHOD,
         description=shop,
         shop_choices=chosen_category.choices,
     )
@@ -458,12 +533,24 @@ def _amounts(body: str) -> list[Decimal]:
     return found
 
 
+def _account_ending_spans(body: str) -> tuple[tuple[int, int], ...]:
+    return tuple((match.start(), match.end()) for match in _ACCOUNT_ENDING_RE.finditer(body or ""))
+
+
+def _overlaps_account_ending(start: int, end: int, spans: tuple[tuple[int, int], ...]) -> bool:
+    return any(start < span_end and end > span_start for span_start, span_end in spans)
+
+
 def _last4s(body: str) -> tuple[str, ...]:
+    spans = _account_ending_spans(body)
     found: list[str] = []
     for regex in (_MASKED_GROUP_LAST4_RE, _MASKED_LAST4_RE, _LAST4_RE):
-        for match in regex.findall(body or ""):
-            if match not in found:
-                found.append(match)
+        for match in regex.finditer(body or ""):
+            if _overlaps_account_ending(match.start(), match.end(), spans):
+                continue
+            value = match.group(1)
+            if value not in found:
+                found.append(value)
     return tuple(found)
 
 

@@ -6,7 +6,7 @@ from typing import Any
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
-from getrichbot.models import CardUsageRecord, CardUsageRow, ExpenseRecord, ExpenseRow
+from getrichbot.models import CardUsageRecord, CardUsageRow, ExpenseRecord, ExpenseRow, is_paynow_method
 from getrichbot.cards import PaymentConfig, parse_payment_config
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
@@ -752,13 +752,23 @@ def _record_payment_method(row: list[str]) -> str:
 
 def _record_payment_owner(row: list[str]) -> str:
     statuses = {"confirmed", "pending", "cancelled", "canceled"}
+    method = _record_payment_method(row)
     if _cell(row, 14).casefold() in statuses:
-        return _cell(row, 9) or _cell(row, 4)
+        return _owner_cell_or_logger(row, 9, method)
     if _cell(row, 13).casefold() in statuses:
-        return _cell(row, 9) or _cell(row, 4)
+        return _owner_cell_or_logger(row, 9, method)
     if _cell(row, 12).casefold() in statuses and _cell(row, 9):
+        if is_paynow_method(method):
+            return ""
         return _cell(row, 4)
     return ""
+
+
+def _owner_cell_or_logger(row: list[str], owner_index: int, method: str) -> str:
+    owner = _cell(row, owner_index)
+    if owner or is_paynow_method(method):
+        return owner
+    return _cell(row, 4)
 
 
 def _record_message_id(row: list[str]) -> str:

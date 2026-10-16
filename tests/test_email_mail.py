@@ -758,21 +758,6 @@ class EmailMailTests(unittest.TestCase):
                 date(2026, 10, 8),
                 "SAMPLE CAFE",
             ),
-            (
-                "Payment sent",
-                "\n".join(
-                    (
-                        "Date & Time: 05 Oct 11:26 (SGT)",
-                        "Amount: SGD3.50",
-                        "From: Sample Joint Account A/C ending 4444",
-                        "To: SAMPLE COURIER (UEN ending ABCD)",
-                    )
-                ),
-                "4444",
-                Decimal("3.50"),
-                date(2026, 10, 5),
-                "SAMPLE COURIER",
-            ),
         )
         for subject, body, last4, amount, when, shop in layouts:
             decision = decide(subject, body, config_with(last4=last4))

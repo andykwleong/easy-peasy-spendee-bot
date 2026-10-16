@@ -493,6 +493,23 @@ class FakeSheets:
                 payment_method="Sample Mastercard",
                 payment_owner="Sam",
             ),
+            ExpenseRecord(
+                row_number=4,
+                entry_id="cc3003",
+                timestamp="15:40:00",
+                expense_date="2026-09-21",
+                month="2026-09",
+                logged_by="Sam",
+                raw_input="sample stall",
+                amount=Decimal("4.00"),
+                category="",
+                description="Sample stall",
+                input_type="text",
+                status="Confirmed",
+                transaction_type="Expense",
+                payment_method="Cash",
+                payment_owner="Sam",
+            ),
         ]
         self.usage: list = []
         self.summary_rows: list = []

@@ -751,6 +751,23 @@ class DashboardHttpTests(unittest.TestCase):
         shown = next(item for item in saved["recent"] if item["id"] == "aa1001")
         self.assertEqual(shown["amount"], "9.00")
 
+    def test_dashboard_script_reloads_quietly_when_the_mark_moves(self):
+        app, _sheets = app_for()
+
+        status, _, payload = app.handle("GET", "/dashboard.js", {}, b"", secure=False)
+
+        self.assertEqual(status, 200)
+        script = payload.decode()
+        self.assertIn("Reading the sheet...", script)
+        self.assertIn("/api/dashboard/changes?since=", script)
+        self.assertIn("loadDashboard({ quiet: true })", script)
+        self.assertIn("state.editingId", script)
+        self.assertIn("state.pendingDelete", script)
+        self.assertIn("state.deleting", script)
+        self.assertIn('active.tagName !== "INPUT"', script)
+        self.assertIn('active.tagName !== "SELECT"', script)
+        self.assertIn("Could not refresh. The list on screen is unchanged.", script)
+
 
 class _FastChanges(SheetChanges):
     def wait_past(self, since: str, *, timeout: float = 25.0) -> str | None:

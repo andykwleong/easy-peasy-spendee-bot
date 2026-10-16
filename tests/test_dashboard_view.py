@@ -218,6 +218,35 @@ class DashboardViewTests(unittest.TestCase):
         self.assertIn("aa1012", [row["id"] for row in mine["raw_expenses"]])
         self.assertIn("cc1002", [row["id"] for row in mine["card_usage"]])
 
+    def test_paynow_recent_row_keeps_a_blank_payment_owner(self):
+        records = [
+            expense(
+                "pay001",
+                "2301.30",
+                "",
+                logged_by="Alex",
+                expense_date="2026-10-10",
+                payment_method="PayNow",
+                payment_owner="",
+                description="SAMPLE HELPER",
+            )
+        ]
+        payload = build_dashboard_payload(
+            viewer_label="Alex",
+            scope="mine",
+            records=records,
+            card_usage=[],
+            payment_config=payment_config(),
+            today=date(2026, 10, 10),
+        )
+        shown = payload["recent"][0]
+        self.assertEqual(shown["payment_method"], "PayNow")
+        self.assertEqual(shown["payment_owner"], "")
+        self.assertEqual(shown["payment_channel"], "")
+        raw = payload["raw_expenses"][0]
+        self.assertEqual(raw["payment_owner"], "")
+        self.assertEqual(raw["payment_method"], "PayNow")
+
     def test_recent_and_raw_lists_say_when_they_are_shortened(self):
         records = [
             expense(f"aa{index:04d}", "1.00", "Food", timestamp=f"{index % 24:02d}:00:00", expense_date="2026-09-01")

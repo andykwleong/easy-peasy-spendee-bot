@@ -5,6 +5,12 @@ from datetime import date
 from datetime import datetime
 from decimal import Decimal
 
+PAYNOW_METHOD = "PayNow"
+
+
+def is_paynow_method(name: str) -> bool:
+    return (name or "").strip().casefold() == PAYNOW_METHOD.casefold()
+
 
 @dataclass(frozen=True)
 class ExpenseDraft:
@@ -50,7 +56,7 @@ class ExpenseRow:
             self.description,
         ]
         if include_payment_owner:
-            values.append((self.payment_owner or self.logged_by) if self.payment_method else "")
+            values.append(_sheet_payment_owner(self.payment_method, self.payment_owner, self.logged_by))
         values.extend(
             [
                 self.payment_method,
@@ -68,6 +74,14 @@ class ExpenseRow:
             ]
         )
         return values
+
+
+def _sheet_payment_owner(payment_method: str, payment_owner: str, logged_by: str) -> str:
+    if not payment_method:
+        return ""
+    if is_paynow_method(payment_method):
+        return payment_owner or ""
+    return payment_owner or logged_by
 
 
 @dataclass(frozen=True)

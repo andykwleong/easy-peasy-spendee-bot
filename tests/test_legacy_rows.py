@@ -132,3 +132,19 @@ class TestLegacyRows(unittest.TestCase):
         self.assertEqual(record.payment_method, "UOB PP (Blue)")
         self.assertEqual(record.payment_channel, "PayWave")
         self.assertEqual(record.status, "Confirmed")
+
+    def test_paynow_bank_row_keeps_a_blank_payment_owner(self):
+        row = [
+            "oct001", "22:42:00", "2026-10-10", "2026-10", "Me", "email: SAMPLE HELPER",
+            "2301.30", "", "SAMPLE HELPER", "", "PayNow", "", "Expense",
+            "Email", "Confirmed", "-100", "email",
+        ]
+        client = SheetsClient("test-sheet")
+        client.service = _Service([row])
+
+        record = client.get_expense_records("Raw Expenses")[0]
+
+        self.assertEqual(record.payment_method, "PayNow")
+        self.assertEqual(record.payment_owner, "")
+        self.assertEqual(record.payment_channel, "")
+        self.assertEqual(record.logged_by, "Me")

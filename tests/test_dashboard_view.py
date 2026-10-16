@@ -296,6 +296,44 @@ class DashboardViewTests(unittest.TestCase):
         self.assertIn("Food", other["edit_choices"]["expense_categories"])
         self.assertTrue(any(card["name"] == "Sample Mastercard" and card["owner"] == "Sam" for card in other["edit_choices"]["cards"]))
 
+    def test_blank_category_filter_reads_the_blank_cell(self):
+        records = [
+            expense("aa1001", "18.50", "Food", description="Sample cafe"),
+            expense("aa1002", "9.99", "", description="Sample stall", payment_method="Sample Visa", payment_owner="Alex"),
+            expense("aa1003", "4.00", "", description="Sample draft", status="Pending"),
+            expense("aa1004", "20.00", "Income - Sample Pay", transaction_type="Income", description="Sample pay"),
+            expense("aa1005", "3.00", "", transaction_type="Income", description="Sample blank income"),
+        ]
+        usage = [card_usage("cc1001", "12.00", "Sample Cashback")]
+
+        full = build_dashboard_payload(
+            viewer_label="Alex",
+            scope="mine",
+            records=records,
+            card_usage=usage,
+            payment_config=payment_config(),
+            today=date(2026, 9, 26),
+        )
+        filtered = build_dashboard_payload(
+            viewer_label="Alex",
+            scope="mine",
+            records=records,
+            card_usage=usage,
+            payment_config=payment_config(),
+            today=date(2026, 9, 26),
+            missing_category=True,
+        )
+
+        self.assertEqual(
+            [item["id"] for item in full["recent"]],
+            ["aa1005", "aa1004", "aa1002", "aa1001", "cc1001"],
+        )
+        self.assertEqual([item["id"] for item in filtered["recent"]], ["aa1002"])
+        self.assertEqual(filtered["recent"][0]["category"], "")
+        self.assertNotIn("pending", filtered["recent"][0])
+        self.assertIn("aa1001", [row["id"] for row in filtered["raw_expenses"]])
+        self.assertIn("cc1001", [row["id"] for row in filtered["card_usage"]])
+
 
 if __name__ == "__main__":
     unittest.main()

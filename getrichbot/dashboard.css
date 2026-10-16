@@ -144,6 +144,18 @@ h2 { font-size: 1.7rem; letter-spacing: -0.03em; }
 .tx-money { text-align: right; min-width: 0; }
 .tx-card { overflow-wrap: anywhere; }
 .amount { font-variant-numeric: tabular-nums; font-weight: 750; font-size: 1.15rem; }
+.tx.needs-category {
+  background: var(--orange-soft);
+  border-color: #e2c09a;
+}
+.tag.needs-category {
+  background: #fffdf8;
+  color: var(--orange);
+  font-weight: 700;
+}
+tr.needs-category td {
+  background: var(--orange-soft);
+}
 .tag {
   display: inline-flex;
   align-items: center;

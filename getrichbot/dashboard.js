@@ -13,6 +13,7 @@ const state = {
   scope: "mine",
   cards: "mine",
   editingId: "",
+  missingCategory: false,
   savedNote: "",
   pendingDelete: null,
   deleteError: "",
@@ -69,7 +70,8 @@ async function boot() {
 async function loadDashboard() {
   state.message = "";
   renderLoading();
-  const response = await fetch("/api/dashboard?scope=" + encodeURIComponent(state.scope) + "&cards=" + encodeURIComponent(state.cards), {
+  const missing = state.missingCategory ? "&missing=1" : "";
+  const response = await fetch("/api/dashboard?scope=" + encodeURIComponent(state.scope) + "&cards=" + encodeURIComponent(state.cards) + missing, {
     credentials: "same-origin",
     headers: telegramInitData() && !state.loggedOut ? { "X-Telegram-Init-Data": telegramInitData() } : {}
   });
@@ -273,24 +275,40 @@ function renderRecent() {
     });
     filters.append(chip);
   });
+  const missing = el("button", "chip", "No category");
+  missing.type = "button";
+  missing.setAttribute("aria-pressed", String(state.missingCategory));
+  missing.addEventListener("click", () => {
+    state.missingCategory = !state.missingCategory;
+    loadDashboard();
+  });
+  filters.append(missing);
   head.append(filters);
   section.append(head);
   if (state.payload.recent_truncated) {
     section.append(el("p", "sub", "Showing the latest " + state.payload.recent_limit + " confirmed rows."));
   }
-  if (!state.payload.recent.length) section.append(el("p", "empty", "No confirmed rows for this view."));
+  if (!state.payload.recent.length) {
+    section.append(el("p", "empty", state.missingCategory ? "No rows are missing a category." : "No confirmed rows for this view."));
+  }
   state.payload.recent.forEach((row) => section.append(renderTransaction(row)));
   return section;
 }
 
+function categoryPending(row) {
+  return row.kind !== "card_only" && !String(row.category || "").trim();
+}
+
 function renderTransaction(row) {
-  const article = el("article", "tx");
+  const pending = categoryPending(row);
+  const article = el("article", pending ? "tx needs-category" : "tx");
   const line = el("div", "tx-line");
   const shop = el("div", "tx-shop");
   shop.append(el("div", "merchant", row.description || "No description"));
   shop.append(el("div", "tx-date", prettyDate(row.date)));
   const category = el("div", "tx-category");
-  category.append(el("span", "tag", row.kind === "card_only" ? "Card only · not an expense" : (row.category || row.kind)));
+  const tagText = row.kind === "card_only" ? "Card only · not an expense" : (pending ? "No category" : (row.category || row.kind));
+  category.append(el("span", pending ? "tag needs-category" : "tag", tagText));
   const logged = el("div", "tx-logged", "Logged by " + row.logged_by);
   const moneySide = el("div", "tx-money");
   moneySide.append(el("div", "amount", money(row.amount)));
@@ -301,13 +319,17 @@ function renderTransaction(row) {
   const actions = el("div", "tx-actions");
   actions.append(deleteButton(row));
   const open = state.editingId === row.id;
-  const fix = el("button", "text-btn", open ? "Close" : "Fix tagging");
+  const fix = el("button", "text-btn", open ? "Save" : "Fix tagging");
   fix.type = "button";
   fix.setAttribute("aria-expanded", String(open));
   fix.addEventListener("click", () => {
-    state.editingId = open ? "" : row.id;
-    state.savedNote = "";
-    render();
+    if (!open) {
+      state.editingId = row.id;
+      state.savedNote = "";
+      render();
+      return;
+    }
+    saveOpenRow(fix, row);
   });
   actions.append(fix);
   article.append(actions);
@@ -396,7 +418,8 @@ async function confirmDelete() {
         source: pending.source,
         confirm: true,
         scope: state.scope,
-        cards: state.cards
+        cards: state.cards,
+        missing: state.missingCategory ? "1" : ""
       })
     });
     const body = await response.json().catch(() => ({ ok: false }));
@@ -536,6 +559,43 @@ function editField(label, control) {
   return field;
 }
 
+async function saveOpenRow(button, row) {
+  const article = button.closest("article");
+  const categorySelect = article.querySelector('select[aria-label="Category"]');
+  const amountInput = article.querySelector('input[aria-label="Amount"]');
+  const cardSelect = article.querySelector('select[aria-label="Card"]');
+  const jobs = [];
+  if (categorySelect && categorySelect.value && categorySelect.value !== row.category) {
+    jobs.push(["category", categorySelect.value]);
+  }
+  if (amountInput) {
+    const cleaned = amountInput.value.trim().replace(/[$,]/g, "");
+    const same = cleaned === String(row.amount) || Number(cleaned).toFixed(2) === Number(row.amount).toFixed(2);
+    if (!same) {
+      if (!/^\d+(?:\.\d{1,2})?$/.test(cleaned) || Number(cleaned) <= 0) {
+        state.savedNote = "Finish the amount, such as 23.20. Nothing was saved yet.";
+        render();
+        return;
+      }
+      jobs.push(["amount", cleaned]);
+    }
+  }
+  if (cardSelect && cardSelect.value) {
+    const cards = (state.payload.edit_choices && state.payload.edit_choices.cards) || [];
+    const picked = cards.find((card) => cardKey(card.owner, card.name) === cardSelect.value);
+    if (picked && (picked.name !== row.payment_method || picked.owner !== row.payment_owner)) {
+      jobs.push(["card", picked.name, picked.owner]);
+    }
+  }
+  for (const job of jobs) {
+    const saved = await saveEdit(row, job[0], job[1], job[2]);
+    if (!saved) return;
+  }
+  state.editingId = "";
+  state.savedNote = "";
+  render();
+}
+
 function cardKey(owner, name) {
   return (owner || "") + "\n" + (name || "");
 }
@@ -547,7 +607,8 @@ async function saveEdit(row, field, value, owner) {
     field: field,
     value: value,
     scope: state.scope,
-    cards: state.cards
+    cards: state.cards,
+    missing: state.missingCategory ? "1" : ""
   };
   if (owner) payload.owner = owner;
   const headers = { "Content-Type": "application/json" };
@@ -563,14 +624,16 @@ async function saveEdit(row, field, value, owner) {
     if (!response.ok || !body.ok) {
       state.savedNote = body.message || ERROR_TEXT.sheet;
       render();
-      return;
+      return false;
     }
     state.payload = body;
     state.savedNote = body.message || "Saved.";
     render();
+    return true;
   } catch (error) {
     state.savedNote = ERROR_TEXT.sheet;
     render();
+    return false;
   }
 }
 
@@ -714,9 +777,12 @@ function renderRaw() {
     ["Entry ID", "Date", "Logged by", "Amount", "Category", "Description", "Payment owner", "Payment method", "Channel", "Type", "Status"],
     state.payload.raw_expenses.map((row) => ({
       cells: [
-        row.id, prettyDate(row.date), row.logged_by, money(row.amount), row.category, row.description,
+        row.id, prettyDate(row.date), row.logged_by, money(row.amount),
+        String(row.category || "").trim() ? row.category : "No category",
+        row.description,
         row.payment_owner || "—", row.payment_method || "—", row.payment_channel || "—", row.type, row.status
       ],
+      needsCategory: !String(row.category || "").trim(),
       deleteTarget: rawDeleteTarget(row, "expense")
     }))
   ));
@@ -808,7 +874,7 @@ function rawTable(title, headers, records) {
   table.append(thead);
   const body = el("tbody");
   records.forEach((record) => {
-    const row = el("tr");
+    const row = el("tr", record.needsCategory ? "needs-category" : "");
     record.cells.forEach((value, index) => row.append(el("td", index === 3 ? "num" : "", value)));
     const action = el("td");
     if (record.deleteTarget) action.append(deleteButton(record.deleteTarget));

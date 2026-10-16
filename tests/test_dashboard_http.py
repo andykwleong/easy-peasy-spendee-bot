@@ -19,7 +19,7 @@ from getrichbot.sheets import SheetsClient
 from getrichbot.dashboard_auth import issue_session_token
 from getrichbot.dashboard_bot import _DASHBOARD_REPLY_TEXT, configure_dashboard_menu, dashboard_prompt, reply_with_dashboard
 from getrichbot.dashboard_http import DashboardApp, DashboardContext, DashboardHTTPServer
-from getrichbot.models import ExpenseRecord
+from getrichbot.models import CardUsageRecord, ExpenseRecord
 
 TOKEN = "test-bot-token"
 NOW = int(time.time())
@@ -541,6 +541,134 @@ class DashboardHttpTests(unittest.TestCase):
         self.assertEqual(stored.payment_owner, "Alex")
         self.assertIsNone(sheets.writes[0][2]["payment_method"])
         self.assertIsNone(sheets.writes[0][2]["payment_owner"])
+
+    def test_blank_category_filter_hides_rows_that_already_have_one(self):
+        from getrichbot import categories
+        from getrichbot.categories import configure_category_config
+
+        original = {
+            "variable_categories": list(categories.VARIABLE_CATEGORIES),
+            "fixed_categories": list(categories.FIXED_CATEGORIES),
+            "category_keywords": {key: list(value) for key, value in categories.CATEGORY_KEYWORDS.items()},
+            "priority_keywords": [
+                {"category": category, "keywords": list(keywords)}
+                for category, keywords in categories.BILL_PRIORITY_KEYWORDS
+            ],
+            "shopping_keywords": list(categories.SHOPPING_KEYWORDS),
+            "shopping_categories": dict(categories.SHOPPING_CATEGORIES),
+            "category_aliases": dict(categories.CATEGORY_ALIASES),
+            "source": "test",
+        }
+        configure_category_config(
+            {
+                "variable_categories": ["Food", "Groceries"],
+                "fixed_categories": [],
+                "category_keywords": {},
+                "priority_keywords": [],
+                "shopping_keywords": [],
+                "shopping_categories": {},
+                "category_aliases": {},
+                "source": "test",
+            }
+        )
+        try:
+            sheets = EditableSheets()
+            sheets.records.append(
+                ExpenseRecord(
+                    row_number=4,
+                    entry_id="cc4001",
+                    timestamp="15:00:00",
+                    expense_date="2026-09-21",
+                    month="2026-09",
+                    logged_by="Alex",
+                    raw_input="sample stall",
+                    amount=Decimal("9.99"),
+                    category="",
+                    description="Sample stall",
+                    input_type="text",
+                    status="Confirmed",
+                    transaction_type="Expense",
+                    payment_method="Sample Visa",
+                    payment_owner="Alex",
+                )
+            )
+            sheets.usage.append(
+                CardUsageRecord(
+                    row_number=2,
+                    entry_id="dd5001",
+                    timestamp="16:00:00",
+                    usage_date="2026-09-21",
+                    month="2026-09",
+                    logged_by="Alex",
+                    raw_input="card only",
+                    amount=Decimal("4.00"),
+                    payment_method="Sample Visa",
+                    description="Sample clinic",
+                    usage_type="Claimable",
+                    status="Confirmed",
+                    payment_owner="Alex",
+                )
+            )
+            app, _sheets = app_for(sheets)
+            _status, headers, _payload = app.handle(
+                "POST",
+                "/api/session/widget",
+                {"Content-Type": "application/json"},
+                json.dumps(sign_widget(111)).encode(),
+                secure=True,
+            )
+            cookie = dict(headers)["Set-Cookie"].split(";", 1)[0]
+            signed = {"Cookie": cookie}
+
+            full_status, _, full_body = app.handle("GET", "/api/dashboard?scope=mine", signed, b"", secure=True)
+            self.assertEqual(full_status, 200)
+            full = body_json(full_body)
+            full_ids = [item["id"] for item in full["recent"]]
+            self.assertEqual(full_ids, ["dd5001", "cc4001", "aa1001"])
+            self.assertEqual(next(item for item in full["recent"] if item["id"] == "cc4001")["category"], "")
+
+            filtered_status, _, filtered_body = app.handle(
+                "GET",
+                "/api/dashboard?scope=mine&missing=1",
+                signed,
+                b"",
+                secure=True,
+            )
+            self.assertEqual(filtered_status, 200)
+            filtered = body_json(filtered_body)
+            self.assertEqual([item["id"] for item in filtered["recent"]], ["cc4001"])
+            self.assertEqual(filtered["recent"][0]["category"], "")
+            self.assertTrue(any(row["id"] == "aa1001" for row in filtered["raw_expenses"]))
+
+            saved_status, _, saved_body = app.handle(
+                "POST",
+                "/api/dashboard/edit",
+                {"Content-Type": "application/json", "Cookie": cookie},
+                json.dumps({
+                    "id": "cc4001",
+                    "source": "expense",
+                    "field": "category",
+                    "value": "Food",
+                    "scope": "mine",
+                    "missing": "1",
+                }).encode(),
+                secure=True,
+            )
+            self.assertEqual(saved_status, 200)
+            saved = body_json(saved_body)
+            self.assertEqual(saved["recent"], [])
+            stored = next(row for row in sheets.records if row.entry_id == "cc4001")
+            self.assertEqual(stored.category, "Food")
+            self.assertEqual(sheets.writes[-1][2]["category"], "Food")
+
+            cleared_status, _, cleared_body = app.handle("GET", "/api/dashboard?scope=mine", signed, b"", secure=True)
+            self.assertEqual(cleared_status, 200)
+            cleared = body_json(cleared_body)
+            shown = next(item for item in cleared["recent"] if item["id"] == "cc4001")
+            self.assertEqual(shown["category"], "Food")
+            self.assertIn("aa1001", [item["id"] for item in cleared["recent"]])
+        finally:
+            configure_category_config(original)
 
 
 class DashboardPromptTests(unittest.IsolatedAsyncioTestCase):

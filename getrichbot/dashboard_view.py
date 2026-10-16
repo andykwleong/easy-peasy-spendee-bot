@@ -36,6 +36,7 @@ def build_dashboard_payload(
     cards_error: str | None = None,
     cards_scope: str = "mine",
     household_labels: tuple[str, ...] = (),
+    missing_category: bool = False,
 ) -> dict:
     if scope not in {"mine", "both"}:
         raise ValueError("scope must be mine or both")
@@ -54,6 +55,8 @@ def build_dashboard_payload(
     raw_expenses = _raw_expenses(records)
     usage_rows = _raw_card_usage(card_usage)
     recent = _recent_items(records, card_usage, viewer_label, scope)
+    if missing_category:
+        recent = [item for item in recent if _category_is_blank(item["category"], item["kind"])]
     cards = _cards_snapshot(card_owner, records, card_usage, payment_config, today, cards_error)
     cards["showing"] = cards_scope
     cards["viewer_label"] = viewer_label
@@ -162,6 +165,12 @@ def _limit_label(limit: CardLimit) -> str:
     if limit.payment_channel.casefold() != "all":
         parts.append(limit.payment_channel)
     return " / ".join(parts) if parts else "All spending"
+
+
+def _category_is_blank(category: str, kind: str) -> bool:
+    if kind == "card_only":
+        return False
+    return not str(category or "").strip()
 
 
 def _recent_items(

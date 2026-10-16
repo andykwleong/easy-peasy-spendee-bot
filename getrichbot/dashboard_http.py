@@ -201,8 +201,11 @@ class DashboardApp:
         cards_scope = query.get("cards", "mine")
         if cards_scope not in {"mine", "other"}:
             return _json(400, {"ok": False, "error": "cards"})
+        missing_category = _missing_category_choice(query.get("missing", ""))
+        if missing_category is None:
+            return _json(400, {"ok": False, "error": "missing"})
         try:
-            payload = self._read_sheet(label, scope, cards_scope)
+            payload = self._read_sheet(label, scope, cards_scope, missing_category)
         except ValueError:
             return _json(400, {"ok": False, "error": "cards"})
         except Exception:
@@ -237,6 +240,9 @@ class DashboardApp:
             return _json(400, {"ok": False, "error": "invalid"})
         if scope not in {"mine", "both"} or cards_scope not in {"mine", "other"}:
             return _json(400, {"ok": False, "error": "scope"})
+        missing_category = _missing_category_choice(payload.get("missing", ""))
+        if missing_category is None:
+            return _json(400, {"ok": False, "error": "missing"})
         try:
             result = self._write_edit(
                 label,
@@ -247,6 +253,7 @@ class DashboardApp:
                 owner.strip() if isinstance(owner, str) and owner.strip() else None,
                 scope,
                 cards_scope,
+                missing_category,
             )
         except ValueError:
             return _json(400, {"ok": False, "error": "cards"})
@@ -270,6 +277,7 @@ class DashboardApp:
         owner: str | None,
         scope: str,
         cards_scope: str,
+        missing_category: bool = False,
     ) -> tuple[int, dict] | None:
         with self._sheet_lock:
             records = self.context.sheets.get_expense_records(self.context.raw_sheet)
@@ -368,7 +376,7 @@ class DashboardApp:
                 showed_payment=planned.touch_payment,
             )
             try:
-                dashboard = self._read_sheet_unlocked(label, scope, cards_scope)
+                dashboard = self._read_sheet_unlocked(label, scope, cards_scope, missing_category)
             except ValueError:
                 raise
             except Exception:
@@ -393,6 +401,7 @@ class DashboardApp:
                     today=today,
                     cards_scope=cards_scope,
                     household_labels=self._household_labels(),
+                    missing_category=missing_category,
                 )
         dashboard["ok"] = True
         dashboard["message"] = saved
@@ -426,8 +435,11 @@ class DashboardApp:
             return _json(400, {"ok": False, "error": "invalid"})
         if scope not in {"mine", "both"} or cards_scope not in {"mine", "other"}:
             return _json(400, {"ok": False, "error": "scope"})
+        missing_category = _missing_category_choice(payload.get("missing", ""))
+        if missing_category is None:
+            return _json(400, {"ok": False, "error": "missing"})
         try:
-            result = self._write_delete(label, entry_id.strip(), source, scope, cards_scope)
+            result = self._write_delete(label, entry_id.strip(), source, scope, cards_scope, missing_category)
         except ValueError:
             return _json(400, {"ok": False, "error": "cards"})
         except Exception:
@@ -449,6 +461,7 @@ class DashboardApp:
         source: str,
         scope: str,
         cards_scope: str,
+        missing_category: bool = False,
     ) -> tuple[int, dict] | None:
         with self._sheet_lock:
             if source == "expense":
@@ -468,7 +481,7 @@ class DashboardApp:
                 deleted = self.context.sheets.delete_entry_by_id(self.context.card_usage_sheet, record.entry_id)
                 if not deleted:
                     return None
-            dashboard = self._read_sheet_unlocked(label, scope, cards_scope)
+            dashboard = self._read_sheet_unlocked(label, scope, cards_scope, missing_category)
         dashboard["ok"] = True
         dashboard["message"] = "Deleted that row."
         return 200, dashboard
@@ -485,11 +498,11 @@ class DashboardApp:
             timeout_seconds=timeout_seconds,
         )
 
-    def _read_sheet(self, label: str, scope: str, cards_scope: str = "mine") -> dict:
+    def _read_sheet(self, label: str, scope: str, cards_scope: str = "mine", missing_category: bool = False) -> dict:
         with self._sheet_lock:
-            return self._read_sheet_unlocked(label, scope, cards_scope)
+            return self._read_sheet_unlocked(label, scope, cards_scope, missing_category)
 
-    def _read_sheet_unlocked(self, label: str, scope: str, cards_scope: str) -> dict:
+    def _read_sheet_unlocked(self, label: str, scope: str, cards_scope: str, missing_category: bool = False) -> dict:
         records = self.context.sheets.get_expense_records(self.context.raw_sheet)
         card_usage = self.context.sheets.get_card_usage_records(self.context.card_usage_sheet)
         payment_config = None
@@ -513,6 +526,7 @@ class DashboardApp:
             cards_error=cards_error,
             cards_scope=cards_scope,
             household_labels=self._household_labels(),
+            missing_category=missing_category,
         )
 
     def _household_labels(self) -> tuple[str, ...]:
@@ -633,6 +647,14 @@ def start_dashboard_server(
     thread.start()
     LOGGER.info("Dashboard page is listening on port %s.", server.server_address[1])
     return server
+
+
+def _missing_category_choice(value: object) -> bool | None:
+    if value in (None, ""):
+        return False
+    if value == "1":
+        return True
+    return None
 
 
 def _now() -> int:

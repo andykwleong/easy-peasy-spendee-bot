@@ -12,6 +12,7 @@ const state = {
   view: "recent",
   scope: "mine",
   cards: "mine",
+  missingCategory: false,
   editingId: "",
   savedNote: "",
   pendingDelete: null,
@@ -69,7 +70,7 @@ async function boot() {
 async function loadDashboard() {
   state.message = "";
   renderLoading();
-  const response = await fetch("/api/dashboard?scope=" + encodeURIComponent(state.scope) + "&cards=" + encodeURIComponent(state.cards), {
+  const response = await fetch(dashboardPath(), {
     credentials: "same-origin",
     headers: telegramInitData() && !state.loggedOut ? { "X-Telegram-Init-Data": telegramInitData() } : {}
   });
@@ -95,6 +96,7 @@ async function loginWithWidget(user) {
   state.loggedOut = false;
   state.scope = "mine";
   state.cards = "mine";
+  state.missingCategory = false;
   state.editingId = "";
   state.pendingDelete = null;
   state.deleteError = "";
@@ -273,24 +275,36 @@ function renderRecent() {
     });
     filters.append(chip);
   });
+  const missing = el("button", "chip", "No category");
+  missing.type = "button";
+  missing.setAttribute("aria-pressed", String(state.missingCategory));
+  missing.addEventListener("click", () => {
+    state.missingCategory = !state.missingCategory;
+    loadDashboard();
+  });
+  filters.append(missing);
   head.append(filters);
   section.append(head);
   if (state.payload.recent_truncated) {
     section.append(el("p", "sub", "Showing the latest " + state.payload.recent_limit + " confirmed rows."));
   }
-  if (!state.payload.recent.length) section.append(el("p", "empty", "No confirmed rows for this view."));
+  if (!state.payload.recent.length) {
+    section.append(el("p", "empty", state.missingCategory ? "No rows are missing a category." : "No confirmed rows for this view."));
+  }
   state.payload.recent.forEach((row) => section.append(renderTransaction(row)));
   return section;
 }
 
 function renderTransaction(row) {
-  const article = el("article", "tx");
+  const pending = expenseCategoryIsBlank(row);
+  const article = el("article", pending ? "tx needs-category" : "tx");
   const line = el("div", "tx-line");
   const shop = el("div", "tx-shop");
   shop.append(el("div", "merchant", row.description || "No description"));
   shop.append(el("div", "tx-date", prettyDate(row.date)));
   const category = el("div", "tx-category");
-  category.append(el("span", "tag", row.kind === "card_only" ? "Card only · not an expense" : (row.category || row.kind)));
+  const tag = el("span", pending ? "tag needs-category" : "tag", categoryLabel(row));
+  category.append(tag);
   const logged = el("div", "tx-logged", "Logged by " + row.logged_by);
   const moneySide = el("div", "tx-money");
   moneySide.append(el("div", "amount", money(row.amount)));
@@ -301,12 +315,24 @@ function renderTransaction(row) {
   const actions = el("div", "tx-actions");
   actions.append(deleteButton(row));
   const open = state.editingId === row.id;
-  const fix = el("button", "text-btn", open ? "Close" : "Fix tagging");
+  const fix = el("button", "text-btn", open ? "Save" : "Fix tagging");
   fix.type = "button";
   fix.setAttribute("aria-expanded", String(open));
   fix.addEventListener("click", () => {
-    state.editingId = open ? "" : row.id;
+    if (!open) {
+      state.editingId = row.id;
+      state.savedNote = "";
+      render();
+      return;
+    }
+    const input = fix.closest("article").querySelector('input[aria-label="Amount"]');
+    const amount = finishedAmount(input, row);
+    state.editingId = "";
     state.savedNote = "";
+    if (amount) {
+      saveEdit(row, "amount", amount);
+      return;
+    }
     render();
   });
   actions.append(fix);
@@ -396,7 +422,8 @@ async function confirmDelete() {
         source: pending.source,
         confirm: true,
         scope: state.scope,
-        cards: state.cards
+        cards: state.cards,
+        missing: state.missingCategory
       })
     });
     const body = await response.json().catch(() => ({ ok: false }));
@@ -547,7 +574,8 @@ async function saveEdit(row, field, value, owner) {
     field: field,
     value: value,
     scope: state.scope,
-    cards: state.cards
+    cards: state.cards,
+    missing: state.missingCategory
   };
   if (owner) payload.owner = owner;
   const headers = { "Content-Type": "application/json" };
@@ -717,7 +745,8 @@ function renderRaw() {
         row.id, prettyDate(row.date), row.logged_by, money(row.amount), row.category, row.description,
         row.payment_owner || "—", row.payment_method || "—", row.payment_channel || "—", row.type, row.status
       ],
-      deleteTarget: rawDeleteTarget(row, "expense")
+      deleteTarget: rawDeleteTarget(row, "expense"),
+      needsCategory: expenseCategoryIsBlank(row)
     }))
   ));
   if (state.payload.card_usage_truncated) {
@@ -808,7 +837,7 @@ function rawTable(title, headers, records) {
   table.append(thead);
   const body = el("tbody");
   records.forEach((record) => {
-    const row = el("tr");
+    const row = el("tr", record.needsCategory ? "needs-category" : "");
     record.cells.forEach((value, index) => row.append(el("td", index === 3 ? "num" : "", value)));
     const action = el("td");
     if (record.deleteTarget) action.append(deleteButton(record.deleteTarget));
@@ -818,6 +847,34 @@ function rawTable(title, headers, records) {
   table.append(body);
   panel.append(table);
   return panel;
+}
+
+function dashboardPath() {
+  let path = "/api/dashboard?scope=" + encodeURIComponent(state.scope) + "&cards=" + encodeURIComponent(state.cards);
+  if (state.missingCategory) path += "&missing=1";
+  return path;
+}
+
+function expenseCategoryIsBlank(row) {
+  if (String(row.category || "").trim()) return false;
+  if (row.kind) return row.kind === "expense";
+  const type = String(row.type || "Expense").toLowerCase();
+  const status = String(row.status || "Confirmed").toLowerCase();
+  return type === "expense" && status === "confirmed";
+}
+
+function categoryLabel(row) {
+  if (row.kind === "card_only") return "Card only · not an expense";
+  if (expenseCategoryIsBlank(row)) return "No category";
+  return row.category || row.kind;
+}
+
+function finishedAmount(input, row) {
+  if (!input) return "";
+  const cleaned = input.value.trim().replace(/[$,]/g, "");
+  if (!cleaned || cleaned === String(row.amount) || Number(cleaned).toFixed(2) === Number(row.amount).toFixed(2)) return "";
+  if (!/^\d+(?:\.\d{1,2})?$/.test(cleaned) || Number(cleaned) <= 0) return "";
+  return cleaned;
 }
 
 function cardLine(row) {

@@ -215,6 +215,35 @@ class DashboardViewTests(unittest.TestCase):
         self.assertNotIn("Sample Mastercard", capped)
         self.assertNotIn("Sample Cash", {**capped, **uncapped})
         self.assertEqual(next(row for row in mine["raw_expenses"] if row["id"] == "aa1001")["payment_owner"], "")
+
+    def test_paynow_recent_row_keeps_a_blank_payment_owner(self):
+        records = [
+            expense(
+                "pay001",
+                "2301.30",
+                "",
+                logged_by="Alex",
+                expense_date="2026-10-10",
+                payment_method="PayNow",
+                payment_owner="",
+                description="SAMPLE HELPER",
+            )
+        ]
+        payload = build_dashboard_payload(
+            viewer_label="Alex",
+            scope="mine",
+            records=records,
+            card_usage=[],
+            payment_config=payment_config(),
+            today=date(2026, 10, 10),
+        )
+        shown = payload["recent"][0]
+        self.assertEqual(shown["payment_method"], "PayNow")
+        self.assertEqual(shown["payment_owner"], "")
+        self.assertEqual(shown["payment_channel"], "")
+        raw = payload["raw_expenses"][0]
+        self.assertEqual(raw["payment_owner"], "")
+        self.assertEqual(raw["payment_method"], "PayNow")
         self.assertIn("aa1012", [row["id"] for row in mine["raw_expenses"]])
         self.assertIn("cc1002", [row["id"] for row in mine["card_usage"]])
 

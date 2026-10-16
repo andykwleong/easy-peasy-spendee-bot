@@ -47,6 +47,14 @@ REFUND_BODY = "A refund of SGD 18.50 was credited on 05/10/2026 for the card end
 STATEMENT_SUBJECT = "Your eStatement/eAdvice is ready for viewing"
 PAYNOW_SUBJECT = "UOB-PayNow transfer received"
 PAYNOW_BODY = "You received SGD 40.00 by PayNow on 05/10/2026.\n"
+BANK_HELPER_BODY = "\n".join(
+    (
+        "Date & Time: 10 Oct 22:42 (SGT)",
+        "Amount: SGD2301.30",
+        "From: Sample Joint Account A/C ending 4444",
+        "To: SAMPLE HELPER (UEN ending ABCD)",
+    )
+)
 TODAY = date(2026, 10, 5)
 SINGAPORE = ZoneInfo("Asia/Singapore")
 
@@ -1128,6 +1136,216 @@ class EmailMailTests(unittest.TestCase):
         self.assertNotIn("Category is missing", notes[0])
         stored = json.loads(state.values[shop_choice_state_key(writer.rows[0].entry_id)])
         self.assertEqual(stored, ["Shopping - Alex", "Home - Alex"])
+
+    def test_bank_account_payment_is_logged_as_paynow_without_a_card(self):
+        looked_up = []
+
+        def channels_for(owner, payment_method):
+            looked_up.append((owner, payment_method))
+            return ("Online", "PayWave")
+
+        config = config_with(last4="4444")
+        decision = decide_mail(
+            "Payment sent",
+            BANK_HELPER_BODY,
+            ("person-a@example.com",),
+            forwarders={"person-a@example.com": "Me"},
+            methods=config.payment_methods,
+            categories=("Food", "Groceries", INCOME_MISC),
+            channels_for=channels_for,
+            category_for=lambda shop, logged_by, body="": None,
+            today=TODAY,
+        )
+
+        self.assertEqual(decision.action, "log", decision.text)
+        self.assertEqual(decision.kind, "purchase")
+        self.assertEqual(decision.payment_method, "PayNow")
+        self.assertEqual(decision.payment_owner, "")
+        self.assertEqual(decision.payment_channel, "")
+        self.assertEqual(decision.last4, "")
+        self.assertEqual(decision.shop, "SAMPLE HELPER")
+        self.assertEqual(decision.amount, Decimal("2301.30"))
+        self.assertEqual(decision.expense_date, date(2026, 10, 10))
+        self.assertFalse(decision.category.casefold().startswith("income"))
+        self.assertEqual(looked_up, [])
+        row = build_expense_row(decision, chat_id=-100, now=datetime(2026, 10, 10, 22, 42, tzinfo=SINGAPORE))
+        self.assertEqual(row.transaction_type, "Expense")
+        self.assertEqual(row.payment_method, "PayNow")
+        self.assertEqual(row.payment_owner, "")
+        self.assertEqual(row.payment_channel, "")
+        self.assertEqual(row.description, "SAMPLE HELPER")
+        self.assertEqual(row.amount, Decimal("2301.30"))
+        sheet = row.to_sheet_row(include_payment_owner=True, include_payment_channel=True)
+        self.assertEqual(sheet[9], "")
+        self.assertEqual(sheet[10], "PayNow")
+        self.assertEqual(sheet[11], "")
+        record = ExpenseRecord(
+            row_number=2,
+            entry_id=row.entry_id,
+            timestamp="22:42:00",
+            expense_date="2026-10-10",
+            month="2026-10",
+            logged_by=row.logged_by,
+            raw_input=row.raw_input,
+            amount=row.amount,
+            category=row.category,
+            description=row.description,
+            input_type="Email",
+            status="Confirmed",
+            transaction_type="Expense",
+            payment_method=row.payment_method,
+            payment_owner=row.payment_owner,
+            payment_channel=row.payment_channel,
+        )
+        items = build_card_summary(config, [record], "Me", date(2026, 10, 10))
+        self.assertEqual(items[0].total_spend, Decimal("0"))
+
+    def test_account_ending_is_also_paynow_without_a_card(self):
+        body = "\n".join(
+            (
+                "Date & Time: 10 Oct 22:42 (SGT)",
+                "Amount: SGD40.00",
+                "From: Sample Savings account ending 4444",
+                "To: SAMPLE HELPER",
+            )
+        )
+        decision = decide("Payment sent", body, config_with(last4="4444"))
+        self.assertEqual(decision.action, "log", decision.text)
+        self.assertEqual(decision.payment_method, "PayNow")
+        self.assertEqual(decision.payment_owner, "")
+        self.assertEqual(decision.last4, "")
+        self.assertEqual(decision.shop, "SAMPLE HELPER")
+        self.assertEqual(decision.expense_date, date(2026, 10, 10))
+
+    def test_bank_payment_without_a_shop_still_logs(self):
+        body = "\n".join(
+            (
+                "Date & Time: 10 Oct 22:42 (SGT)",
+                "Amount: SGD40.00",
+                "From: Sample Joint Account A/C ending 4444",
+            )
+        )
+        decision = decide("Payment sent", body, config_with(last4="9999"))
+        self.assertEqual(decision.action, "log", decision.text)
+        self.assertEqual(decision.payment_method, "PayNow")
+        self.assertEqual(decision.shop, "")
+        self.assertEqual(decision.amount, Decimal("40.00"))
+        self.assertEqual(decision.expense_date, date(2026, 10, 10))
+        self.assertEqual(decision.payment_owner, "")
+        self.assertEqual(decision.last4, "")
+
+    def test_mixed_bank_shop_stays_blank_and_does_not_pin_a_keyword(self):
+        saved = []
+        looked_up = []
+        records = (
+            ExpenseRecord(
+                row_number=2,
+                entry_id="aaa111",
+                timestamp="09:00:00",
+                expense_date="2026-10-01",
+                month="2026-10",
+                logged_by="Me",
+                raw_input="email: SAMPLE HELPER",
+                amount=Decimal("4.00"),
+                category="Food",
+                description="SAMPLE HELPER",
+                input_type="Email",
+                status="Confirmed",
+            ),
+            ExpenseRecord(
+                row_number=3,
+                entry_id="bbb222",
+                timestamp="09:00:00",
+                expense_date="2026-10-02",
+                month="2026-10",
+                logged_by="Me",
+                raw_input="email: SAMPLE HELPER",
+                amount=Decimal("5.00"),
+                category="Groceries",
+                description="SAMPLE HELPER",
+                input_type="Email",
+                status="Confirmed",
+            ),
+        )
+        decision = decide_mail(
+            "Payment sent",
+            BANK_HELPER_BODY,
+            ("person-a@example.com",),
+            forwarders={"person-a@example.com": "Me"},
+            methods=config_with(last4="4444").payment_methods,
+            categories=("Food", "Groceries", INCOME_MISC),
+            channels_for=config_with(last4="4444").channel_options_for,
+            category_for=lambda *args, **kwargs: looked_up.append(args),
+            today=TODAY,
+            remember_category=lambda keyword, category: saved.append((keyword, category)),
+            expense_records=records,
+        )
+        self.assertEqual(decision.action, "log", decision.text)
+        self.assertEqual(decision.payment_method, "PayNow")
+        self.assertEqual(decision.category, "")
+        self.assertEqual(decision.shop_choices, ("Food", "Groceries"))
+        self.assertEqual(decision.shop, "SAMPLE HELPER")
+        self.assertEqual(saved, [])
+        self.assertEqual(looked_up, [])
+
+    def test_unmatched_card_ending_is_not_logged(self):
+        body = "\n".join(
+            (
+                "Date & Time: 10 Oct 22:42 (SGT)",
+                "Amount: SGD18.50",
+                "From: card ending 9999",
+                "To: SAMPLE SHOP",
+            )
+        )
+        decision = decide("Card transaction", body, config_with(last4="1111"))
+        self.assertEqual(decision.action, "ask")
+        self.assertNotEqual(decision.action, "log")
+        self.assertEqual(
+            decision.text,
+            "I got a purchase but could not match one card from the Last 4 column. I have not logged it.",
+        )
+
+    def test_card_ending_still_uses_the_card_when_an_account_ending_is_also_present(self):
+        body = "\n".join(
+            (
+                "Date & Time: 10 Oct 22:42 (SGT)",
+                "Amount: SGD18.50",
+                "From: card ending 1111",
+                "Account A/C ending 4444",
+                "To: SAMPLE SHOP",
+            )
+        )
+        decision = decide("Card transaction", body, config_with(last4="1111"))
+        self.assertEqual(decision.action, "log", decision.text)
+        self.assertEqual(decision.payment_method, "UOB Sample Visa")
+        self.assertEqual(decision.last4, "1111")
+        self.assertEqual(decision.shop, "SAMPLE SHOP")
+
+    def test_incoming_paynow_refund_dividend_and_interest_stay_income_with_an_account_ending(self):
+        bankish = "\n".join(
+            (
+                BANK_HELPER_BODY,
+                "From: Sample Joint Account A/C ending 4444",
+            )
+        )
+        paynow = decide(PAYNOW_SUBJECT, bankish, config_with(last4="4444"))
+        refund = decide(REFUND_SUBJECT, bankish, config_with(last4="4444"))
+        dividend = decide(
+            "Dividend credited",
+            "A dividend of SGD 12.00 was credited on 05/10/2026.\nFrom: account ending 4444",
+            config_with(last4="4444"),
+        )
+        interest = decide(
+            "Interest credited",
+            "Interest of SGD 1.25 was credited on 05/10/2026.\nFrom: A/C ending 4444",
+            config_with(last4="4444"),
+        )
+        for decision in (paynow, refund, dividend, interest):
+            self.assertEqual(decision.action, "log", decision.text)
+            self.assertEqual(decision.category, INCOME_MISC)
+            self.assertEqual(decision.payment_method, "")
+            self.assertEqual(decision.payment_owner, "")
+            self.assertNotEqual(decision.kind, "purchase")
 
 
 if __name__ == "__main__":

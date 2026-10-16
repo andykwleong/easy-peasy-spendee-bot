@@ -18,6 +18,7 @@ from getrichbot.categories import CATEGORY_KEYWORDS
 from getrichbot.categories import forget_shop_keyword
 from getrichbot.categories import remember_priority_keyword
 from getrichbot.parser import categorize_description
+from getrichbot.row_edits import match_category
 
 LOGGER = logging.getLogger(__name__)
 
@@ -211,6 +212,19 @@ def resolve_shop_category_tap(entry_id: str, index: int, choices: tuple[str, ...
     if index < 0 or index >= len(choices):
         return ShopTap("invalid", entry_id=entry_id)
     return ShopTap("ok", category=choices[index], entry_id=str(getattr(record, "entry_id", "") or entry_id))
+
+
+def resolve_shop_category_reply(text: str, choices: tuple[str, ...], record, actor: str | None) -> ShopTap:
+    if record is None:
+        return ShopTap("missing")
+    entry_id = str(getattr(record, "entry_id", "") or "")
+    category = match_category(text, choices)
+    if category is None:
+        return ShopTap("invalid", entry_id=entry_id)
+    logged_by = str(getattr(record, "logged_by", "") or "")
+    if not actor or actor != logged_by:
+        return ShopTap("wrong_person", entry_id=entry_id)
+    return ShopTap("ok", category=category, entry_id=entry_id)
 
 
 def record_shop_category_choice(sheets, sheet_name: str, record, category: str) -> None:

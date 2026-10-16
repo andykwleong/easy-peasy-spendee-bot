@@ -1,4 +1,6 @@
+import json
 import unittest
+from dataclasses import replace
 
 from getrichbot import categories
 from getrichbot.categories import configure_category_config
@@ -14,6 +16,7 @@ from getrichbot.shop_category import remember_email_shop_correction
 from getrichbot.shop_category import resolve_shop_category
 from getrichbot.shop_category import resolve_shop_category_tap
 from getrichbot.shop_category import shop_category_callback
+from getrichbot.shop_category import shop_choice_state_key
 from getrichbot.shop_category import shop_choices_from_state
 from getrichbot.shop_lookup import EXA_SEARCH_URL
 from getrichbot.shop_lookup import exa_description
@@ -563,3 +566,140 @@ class _KeywordSheet:
     def update_expense_record(self, sheet_name, row_number, **updates):
         del sheet_name, row_number
         self.updates.append(updates)
+
+
+class _ReplySettings:
+    raw_expenses_sheet = "Raw Expenses"
+    monthly_summary_sheet = "Monthly Summary"
+    bot_state_sheet = "Bot State"
+    categories_sheet = "Categories"
+    category_keywords_sheet = "Category Keywords"
+    me_label = "Alex"
+    wife_label = "Sam"
+    openai_api_key = None
+    openai_model = "test-model"
+
+    def label_for_user(self, telegram_user_id):
+        if telegram_user_id == 111:
+            return "Alex"
+        if telegram_user_id == 222:
+            return "Sam"
+        return None
+
+
+class _ReplySheets:
+    def __init__(self, record):
+        self.record = record
+        self.state = {}
+        self.keywords = []
+        self.updates = []
+
+    def get_state_value(self, sheet_name, key):
+        del sheet_name
+        return self.state.get(key, "")
+
+    def set_state_value(self, sheet_name, key, value):
+        del sheet_name
+        self.state[key] = value
+
+    def get_record_by_id(self, sheet_name, entry_id):
+        del sheet_name
+        if self.record.entry_id.lower() == entry_id.lower():
+            return self.record
+        return None
+
+    def get_expense_records(self, sheet_name):
+        del sheet_name
+        return [self.record]
+
+    def update_expense_record(self, sheet_name, row_number, **updates):
+        del sheet_name, row_number
+        self.updates.append(updates)
+        changes = {key: value for key, value in updates.items() if value is not None}
+        self.record = replace(self.record, **changes)
+
+    def update_monthly_summary(self, sheet_name, rows):
+        del sheet_name, rows
+
+    def upsert_category_keyword(self, sheet_name, keyword, category):
+        self.keywords.append((sheet_name, keyword, category))
+
+    def deactivate_category_keyword(self, sheet_name, keyword):
+        self.keywords.append((sheet_name, keyword, "off"))
+
+
+class _ReplyUser:
+    def __init__(self, user_id):
+        self.id = user_id
+
+
+class _ReplyChat:
+    id = 50
+
+
+class _ReplyMessage:
+    def __init__(self, text, reply_to_message=None):
+        self.text = text
+        self.message_id = 9
+        self.reply_to_message = reply_to_message
+        self.replies = []
+
+    async def reply_text(self, text, **kwargs):
+        del kwargs
+        self.replies.append(text)
+
+
+class _ReplyUpdate:
+    def __init__(self, text, user_id, reply_to_message):
+        self.message = _ReplyMessage(text, reply_to_message)
+        self.effective_user = _ReplyUser(user_id)
+        self.effective_chat = _ReplyChat()
+
+
+class ShopCategoryReplyTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.original = _snapshot()
+        configure_category_config(
+            {
+                **self.original,
+                "variable_categories": ["Shopping - Alex", "Home - Alex"],
+                "fixed_categories": [],
+                "category_keywords": {},
+                "priority_keywords": [],
+                "shopping_keywords": [],
+                "shopping_categories": {},
+                "category_aliases": {},
+            }
+        )
+
+    def tearDown(self):
+        configure_category_config(self.original)
+
+    async def test_reply_to_the_shop_message_saves_that_category_without_a_keyword(self):
+        from getrichbot.bot import FinanceBot
+        from getrichbot.email_mail import MIXED_SHOP_ASK
+
+        record = _row("Sample Stall", "", logged_by="Alex", payment_method="Sample Card", payment_owner="Alex")
+        sheets = _ReplySheets(record)
+        sheets.state[shop_choice_state_key(record.entry_id)] = json.dumps(["Shopping - Alex", "Home - Alex"])
+        notice = _ReplyMessage(
+            f"Logged $9.99 at Sample Stall - 5 October 2026 via Sample Card (All) [{record.entry_id}]\n{MIXED_SHOP_ASK}"
+        )
+        bot = FinanceBot(_ReplySettings(), sheets)
+
+        blocked = _ReplyUpdate("Home - Alex", 222, notice)
+        await bot.handle_text(blocked, None)
+        self.assertEqual(sheets.record.category, "")
+        self.assertEqual(sheets.keywords, [])
+        self.assertEqual(blocked.message.replies, ["Only the person who submitted this mail can choose the category."])
+        self.assertEqual(sheets.state[shop_choice_state_key(record.entry_id)], json.dumps(["Shopping - Alex", "Home - Alex"]))
+
+        chosen = _ReplyUpdate("Home - Alex", 111, notice)
+        await bot.handle_text(chosen, None)
+        self.assertEqual(sheets.record.category, "Home - Alex")
+        self.assertEqual(sheets.updates[-1]["category"], "Home - Alex")
+        self.assertEqual(sheets.updates[-1]["transaction_type"], "Expense")
+        self.assertEqual(sheets.keywords, [])
+        self.assertEqual(sheets.state[shop_choice_state_key(record.entry_id)], "")
+        self.assertIn("Home - Alex", chosen.message.replies[0])
+        self.assertIn(f"[{record.entry_id}]", chosen.message.replies[0])

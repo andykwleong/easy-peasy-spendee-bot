@@ -8,7 +8,7 @@ Telegram chat is a second surface. This map does not drive it. The live bot alre
 
 - Launch the dashboard with `python3 .cursor/skills/verify-getrichbot/scripts/verify_dashboard.py launch`.
 - The page is `http://127.0.0.1:41731` unless `GETRICHBOT_VERIFY_PORT` set another port. Read the `url=` line from launch. Never substitute a public URL.
-- The fake sheet starts with `Sample cafe` (`aa1001`, Alex, Food, $18.50, Sample Visa, 20 Sep 2026) and `Sample market` (`bb2002`, Sam, Groceries, $12.40, Sample Mastercard, 18 Sep 2026).
+- The fake sheet starts with `Sample cafe` (`aa1001`, Alex, Food, $18.50, Sample Visa, 20 Sep 2026), `Sample market` (`bb2002`, Sam, Groceries, $12.40, Sample Mastercard, 18 Sep 2026), and `Sample stall` (`cc3003`, Sam, no category, $4.00, Cash, 21 Sep 2026).
 - Alex's cards are Sample Visa (cap $100, shows 18%) and Sample Cashback (no cap). Sam's card is Sample Mastercard (cap $200, shows 6%).
 - The open month is September 2026 because the server's today is 26 Sep 2026.
 - Run `doctor` and require the first line `ok`.
@@ -43,8 +43,8 @@ Each feature file starts with an H1 title and one paragraph describing the user-
 
 ## Features
 
-- [Recent transactions](./recent-transactions.md) covers the locked page, signing in, one person versus both, and fixing a category.
+- [Recent transactions](./recent-transactions.md) covers the locked page, signing in, one person versus both, the No category filter, and fixing a category. The open Fix tagging control reads Save.
 - [Card summary](./card-summary.md) covers the signed-in person's cards, the other person's cards, a cap, and a card with no cap.
 - [Monthly summary](./monthly-summary.md) covers the household month table built from the raw rows.
-- [Raw entries](./raw-entries.md) covers the full raw expense table and the empty card-only table.
-- [Delete a row](./delete-row.md) covers the confirm dialog, cancel, and a confirmed delete.
+- [Raw entries](./raw-entries.md) covers the full raw expense table, the blank-category row, and the empty card-only table.
+- [Delete a row](./delete-row.md) covers the dialog, Cancel, and Delete.

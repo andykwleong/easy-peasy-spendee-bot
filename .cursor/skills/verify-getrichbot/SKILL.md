@@ -24,9 +24,10 @@ Ready means a later `doctor` command prints `ok`, and `GET /` returns the househ
 What launch does:
 
 - Listens on `127.0.0.1` only. The default port is `41731`. Override with `GETRICHBOT_VERIFY_PORT`. It does not read `PORT`, so it will not attach to a Railway-style port by accident.
-- Seeds two confirmed rows and three sample cards. Today is fixed at 26 Sep 2026, so the open month is September 2026.
+- Seeds three confirmed rows and three sample cards. Today is fixed at 26 Sep 2026, so the open month is September 2026.
   - `aa1001`: Alex, 20 Sep 2026, Food, Sample cafe, $18.50, Sample Visa.
   - `bb2002`: Sam, 18 Sep 2026, Groceries, Sample market, $12.40, Sample Mastercard.
+  - `cc3003`: Sam, 21 Sep 2026, no category, Sample stall, $4.00, Cash. Cash is not a credit card, so Cards does not list it. Month leaves a blank category out of the totals.
   - Sample Visa (Alex) has a $100 calendar cap. Sample Cashback (Alex) has no cap. Sample Mastercard (Sam) has a $200 calendar cap.
 - Uses the public example categories (Food, Groceries, and the other names in the repo's example list). It does not read `.env`, `categories.json`, or a Google Sheet.
 - If `python-dotenv` is missing, launch creates `.venv` and installs `python-dotenv==1.0.1`, then restarts itself with that interpreter. `.venv` is gitignored. It does not install the Telegram or Google libraries and it does not start the bot. Creating `.venv` needs the system package that provides `python3 -m venv` (on Ubuntu, `python3.12-venv`). If that package is missing, launch stops with the venv error. Install the package and run launch again.

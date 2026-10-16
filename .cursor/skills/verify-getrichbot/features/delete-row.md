@@ -1,6 +1,6 @@
 # Delete a row
 
-Delete a row asks for confirmation, can be cancelled, and removes the row only after the confirm button is chosen.
+Delete a row asks for confirmation, can be cancelled, and removes the row only after Delete is chosen.
 
 ## Sub-features
 

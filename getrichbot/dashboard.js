@@ -18,10 +18,19 @@ const state = {
   pendingDelete: null,
   deleteError: "",
   deleting: false,
+  saving: false,
+  loading: false,
   payload: null,
   message: "",
   loggedOut: false,
-  botUsername: ""
+  botUsername: "",
+  loadSeq: 0,
+  watching: false,
+  watchBound: false,
+  watchAbort: null,
+  wake: null,
+  retryDelay: 15000,
+  refreshNote: ""
 };
 
 const app = document.querySelector("#app");
@@ -52,7 +61,7 @@ async function boot() {
   if (!state.loggedOut && telegramInitData()) {
     const result = await postJson("/api/session/webapp", { init_data: telegramInitData() });
     if (result.ok) {
-      await loadDashboard();
+      if (await loadDashboard()) watchChanges();
       return;
     }
     state.message = ERROR_TEXT[result.error] || ERROR_TEXT.locked;
@@ -61,29 +70,79 @@ async function boot() {
   }
   const session = await fetch("/api/session", { credentials: "same-origin" });
   if (session.ok) {
-    await loadDashboard();
+    if (await loadDashboard()) watchChanges();
     return;
   }
   renderLogin();
 }
 
-async function loadDashboard() {
-  state.message = "";
-  renderLoading();
-  const response = await fetch(dashboardPath(), {
-    credentials: "same-origin",
-    headers: telegramInitData() && !state.loggedOut ? { "X-Telegram-Init-Data": telegramInitData() } : {}
-  });
+async function loadDashboard(options) {
+  const quiet = Boolean(options && options.quiet);
+  const seq = ++state.loadSeq;
+  if (!quiet) {
+    state.loading = true;
+    state.message = "";
+    state.refreshNote = "";
+    renderLoading();
+  }
+  try {
+    return await applyDashboardLoad(quiet, seq);
+  } finally {
+    if (!quiet) {
+      state.loading = false;
+      wakeWatch();
+    }
+  }
+}
+
+async function applyDashboardLoad(quiet, seq) {
+  let response;
+  try {
+    response = await fetch(dashboardPath(), {
+      credentials: "same-origin",
+      headers: telegramInitData() && !state.loggedOut ? { "X-Telegram-Init-Data": telegramInitData() } : {}
+    });
+  } catch (error) {
+    if (seq !== state.loadSeq) return true;
+    if (quiet && state.payload && !state.loggedOut) {
+      state.refreshNote = "Could not refresh. The list on screen is unchanged.";
+      keepScroll(() => render());
+      return false;
+    }
+    if (quiet) return false;
+    state.payload = null;
+    state.message = ERROR_TEXT.sheet;
+    renderMessage(state.message);
+    return false;
+  }
   const body = await response.json().catch(() => ({ ok: false, error: "sheet" }));
+  if (seq !== state.loadSeq) return true;
   if (!response.ok) {
+    if (response.status === 401) {
+      stopWatching();
+      state.payload = null;
+      state.refreshNote = "";
+      state.message = ERROR_TEXT[body.error] || ERROR_TEXT.locked;
+      renderLogin();
+      return false;
+    }
+    if (quiet && state.payload && !state.loggedOut) {
+      state.refreshNote = "Could not refresh. The list on screen is unchanged.";
+      keepScroll(() => render());
+      return false;
+    }
+    if (quiet) return false;
     state.payload = null;
     state.message = ERROR_TEXT[body.error] || ERROR_TEXT.sheet;
-    if (response.status === 401) renderLogin();
-    else renderMessage(state.message);
-    return;
+    renderMessage(state.message);
+    return false;
   }
+  if (quiet && !pageIsReady()) return false;
   state.payload = body;
-  render();
+  state.refreshNote = "";
+  if (quiet) keepScroll(() => render());
+  else render();
+  return true;
 }
 
 async function loginWithWidget(user) {
@@ -102,16 +161,22 @@ async function loginWithWidget(user) {
   state.deleteError = "";
   state.deleting = false;
   state.view = "recent";
-  await loadDashboard();
+  state.saving = false;
+  if (await loadDashboard()) watchChanges();
 }
 
 async function logout() {
+  state.loadSeq += 1;
+  stopWatching();
   await fetch("/api/session/logout", { method: "POST", credentials: "same-origin" });
   state.loggedOut = true;
   state.payload = null;
   state.pendingDelete = null;
   state.deleteError = "";
   state.deleting = false;
+  state.saving = false;
+  state.loading = false;
+  state.refreshNote = "";
   state.view = "recent";
   state.message = "Logged out. This browser has forgotten you.";
   renderLogin();
@@ -148,7 +213,9 @@ function renderMessage(text) {
   card.append(mark(), el("h1", "", "Household money"), el("p", "notice", text));
   const retry = el("button", "primary", "Try again");
   retry.type = "button";
-  retry.addEventListener("click", () => loadDashboard());
+  retry.addEventListener("click", async () => {
+    if (await loadDashboard()) watchChanges();
+  });
   card.append(retry);
   screen.append(card);
   app.append(screen);
@@ -175,7 +242,7 @@ function renderLogin() {
         renderLogin();
         return;
       }
-      await loadDashboard();
+      if (await loadDashboard()) watchChanges();
     });
     card.append(cont);
   }
@@ -221,6 +288,7 @@ function render() {
   shell.append(main);
   if (state.pendingDelete) shell.append(renderDeletePopup());
   app.append(shell);
+  wakeWatch();
 }
 
 function renderTop() {
@@ -252,6 +320,7 @@ function renderTop() {
     nav.append(button);
   });
   wrap.append(row, nav);
+  if (state.refreshNote) wrap.append(el("p", "sub", state.refreshNote));
   header.append(wrap);
   return header;
 }
@@ -407,6 +476,7 @@ function renderDeletePopup() {
 async function confirmDelete() {
   const pending = state.pendingDelete;
   if (!pending || state.deleting) return;
+  const seq = ++state.loadSeq;
   state.deleting = true;
   state.deleteError = "";
   render();
@@ -427,6 +497,10 @@ async function confirmDelete() {
       })
     });
     const body = await response.json().catch(() => ({ ok: false }));
+    if (seq !== state.loadSeq) {
+      state.deleting = false;
+      return;
+    }
     if (!response.ok || !body.ok) {
       state.deleting = false;
       state.deleteError = body.message || "I could not delete that row just now. It is still there.";
@@ -443,6 +517,10 @@ async function confirmDelete() {
     }
     render();
   } catch (error) {
+    if (seq !== state.loadSeq) {
+      state.deleting = false;
+      return;
+    }
     state.deleting = false;
     state.deleteError = "I could not delete that row just now. It is still there.";
     render();
@@ -568,6 +646,8 @@ function cardKey(owner, name) {
 }
 
 async function saveEdit(row, field, value, owner) {
+  const seq = ++state.loadSeq;
+  state.saving = true;
   const payload = {
     id: row.id,
     source: row.source,
@@ -588,6 +668,7 @@ async function saveEdit(row, field, value, owner) {
       body: JSON.stringify(payload)
     });
     const body = await response.json();
+    if (seq !== state.loadSeq) return;
     if (!response.ok || !body.ok) {
       state.savedNote = body.message || ERROR_TEXT.sheet;
       render();
@@ -597,8 +678,12 @@ async function saveEdit(row, field, value, owner) {
     state.savedNote = body.message || "Saved.";
     render();
   } catch (error) {
+    if (seq !== state.loadSeq) return;
     state.savedNote = ERROR_TEXT.sheet;
     render();
+  } finally {
+    state.saving = false;
+    wakeWatch();
   }
 }
 
@@ -847,6 +932,159 @@ function rawTable(title, headers, records) {
   table.append(body);
   panel.append(table);
   return panel;
+}
+
+function watchChanges() {
+  if (state.watching) return;
+  if (!state.payload || typeof state.payload.change_mark !== "string" || !state.payload.change_mark) return;
+  state.watching = true;
+  state.retryDelay = 15000;
+  if (!state.watchBound) {
+    state.watchBound = true;
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden && state.watchAbort) {
+        state.watchAbort.abort();
+        state.watchAbort = null;
+      }
+      wakeWatch();
+    });
+    document.addEventListener("focusout", () => wakeWatch());
+  }
+  runWatch();
+}
+
+function stopWatching() {
+  state.watching = false;
+  if (state.watchAbort) {
+    state.watchAbort.abort();
+    state.watchAbort = null;
+  }
+  wakeWatch();
+}
+
+function wakeWatch() {
+  const wake = state.wake;
+  state.wake = null;
+  if (typeof wake === "function") wake();
+}
+
+async function runWatch() {
+  while (state.watching) {
+    await untilReady();
+    if (!state.watching) return;
+    if (!state.payload || typeof state.payload.change_mark !== "string" || !state.payload.change_mark) {
+      stopWatching();
+      return;
+    }
+    const since = state.payload.change_mark;
+    const result = await waitForMark(since);
+    if (!state.watching) return;
+    if (!result || result.aborted) continue;
+    if (result.failed) {
+      await pause(state.retryDelay);
+      if (!state.watching) return;
+      state.retryDelay = Math.min(state.retryDelay * 2, 120000);
+      continue;
+    }
+    if (!state.payload || result.mark === state.payload.change_mark) continue;
+    await untilReady();
+    if (!state.watching || !state.payload) return;
+    if (result.mark === state.payload.change_mark) continue;
+    const applied = await loadDashboard({ quiet: true });
+    if (!state.watching) return;
+    if (applied) {
+      state.retryDelay = 15000;
+      continue;
+    }
+    if (!pageIsReady()) continue;
+    await pause(state.retryDelay);
+    if (!state.watching) return;
+    state.retryDelay = Math.min(state.retryDelay * 2, 120000);
+  }
+}
+
+function pageIsReady() {
+  if (document.hidden || state.loggedOut || !state.payload) return false;
+  if (state.editingId || state.pendingDelete || state.deleting || state.saving || state.loading) return false;
+  const active = document.activeElement;
+  if (!active || !active.closest || !active.closest("#app")) return true;
+  return active.tagName !== "INPUT" && active.tagName !== "SELECT";
+}
+
+async function untilReady() {
+  while (state.watching && !pageIsReady()) {
+    if (state.watchAbort) {
+      state.watchAbort.abort();
+      state.watchAbort = null;
+    }
+    await new Promise((resolve) => {
+      state.wake = resolve;
+    });
+  }
+}
+
+async function waitForMark(since) {
+  if (state.watchAbort) state.watchAbort.abort();
+  const abort = new AbortController();
+  state.watchAbort = abort;
+  try {
+    const response = await fetch("/api/dashboard/changes?since=" + encodeURIComponent(since), {
+      credentials: "same-origin",
+      signal: abort.signal,
+      headers: telegramInitData() && !state.loggedOut ? { "X-Telegram-Init-Data": telegramInitData() } : {}
+    });
+    if (!state.watching || abort.signal.aborted) return { aborted: true };
+    if (response.status === 401) {
+      stopWatching();
+      state.payload = null;
+      state.refreshNote = "";
+      state.message = ERROR_TEXT.locked;
+      renderLogin();
+      return { aborted: true };
+    }
+    if (response.status === 503) {
+      stopWatching();
+      return { aborted: true };
+    }
+    if (response.status === 429 || !response.ok) return { failed: true };
+    const body = await response.json().catch(() => null);
+    if (!body || !body.ok || typeof body.mark !== "string") return { failed: true };
+    return { mark: body.mark };
+  } catch (error) {
+    if (error && error.name === "AbortError") return { aborted: true };
+    return { failed: true };
+  } finally {
+    if (state.watchAbort === abort) state.watchAbort = null;
+  }
+}
+
+function keepScroll(paint) {
+  const frame = document.querySelector(".raw-frame");
+  const top = frame ? frame.scrollTop : 0;
+  const left = frame ? frame.scrollLeft : 0;
+  const x = window.scrollX;
+  const y = window.scrollY;
+  paint();
+  window.scrollTo(x, y);
+  const next = document.querySelector(".raw-frame");
+  if (next) {
+    next.scrollTop = top;
+    next.scrollLeft = left;
+  }
+}
+
+function pause(ms) {
+  return new Promise((resolve) => {
+    const timer = window.setTimeout(() => {
+      if (state.wake === finish) state.wake = null;
+      resolve();
+    }, ms);
+    function finish() {
+      window.clearTimeout(timer);
+      resolve();
+    }
+    state.wake = finish;
+  });
 }
 
 function dashboardPath() {

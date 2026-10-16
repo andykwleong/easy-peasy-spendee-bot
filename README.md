@@ -289,7 +289,7 @@ WIFE_FORWARDER_EMAIL=
 
 Never commit real secrets. Keep them in Railway variables or your local `.env`.
 
-`DASHBOARD_PUBLIC_URL` is the public https address of this same app, once Railway gives you one. An example of the shape is `https://your-app.example.com`. Leave it blank until you have the real address. It is a web address, not a password. Until it is set, the Dashboard button in Telegram does nothing useful. You do not need to add `PORT` yourself. Railway already sets that, and the page listens on it. Opening the page reads the Google Sheet at that moment. It does not keep a second copy of the numbers, and it does not check the sheet in the background.
+`DASHBOARD_PUBLIC_URL` is the public https address of this same app, once Railway gives you one. An example of the shape is `https://your-app.example.com`. Leave it blank until you have the real address. It is a web address, not a password. Until it is set, the Dashboard button in Telegram does nothing useful. You do not need to add `PORT` yourself. Railway already sets that, and the page listens on it. Opening the page reads the Google Sheet at that moment. It does not keep a second copy of the numbers. While the page stays open, it waits on a small signal in the bot's memory. When a row is saved, it reads the sheet again and updates the list. It does not read the sheet on a timer while nothing has been saved.
 
 For categories, set `CATEGORIES_SHEET` and `CATEGORY_KEYWORDS_SHEET`. The running bot expects active category rows in Google Sheets.
 
@@ -299,7 +299,7 @@ Payment configuration is read only when you use the bot. It is cached in memory 
 
 ## Private dashboard
 
-The dashboard is a window onto the same Google Sheet. It does not add a second set of numbers. Typing a new expense still happens in Telegram. Fix tagging can correct a row that is already there.
+The dashboard is a window onto the same Google Sheet. It does not add a second set of numbers. Typing a new expense still happens in Telegram. Fix tagging can correct a row that is already there. Leave the page open. A saved purchase shows up on its own, without a browser refresh. A purchase dated today appears at the top. A purchase dated earlier stays on its date. Choices such as Both and No category stay as you left them. A change typed straight into the Google Sheet still needs a browser refresh.
 
 Two ways to open it, and only for the two Telegram accounts already allowed to use the bot:
 

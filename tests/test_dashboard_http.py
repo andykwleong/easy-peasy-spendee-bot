@@ -266,6 +266,47 @@ class DashboardHttpTests(unittest.TestCase):
         self.assertEqual(sheets.calls, ["get_expense_records", "get_card_usage_records", "get_payment_config"])
         self.assertFalse(body_json(dashboard)["agent_eval"]["scoring"])
 
+    def test_recent_request_can_show_only_rows_with_no_category(self):
+        app, sheets = app_for()
+        sheets.records.append(
+            ExpenseRecord(
+                row_number=3,
+                entry_id="bb2002",
+                timestamp="13:00:00",
+                expense_date="2026-09-21",
+                month="2026-09",
+                logged_by="Alex",
+                raw_input="email: Sample stall",
+                amount=Decimal("9.99"),
+                category="",
+                description="Sample stall",
+                input_type="Email",
+                status="Confirmed",
+                transaction_type="Expense",
+                payment_method="Sample Visa",
+                payment_owner="Alex",
+            )
+        )
+        init_data = sign_webapp(111)
+        headers = {"X-Telegram-Init-Data": init_data}
+
+        full_status, _, full = app.handle("GET", "/api/dashboard?scope=mine", headers, b"", secure=True)
+        filtered_status, _, filtered = app.handle(
+            "GET",
+            "/api/dashboard?scope=mine&missing=1",
+            headers,
+            b"",
+            secure=True,
+        )
+
+        self.assertEqual(full_status, 200)
+        self.assertEqual(filtered_status, 200)
+        full_ids = [row["id"] for row in body_json(full)["recent"]]
+        self.assertEqual(full_ids, ["bb2002", "aa1001"])
+        self.assertEqual([row["id"] for row in body_json(filtered)["recent"]], ["bb2002"])
+        self.assertEqual(body_json(filtered)["recent"][0]["category"], "")
+        self.assertIn("aa1001", [row["id"] for row in body_json(filtered)["raw_expenses"]])
+
     def test_widget_login_sets_a_thirty_day_cookie_and_logout_clears_it(self):
         app, _sheets = app_for()
 

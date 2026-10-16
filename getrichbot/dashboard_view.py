@@ -36,6 +36,7 @@ def build_dashboard_payload(
     cards_error: str | None = None,
     cards_scope: str = "mine",
     household_labels: tuple[str, ...] = (),
+    missing_category: bool = False,
 ) -> dict:
     if scope not in {"mine", "both"}:
         raise ValueError("scope must be mine or both")
@@ -54,6 +55,8 @@ def build_dashboard_payload(
     raw_expenses = _raw_expenses(records)
     usage_rows = _raw_card_usage(card_usage)
     recent = _recent_items(records, card_usage, viewer_label, scope)
+    if missing_category:
+        recent = [item for item in recent if expense_category_is_blank(item)]
     cards = _cards_snapshot(card_owner, records, card_usage, payment_config, today, cards_error)
     cards["showing"] = cards_scope
     cards["viewer_label"] = viewer_label
@@ -76,6 +79,22 @@ def build_dashboard_payload(
         "edit_choices": edit_choices(payment_config),
         "agent_eval": {"status": "later", "scoring": False},
     }
+
+
+def expense_category_is_blank(item: dict) -> bool:
+    """A confirmed expense whose category cell is blank.
+
+    Card-only spend is left blank on purpose. Income and fixed rows are not
+    this case. There is no second status field: the blank category is the signal.
+    """
+    if str(item.get("category") or "").strip():
+        return False
+    kind = str(item.get("kind") or "").casefold()
+    if kind:
+        return kind == "expense"
+    row_type = str(item.get("type") or "Expense").casefold()
+    status = str(item.get("status") or "Confirmed").casefold()
+    return row_type == "expense" and status == "confirmed"
 
 
 def _current_month_period(today: date) -> SummaryPeriod:

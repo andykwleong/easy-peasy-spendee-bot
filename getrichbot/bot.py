@@ -37,6 +37,7 @@ from getrichbot.logging_utils import configure_logging
 from getrichbot.models import CardUsageRow, ExpenseDraft, ExpenseRecord, ExpenseRow
 from getrichbot.parser import categorize_description, extract_date_phrase, extract_standalone_date, parse_expense, parse_expenses
 from getrichbot.row_edits import category_for_linked_message, expense_kind, format_saved_row, latest_logged_row, match_category, parse_immediate_edit, plan_edit, record_for_message_id
+from getrichbot.sheet_changes import SheetChanges
 from getrichbot.sheets import SheetsClient
 from getrichbot.startup import load_category_config_from_sheets
 from getrichbot.startup import start_page_and_mail
@@ -3661,10 +3662,17 @@ def main() -> None:
     print("GetRichBot startup reached.", flush=True)
     settings = Settings.load()
     LOGGER.info("Starting GetRichBot. Raw sheet: %s. Fixed sheet: %s.", settings.raw_expenses_sheet, settings.fixed_expenses_sheet)
+    changes = SheetChanges(
+        watched_sheets=frozenset({
+            settings.raw_expenses_sheet,
+            settings.card_usage_sheet,
+        })
+    )
     sheets = SheetsClient(
         settings.google_sheet_id,
         service_account_file=settings.service_account_file,
         service_account_json=settings.service_account_json,
+        changes=changes,
     )
     finance_bot = FinanceBot(settings, sheets)
     email_service = attach_email(finance_bot, settings, sheets)

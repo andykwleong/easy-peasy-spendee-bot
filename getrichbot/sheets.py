@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import socket
 from typing import Any
 from decimal import Decimal, InvalidOperation
@@ -8,6 +9,9 @@ from pathlib import Path
 
 from getrichbot.models import CardUsageRecord, CardUsageRow, ExpenseRecord, ExpenseRow, is_paynow_method
 from getrichbot.cards import PaymentConfig, parse_payment_config
+from getrichbot.sheet_changes import SheetChanges
+
+LOGGER = logging.getLogger(__name__)
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 # A category read at startup must finish or fail. An open socket with no
@@ -43,11 +47,28 @@ def _run_sheet_request(request: Any, timeout_seconds: float | None) -> Any:
 
 
 class SheetsClient:
-    def __init__(self, sheet_id: str, service_account_file: Path | None = None, service_account_json: str | None = None):
+    def __init__(
+        self,
+        sheet_id: str,
+        service_account_file: Path | None = None,
+        service_account_json: str | None = None,
+        changes: SheetChanges | None = None,
+    ):
         self.sheet_id = sheet_id
         self.service_account_file = service_account_file
         self.service_account_json = service_account_json
+        self.changes = changes
         self.service: Any | None = None
+
+    def _note_sheet_write(self, sheet_name: str) -> None:
+        changes = self.changes
+        if changes is None:
+            return
+        try:
+            changes.note_write(sheet_name)
+        except Exception:
+            # The cells are already saved. A mark failure must not look like the save failed.
+            LOGGER.exception("Dashboard change mark was not moved. The sheet write already finished.")
 
     def _credentials(self):
         from google.oauth2.service_account import Credentials
@@ -77,6 +98,7 @@ class SheetsClient:
             insertDataOption="INSERT_ROWS",
             body={"values": [row.to_sheet_row(include_payment_owner=include_payment_owner, include_payment_channel=include_payment_channel)]},
         ).execute()
+        self._note_sheet_write(sheet_name)
 
     def append_card_usage(self, sheet_name: str, row: CardUsageRow) -> None:
         self._ensure_sheet(sheet_name)
@@ -89,6 +111,7 @@ class SheetsClient:
             insertDataOption="INSERT_ROWS",
             body={"values": [row.to_sheet_row(include_payment_owner=include_payment_owner, include_payment_channel=include_payment_channel)]},
         ).execute()
+        self._note_sheet_write(sheet_name)
 
     def get_payment_config(self, payment_methods_sheet: str, card_limits_sheet: str) -> PaymentConfig:
         methods_source, method_rows = self._get_values_first_available(
@@ -221,7 +244,7 @@ class SheetsClient:
                 updates.append({"range": f"{sheet_name}!B{row_number}:C{row_number}", "values": [values]})
             else:
                 append_rows.append(values)
-        self._batch_update_cells(updates)
+        self._batch_update_cells(sheet_name, updates)
         if append_rows:
             self._service().spreadsheets().values().append(
                 spreadsheetId=self.sheet_id,
@@ -244,7 +267,7 @@ class SheetsClient:
             {"range": f"{sheet_name}!D{row_number}", "values": [["FALSE"]]}
             for row_number in keyword_deactivate_actions(rows, cleaned)
         ]
-        self._batch_update_cells(updates)
+        self._batch_update_cells(sheet_name, updates)
 
     def delete_last_matching_row(self, sheet_name: str, logged_by: str) -> bool:
         record = self.get_last_matching_record(sheet_name, logged_by)
@@ -523,7 +546,7 @@ class SheetsClient:
             updates.append(
                 {"range": f"{sheet_name}!{message_column}{row_number}", "values": [[telegram_message_id]]}
             )
-        self._batch_update_cells(updates)
+        self._batch_update_cells(sheet_name, updates)
 
     def update_card_usage_record(
         self,
@@ -545,15 +568,16 @@ class SheetsClient:
                 updates.append({"range": f"{sheet_name}!{method_column}{row_number}", "values": [[payment_method]]})
             if payment_channel is not None and channel_column is not None:
                 updates.append({"range": f"{sheet_name}!{channel_column}{row_number}", "values": [[payment_channel]]})
-        self._batch_update_cells(updates)
+        self._batch_update_cells(sheet_name, updates)
 
-    def _batch_update_cells(self, updates: list[dict]) -> None:
+    def _batch_update_cells(self, sheet_name: str, updates: list[dict]) -> None:
         if not updates:
             return
         self._service().spreadsheets().values().batchUpdate(
             spreadsheetId=self.sheet_id,
             body={"valueInputOption": "USER_ENTERED", "data": updates},
         ).execute()
+        self._note_sheet_write(sheet_name)
 
     def _expense_payment_columns(self, sheet_name: str) -> tuple[str | None, str, str | None]:
         has_owner = self.has_payment_owner_column(sheet_name)
@@ -595,6 +619,7 @@ class SheetsClient:
                 ]
             },
         ).execute()
+        self._note_sheet_write(sheet_name)
 
     def has_payment_owner_column(self, sheet_name: str) -> bool:
         result = self._service().spreadsheets().values().get(

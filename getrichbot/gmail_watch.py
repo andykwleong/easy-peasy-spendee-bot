@@ -130,6 +130,10 @@ class EmailService:
         # Failure sentences already sent since the last successful tap.
         # There is no timer. A tap that returns 200 forgets them, and so does a restart.
         self._told_tap_failures: set[str] = set()
+        # Where this thread is in the current tap: before a mail, inside consume,
+        # or after consume returned. It is not shared across threads and it is
+        # reset on the next tap. There is no timer.
+        self._tap_stage = threading.local()
         self._lock = threading.RLock()
 
     def bind_notifier(self, loop, send) -> None:
@@ -422,12 +426,14 @@ class EmailService:
         note = decode_pubsub_notification(body)
         if note is None:
             return 400, {"ok": False}
+        self._tap_stage.where = "before"
         try:
             if self._push_must_wait():
                 return 503, {"ok": False}
             self.process_notification(note.history_id)
         except Exception as exc:
-            self._tell_tap_failure(_email_failure_text(exc))
+            where = getattr(self._tap_stage, "where", "before")
+            self._tell_tap_failure(_tap_failure_text(exc, where))
             LOGGER.exception("Gmail notification could not be handled")
             return 500, {"ok": False}
         self._forget_tap_failures()
@@ -467,7 +473,10 @@ class EmailService:
                 self.state.set(HISTORY_KEY, history_id)
             return
         for message_id in fresh:
-            for text in self._consume(message_id):
+            self._tap_stage.where = "message"
+            texts = self._consume(message_id)
+            self._tap_stage.where = "after"
+            for text in texts:
                 self._tell(text)
         if history_id:
             self.state.set(HISTORY_KEY, history_id)
@@ -901,6 +910,15 @@ def _email_failure_text(exc: Exception) -> str:
     if _response_status(exc) == "429":
         return "The sheet limit stopped me from logging this mail."
     return "This mail was not logged."
+
+
+def _tap_failure_text(exc: Exception, where: str) -> str:
+    """A tap that failed before a mail was opened must not say that mail was not logged."""
+    if where != "before":
+        return _email_failure_text(exc)
+    if _response_status(exc) == "429":
+        return "The sheet limit stopped the tap before a mail was opened."
+    return "The sheet connection failed before a mail was opened. I will try again."
 
 
 def _message_key(message_id: str) -> str:

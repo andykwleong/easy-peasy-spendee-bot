@@ -59,6 +59,11 @@ class SheetsClient:
         self.service_account_json = service_account_json
         self.changes = changes
         self.service: Any | None = None
+        # Tab ids and Bot State rows stay after a successful read. A Bot State
+        # write drops that tab's rows. Creating a tab reloads the tab ids.
+        # There is no timer. Restarting the bot clears both.
+        self._tab_ids: dict[str, int] = {}
+        self._state_rows: dict[str, list[list[str]]] = {}
 
     def _note_sheet_write(self, sheet_name: str) -> None:
         changes = self.changes
@@ -462,12 +467,7 @@ class SheetsClient:
         )
 
     def get_state_value(self, sheet_name: str, key: str) -> str | None:
-        self._ensure_sheet(sheet_name)
-        result = self._service().spreadsheets().values().get(
-            spreadsheetId=self.sheet_id,
-            range=f"{sheet_name}!A:B",
-        ).execute()
-        for row in result.get("values", []):
+        for row in self._state_snapshot(sheet_name):
             if _cell(row, 0) == key:
                 return _cell(row, 1)
         return None
@@ -487,6 +487,7 @@ class SheetsClient:
                     valueInputOption="USER_ENTERED",
                     body={"values": [[value]]},
                 ).execute()
+                self._state_rows.pop(sheet_name, None)
                 return
         self._service().spreadsheets().values().append(
             spreadsheetId=self.sheet_id,
@@ -495,6 +496,20 @@ class SheetsClient:
             insertDataOption="INSERT_ROWS",
             body={"values": [[key, value]]},
         ).execute()
+        self._state_rows.pop(sheet_name, None)
+
+    def _state_snapshot(self, sheet_name: str) -> list[list[str]]:
+        cached = self._state_rows.get(sheet_name)
+        if cached is not None:
+            return cached
+        self._ensure_sheet(sheet_name)
+        result = self._service().spreadsheets().values().get(
+            spreadsheetId=self.sheet_id,
+            range=f"{sheet_name}!A:B",
+        ).execute()
+        rows = [list(row) for row in result.get("values", [])]
+        self._state_rows[sheet_name] = rows
+        return rows
 
     def update_expense_record(
         self,
@@ -649,18 +664,27 @@ class SheetsClient:
             spreadsheetId=self.sheet_id,
             body={"requests": [{"addSheet": {"properties": {"title": sheet_name}}}]},
         ).execute()
+        self._tab_ids.clear()
         sheet_id = self._sheet_id(sheet_name)
         if sheet_id is None:
             raise RuntimeError(f"Could not create sheet tab: {sheet_name}")
         return sheet_id
 
     def _sheet_id(self, sheet_name: str) -> int | None:
+        if sheet_name in self._tab_ids:
+            return self._tab_ids[sheet_name]
+        self._load_sheet_ids()
+        return self._tab_ids.get(sheet_name)
+
+    def _load_sheet_ids(self) -> None:
         metadata = self._service().spreadsheets().get(spreadsheetId=self.sheet_id).execute()
         for sheet in metadata.get("sheets", []):
             properties = sheet.get("properties", {})
-            if properties.get("title") == sheet_name:
-                return properties["sheetId"]
-        return None
+            title = properties.get("title")
+            sheet_id = properties.get("sheetId")
+            if title is None or sheet_id is None:
+                continue
+            self._tab_ids[str(title)] = sheet_id
 
     def _get_values_first_available(
         self,

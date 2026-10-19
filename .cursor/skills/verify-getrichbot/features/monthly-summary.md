@@ -23,7 +23,7 @@ Preconditions:
 - No category edit has been saved in this process. `Sample cafe` is still Food.
 
 - **Open Month.** Choose `Month`. Run `python3 .cursor/skills/verify-getrichbot/scripts/verify_dashboard.py browser-click --role button --name "Month" --wait-text "Monthly summary"`. The heading is `Monthly summary` and the table title is `From the raw rows`.
-- **Read September.** Run `python3 .cursor/skills/verify-getrichbot/scripts/verify_dashboard.py browser-expect --contains "August 2026" --contains "September 2026" --contains "Food" --contains "$18.50" --contains "Groceries" --contains "$12.40" --contains "Total income" --contains "$0.00" --contains "Total expenses" --contains "$30.90" --contains "Net" --contains "-$30.90"`. September includes both people's seed rows. August has no category amounts.
+- **Read September.** Run `python3 .cursor/skills/verify-getrichbot/scripts/verify_dashboard.py browser-expect --contains "August 2026" --contains "September 2026" --contains "Food" --contains "$18.50" --contains "Groceries" --contains "$12.40" --contains "Total income" --contains "$0.00" --contains "Total expenses" --contains "$30.90" --contains "Net" --contains=-$30.90 --absent "Sample stall" --absent "$4.00"`. September includes both people's categorised seed rows. August has no category amounts. The blank `Sample stall` row is not a line in this table.
 - **Capture the table.** Run `python3 .cursor/skills/verify-getrichbot/scripts/verify_dashboard.py browser-screenshot --path .cursor/skills/verify-getrichbot/artifacts/month/september.png` and `python3 .cursor/skills/verify-getrichbot/scripts/verify_dashboard.py browser-snapshot --aria --path .cursor/skills/verify-getrichbot/artifacts/month/september.aria.txt`. The artifacts show both month names and `-$30.90`.
 - **Sheet entry.** Do not treat a Google Sheet `Monthly Summary` cell as this proof. This server never writes to Google. The on-screen table is the proof.
 
@@ -32,5 +32,7 @@ Preconditions:
 - The table is household-wide. `Alex only` on Recent does not filter Month.
 - The seed has no income row, so Total income is `$0.00`. A missing income category line is expected. Do not add a fake income row to make a richer table.
 - After the recent-transactions recipe changes Sample cafe to Groceries, September Food disappears and Groceries becomes `$30.90`. Launch again before this recipe.
+- The net amount starts with a minus. Write it as `--contains=-$30.90`. A space after `--contains` makes the checker treat the minus as a separate flag.
+- A row with a blank category is not a line here. `Sample stall` is `$4.00` and stays out of the `$30.90`.
 - August category cells are blank. August totals are `$0.00`. Do not fail the blank category cells.
 - An unexpected month on the real Google Sheet is a bad raw date, not something this local table can repair.

@@ -24,7 +24,7 @@ Preconditions:
 - Sample cafe is still Food, so Sample Visa's spend is still $18.50.
 
 - **Open Cards.** Choose `Cards`. Run `python3 .cursor/skills/verify-getrichbot/scripts/verify_dashboard.py browser-click --role button --name "Cards" --wait-text "Card summary"`. The heading is `Card summary`.
-- **Alex's cards.** Run `python3 .cursor/skills/verify-getrichbot/scripts/verify_dashboard.py browser-expect --contains "Capped" --contains "Sample Visa" --contains "$18.50 of $100.00" --contains "18%" --contains "Uncapped" --contains "Sample Cashback" --contains "No cap" --absent "Sample Mastercard"`. Alex's two cards are visible and Sam's card is not.
+- **Alex's cards.** Run `python3 .cursor/skills/verify-getrichbot/scripts/verify_dashboard.py browser-expect --contains "CAPPED" --contains "Sample Visa" --contains "$18.50 of $100.00" --contains "18%" --contains "UNCAPPED" --contains "Sample Cashback" --contains "No cap" --absent "Sample Mastercard" --absent "Last month"`. Alex's two cards are visible and Sam's card is not. There is no last-month control.
 - **Capture Alex.** Run `python3 .cursor/skills/verify-getrichbot/scripts/verify_dashboard.py browser-screenshot --path .cursor/skills/verify-getrichbot/artifacts/cards/alex.png` and `python3 .cursor/skills/verify-getrichbot/scripts/verify_dashboard.py browser-snapshot --aria --path .cursor/skills/verify-getrichbot/artifacts/cards/alex.aria.txt`.
 - **Sam's cards.** Choose `Sam`. Run `python3 .cursor/skills/verify-getrichbot/scripts/verify_dashboard.py browser-click --role button --name "Sam" --wait-text "Sample Mastercard"`. Then run `python3 .cursor/skills/verify-getrichbot/scripts/verify_dashboard.py browser-expect --contains "Sample Mastercard" --contains "$12.40 of $200.00" --contains "6%" --absent "Sample Visa" --absent "Sample Cashback"`. The header still says `Signed in as Alex`.
 - **Capture Sam.** Run `python3 .cursor/skills/verify-getrichbot/scripts/verify_dashboard.py browser-screenshot --path .cursor/skills/verify-getrichbot/artifacts/cards/sam.png` and `python3 .cursor/skills/verify-getrichbot/scripts/verify_dashboard.py browser-snapshot --aria --path .cursor/skills/verify-getrichbot/artifacts/cards/sam.aria.txt`.
@@ -35,5 +35,7 @@ Preconditions:
 - The Cards chips are named `Alex` and `Sam`. Recent uses `Alex only` and `Both`. They are different controls.
 - `18%` and `6%` come from the seed amounts and caps. After a recent-transactions category edit, the card spend is unchanged, but a fresh launch is still required so the recipe starts from the seed.
 - Sample Cashback has no Card Limits row. The screen says `No cap`. Do not treat a missing card as a failure.
+- The group labels are styled in capitals, so the harness reads `CAPPED` and `UNCAPPED`.
+- This screen is the current card cycle only. It has no control for last month or a named month. Those phrases are Telegram only, and this harness does not send them.
 - A green, yellow, orange, or red band is a colour on the bar. The proof text is the percent and the dollars, not the colour name.
 - Telegram `card summary` cannot show the other person's cards. The dashboard can. Do not use one as proof of the other.

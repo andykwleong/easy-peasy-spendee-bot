@@ -551,12 +551,12 @@ class EmailWatchTests(unittest.TestCase):
         first_status, _first_payload = service.handle_http("POST", {"authorization": "Bearer test-token"}, body)
         self.assertEqual(first_status, 500)
         calls_after_first = sheet.calls
-        self.assertEqual(sent, ["The sheet limit stopped me from logging this mail."])
+        self.assertEqual(sent, ["The sheet limit stopped the tap before a mail was opened."])
 
         second_status, _second_payload = service.handle_http("POST", {"authorization": "Bearer test-token"}, body)
         self.assertEqual(second_status, 500)
         self.assertGreater(sheet.calls, calls_after_first)
-        self.assertEqual(sent, ["The sheet limit stopped me from logging this mail."])
+        self.assertEqual(sent, ["The sheet limit stopped the tap before a mail was opened."])
 
         sheet.limited = False
         ok_status, ok_payload = service.handle_http("POST", {"authorization": "Bearer test-token"}, body)
@@ -568,9 +568,75 @@ class EmailWatchTests(unittest.TestCase):
         third_status, _third_payload = service.handle_http("POST", {"authorization": "Bearer test-token"}, body)
         self.assertEqual(third_status, 500)
         self.assertEqual(sent, [
-            "The sheet limit stopped me from logging this mail.",
-            "The sheet limit stopped me from logging this mail.",
+            "The sheet limit stopped the tap before a mail was opened.",
+            "The sheet limit stopped the tap before a mail was opened.",
         ])
+
+    def test_pause_check_failure_does_not_say_a_mail_was_not_logged(self):
+        service, mailbox, _state, writer = service_for(config_with())
+        service.state = _RaisingState(RuntimeError("sheet connection dropped"))
+        sent = []
+        service._notify = sent.append
+        service._notifier_bound = True
+        body = _push_body("200")
+
+        status, payload = service.handle_http("POST", {"authorization": "Bearer test-token"}, body)
+        self.assertEqual(status, 500)
+        self.assertFalse(payload["ok"])
+        self.assertEqual(mailbox.fetch_calls, 0)
+        self.assertEqual(writer.rows, [])
+        self.assertEqual(sent, ["The sheet connection failed before a mail was opened. I will try again."])
+        self.assertNotIn("This mail was not logged.", sent)
+
+        again, _again_payload = service.handle_http("POST", {"authorization": "Bearer test-token"}, body)
+        self.assertEqual(again, 500)
+        self.assertEqual(sent, ["The sheet connection failed before a mail was opened. I will try again."])
+
+    def test_failure_while_opening_a_message_still_says_this_mail_was_not_logged(self):
+        service, mailbox, state, writer = service_for(config_with())
+        state.set(HISTORY_KEY, "100")
+        mailbox.added = ["buy"]
+        mailbox.messages["buy"] = (PURCHASE_SUBJECT, FOODPANDA_BODY, ("person-a@example.com",))
+
+        def fetch(message_id):
+            mailbox.fetch_calls += 1
+            raise RuntimeError(f"could not open {message_id}")
+
+        mailbox.fetch = fetch
+        sent = []
+        service._notify = sent.append
+        service._notifier_bound = True
+
+        status, payload = service.handle_http("POST", {"authorization": "Bearer test-token"}, _push_body("200"))
+
+        self.assertEqual(status, 500)
+        self.assertFalse(payload["ok"])
+        self.assertEqual(mailbox.fetch_calls, 1)
+        self.assertEqual(writer.rows, [])
+        self.assertEqual(sent, ["This mail was not logged."])
+
+    def test_sheet_limit_while_opening_a_message_still_names_this_mail(self):
+        service, mailbox, state, writer = service_for(config_with())
+        state.set(HISTORY_KEY, "100")
+        mailbox.added = ["buy"]
+        mailbox.messages["buy"] = (PURCHASE_SUBJECT, FOODPANDA_BODY, ("person-a@example.com",))
+
+        def fetch(message_id):
+            mailbox.fetch_calls += 1
+            raise _http_error(429, "Read requests per minute per user")
+
+        mailbox.fetch = fetch
+        sent = []
+        service._notify = sent.append
+        service._notifier_bound = True
+
+        status, payload = service.handle_http("POST", {"authorization": "Bearer test-token"}, _push_body("200"))
+
+        self.assertEqual(status, 500)
+        self.assertFalse(payload["ok"])
+        self.assertEqual(mailbox.fetch_calls, 1)
+        self.assertEqual(writer.rows, [])
+        self.assertEqual(sent, ["The sheet limit stopped me from logging this mail."])
 
     def test_log_email_backlog_logs_the_saved_pile_and_says_it_is_finished(self):
         service, mailbox, state, writer = service_for(config_with())
@@ -633,6 +699,17 @@ def _push_body(history_id: str) -> bytes:
         json.dumps({"emailAddress": "mailbox@example.com", "historyId": history_id}).encode()
     ).decode()
     return json.dumps({"message": {"data": encoded, "messageId": "1"}, "subscription": "sub"}).encode()
+
+
+class _RaisingState:
+    def __init__(self, error: Exception):
+        self.error = error
+
+    def get(self, key: str):
+        raise self.error
+
+    def set(self, key: str, value: str) -> None:
+        raise AssertionError((key, value))
 
 
 class _LimitingSheet:

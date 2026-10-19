@@ -4,6 +4,7 @@ import unittest
 from datetime import datetime
 from decimal import Decimal
 from unittest.mock import MagicMock
+from unittest.mock import patch
 
 from getrichbot.models import ExpenseRow
 from getrichbot.sheet_changes import SETTLE_CAP_SECONDS
@@ -187,6 +188,36 @@ class _AppendService:
 
     def spreadsheets(self):
         return self._spreadsheets
+
+
+class SheetsClientThreadTests(unittest.TestCase):
+    def test_two_threads_do_not_share_the_sheets_http_client(self):
+        client = SheetsClient("sheet-id")
+        built: list[object] = []
+
+        def build(_credentials, _timeout_seconds):
+            service = object()
+            built.append(service)
+            return service
+
+        def call_twice(sink: list[object]) -> None:
+            sink.append(client._service())
+            sink.append(client._service())
+
+        with patch("getrichbot.sheets.build_authorized_sheets", side_effect=build):
+            with patch.object(client, "_credentials", return_value=object()):
+                main_calls: list[object] = []
+                call_twice(main_calls)
+                other_calls: list[object] = []
+                thread = threading.Thread(target=call_twice, args=(other_calls,))
+                thread.start()
+                thread.join()
+
+        self.assertFalse(thread.is_alive())
+        self.assertIs(main_calls[0], main_calls[1])
+        self.assertIs(other_calls[0], other_calls[1])
+        self.assertIsNot(main_calls[0], other_calls[0])
+        self.assertEqual(len(built), 2)
 
 
 class SheetWriteMarkTests(unittest.TestCase):

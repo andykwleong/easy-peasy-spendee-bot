@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import socket
+import threading
 from typing import Any
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -59,9 +60,16 @@ class SheetsClient:
         self.service_account_json = service_account_json
         self.changes = changes
         self.service: Any | None = None
+        # httplib2 is not safe on a shared connection. Each thread builds one
+        # Sheets client the first time it needs the sheet, and keeps that client
+        # until the thread ends. There is no timer and no command to drop it.
+        # Restarting the bot clears them. Web requests end with their thread.
+        self._thread_clients = threading.local()
         # Tab ids and Bot State rows stay after a successful read. A Bot State
         # write drops that tab's rows. Creating a tab reloads the tab ids.
-        # There is no timer. Restarting the bot clears both.
+        # There is no timer. Restarting the bot clears both. The lock covers
+        # only those dict updates. It is not held during a sheet call.
+        self._cache_lock = threading.Lock()
         self._tab_ids: dict[str, int] = {}
         self._state_rows: dict[str, list[list[str]]] = {}
 
@@ -88,10 +96,14 @@ class SheetsClient:
     def _service(self, timeout_seconds: float | None = None):
         if timeout_seconds is not None and (self.service_account_json or self.service_account_file):
             return build_authorized_sheets(self._credentials(), timeout_seconds)
+        # Tests inject one stand-in client. A real client is one per thread.
         if self.service is not None:
             return self.service
-        self.service = build_authorized_sheets(self._credentials(), None)
-        return self.service
+        client = getattr(self._thread_clients, "service", None)
+        if client is None:
+            client = build_authorized_sheets(self._credentials(), None)
+            self._thread_clients.service = client
+        return client
 
     def append_expense(self, sheet_name: str, row: ExpenseRow) -> None:
         include_payment_owner = self.has_payment_owner_column(sheet_name)
@@ -487,7 +499,8 @@ class SheetsClient:
                     valueInputOption="USER_ENTERED",
                     body={"values": [[value]]},
                 ).execute()
-                self._state_rows.pop(sheet_name, None)
+                with self._cache_lock:
+                    self._state_rows.pop(sheet_name, None)
                 return
         self._service().spreadsheets().values().append(
             spreadsheetId=self.sheet_id,
@@ -496,10 +509,12 @@ class SheetsClient:
             insertDataOption="INSERT_ROWS",
             body={"values": [[key, value]]},
         ).execute()
-        self._state_rows.pop(sheet_name, None)
+        with self._cache_lock:
+            self._state_rows.pop(sheet_name, None)
 
     def _state_snapshot(self, sheet_name: str) -> list[list[str]]:
-        cached = self._state_rows.get(sheet_name)
+        with self._cache_lock:
+            cached = self._state_rows.get(sheet_name)
         if cached is not None:
             return cached
         self._ensure_sheet(sheet_name)
@@ -508,7 +523,8 @@ class SheetsClient:
             range=f"{sheet_name}!A:B",
         ).execute()
         rows = [list(row) for row in result.get("values", [])]
-        self._state_rows[sheet_name] = rows
+        with self._cache_lock:
+            self._state_rows[sheet_name] = rows
         return rows
 
     def update_expense_record(
@@ -664,27 +680,33 @@ class SheetsClient:
             spreadsheetId=self.sheet_id,
             body={"requests": [{"addSheet": {"properties": {"title": sheet_name}}}]},
         ).execute()
-        self._tab_ids.clear()
+        with self._cache_lock:
+            self._tab_ids.clear()
         sheet_id = self._sheet_id(sheet_name)
         if sheet_id is None:
             raise RuntimeError(f"Could not create sheet tab: {sheet_name}")
         return sheet_id
 
     def _sheet_id(self, sheet_name: str) -> int | None:
-        if sheet_name in self._tab_ids:
-            return self._tab_ids[sheet_name]
+        with self._cache_lock:
+            if sheet_name in self._tab_ids:
+                return self._tab_ids[sheet_name]
         self._load_sheet_ids()
-        return self._tab_ids.get(sheet_name)
+        with self._cache_lock:
+            return self._tab_ids.get(sheet_name)
 
     def _load_sheet_ids(self) -> None:
         metadata = self._service().spreadsheets().get(spreadsheetId=self.sheet_id).execute()
+        found: dict[str, int] = {}
         for sheet in metadata.get("sheets", []):
             properties = sheet.get("properties", {})
             title = properties.get("title")
             sheet_id = properties.get("sheetId")
             if title is None or sheet_id is None:
                 continue
-            self._tab_ids[str(title)] = sheet_id
+            found[str(title)] = sheet_id
+        with self._cache_lock:
+            self._tab_ids.update(found)
 
     def _get_values_first_available(
         self,

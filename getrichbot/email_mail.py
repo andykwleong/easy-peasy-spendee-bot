@@ -37,7 +37,7 @@ _AMOUNT_RE = re.compile(
     re.IGNORECASE,
 )
 _LAST4_RE = re.compile(
-    r"(?:card\s+ending|last\s*4(?:\s*digits)?|(?<![A-Za-z])ending)\s*[:\-]?\s*(\d{4})\b",
+    r"(?:card\s+ending|last\s*4(?:\s*digits)?|(?<![A-Za-z])(?<!mobile\s)ending)\s*[:\-]?\s*(\d{4})\b",
     re.IGNORECASE,
 )
 _ACCOUNT_ENDING_RE = re.compile(
@@ -62,7 +62,7 @@ _SHOP_LABEL_RE = re.compile(
     r"^(?:transaction\s+details|description|merchant|shop|to)\b\s*:?\s*(.*)$",
     re.IGNORECASE,
 )
-_UEN_RE = re.compile(r"\s*\(\s*UEN\s+ending\s+[^)]*\)", re.IGNORECASE)
+_UEN_RE = re.compile(r"\s*\(\s*(?:UEN|MOBILE)\s+ending\s+[^)]*\)", re.IGNORECASE)
 _EMAIL_RE = re.compile(r"[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}", re.IGNORECASE)
 _ONLINE_RE = re.compile(
     r"food\s*panda|foodpanda|deliveroo|\bgrab\b|grabfood|booking\.com|\bagoda\b|\bexpedia\b|\bklook\b|"

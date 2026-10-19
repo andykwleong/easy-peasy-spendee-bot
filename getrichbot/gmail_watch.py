@@ -39,7 +39,6 @@ PAUSED_KEY = "gmail_paused"
 BACKLOG_KEY = "gmail_backlog_ids"
 PENDING_CHANNEL_KEY = "gmail_pending_channel"
 _DONE = {"logged", "ignored", "asked", "skipped"}
-_SHEET_LIMIT_SECONDS = 60
 _DAY_SECONDS = 24 * 60 * 60
 _BACKLOG_TEXT = (
     "There is mail I have not logged. "
@@ -128,7 +127,9 @@ class EmailService:
         self._notify = lambda _text: None
         self._notifier_bound = False
         self._queued_notices: list[str] = []
-        self._sheet_limited_at: float | None = None
+        # Failure sentences already sent since the last successful tap.
+        # There is no timer. A tap that returns 200 forgets them, and so does a restart.
+        self._told_tap_failures: set[str] = set()
         self._lock = threading.RLock()
 
     def bind_notifier(self, loop, send) -> None:
@@ -154,6 +155,18 @@ class EmailService:
                 return
             notify = self._notify
         notify(text)
+
+    def _tell_tap_failure(self, text: str) -> None:
+        """Send this failure sentence once until a tap succeeds. The next tap is still tried."""
+        with self._lock:
+            if text in self._told_tap_failures:
+                return
+            self._told_tap_failures.add(text)
+        self._tell(text)
+
+    def _forget_tap_failures(self) -> None:
+        with self._lock:
+            self._told_tap_failures.clear()
 
     def start_tap(self, *, pause: Callable[[float], None] | None = None, retry_seconds: float = 15) -> None:
         """Ask Gmail to tap this process. A slow category sheet does not delay this."""
@@ -315,13 +328,22 @@ class EmailService:
             return self._log_backlog()
 
     def _log_backlog(self) -> list[str]:
-        message_ids = self._backlog_ids()
+        try:
+            message_ids = self._backlog_ids()
+        except Exception as exc:
+            LOGGER.exception("Could not read the saved mail pile")
+            return [_backlog_unread_text(exc)]
         if not message_ids:
             return ["There is no mail pile waiting."]
         notes: list[str] = []
-        for message_id in message_ids:
-            notes.extend(self._consume(message_id))
-        self.state.set(BACKLOG_KEY, "")
+        try:
+            for message_id in message_ids:
+                notes.extend(self._consume(message_id))
+            self.state.set(BACKLOG_KEY, "")
+        except Exception as exc:
+            LOGGER.exception("Could not log the saved mail pile")
+            notes.append(_backlog_failed_text(exc))
+            return notes
         notes.append("I finished that mail pile.")
         return notes
 
@@ -379,7 +401,11 @@ class EmailService:
         if lowered == "resume email":
             return self.resume()
         if lowered == "log email backlog":
-            return self.log_backlog()
+            try:
+                return self.log_backlog()
+            except Exception as exc:
+                LOGGER.exception("Could not log the saved mail pile")
+                return [_backlog_failed_text(exc)]
         if lowered == "skip email backlog":
             return self.skip_backlog()
         if lowered.startswith("email channel "):
@@ -396,32 +422,16 @@ class EmailService:
         note = decode_pubsub_notification(body)
         if note is None:
             return 400, {"ok": False}
-        if self._sheet_limit_active():
-            return 503, {"ok": False}
         try:
             if self._push_must_wait():
                 return 503, {"ok": False}
             self.process_notification(note.history_id)
         except Exception as exc:
-            if _is_sheet_rate_limit(exc):
-                self._remember_sheet_limit()
-                LOGGER.warning("Google Sheets is limiting reads, so Gmail taps will wait before trying again.")
-                return 503, {"ok": False}
+            self._tell_tap_failure(_email_failure_text(exc))
             LOGGER.exception("Gmail notification could not be handled")
             return 500, {"ok": False}
+        self._forget_tap_failures()
         return 200, {"ok": True}
-
-    def _sheet_limit_active(self) -> bool:
-        """True while a recent Sheets read limit should keep this tap off the sheet."""
-        with self._lock:
-            started = self._sheet_limited_at
-            if started is None:
-                return False
-            return time.monotonic() - started < _SHEET_LIMIT_SECONDS
-
-    def _remember_sheet_limit(self) -> None:
-        with self._lock:
-            self._sheet_limited_at = time.monotonic()
 
     def _push_must_wait(self) -> bool:
         """A live tap with no mailbox bookmark must not be answered as success.
@@ -870,9 +880,27 @@ def is_email_command(text: str) -> bool:
     } or lowered.startswith("email channel ")
 
 
-def _is_sheet_rate_limit(exc: Exception) -> bool:
+def _response_status(exc: Exception) -> str:
     status = getattr(exc, "status_code", None) or getattr(getattr(exc, "resp", None), "status", None)
-    return str(status) == "429"
+    return str(status or "")
+
+
+def _backlog_unread_text(exc: Exception) -> str:
+    if _response_status(exc) == "429":
+        return "The sheet limit stopped me from reading the mail pile, so nothing was logged."
+    return "I could not read the mail pile, so nothing was logged."
+
+
+def _backlog_failed_text(exc: Exception) -> str:
+    if _response_status(exc) == "429":
+        return "The sheet limit stopped me, so the mail pile was not logged."
+    return "The mail pile was not logged."
+
+
+def _email_failure_text(exc: Exception) -> str:
+    if _response_status(exc) == "429":
+        return "The sheet limit stopped me from logging this mail."
+    return "This mail was not logged."
 
 
 def _message_key(message_id: str) -> str:

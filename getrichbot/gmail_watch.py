@@ -28,6 +28,7 @@ from getrichbot.email_mail import decide_mail
 from getrichbot.email_mail import mixed_shop_notice
 from getrichbot.gmail_api import GmailApiMailbox
 from getrichbot.gmail_api import HistoryExpired
+from getrichbot.gmail_api import _is_not_found
 from getrichbot.gmail_api import verify_pubsub_token
 from getrichbot.models import ExpenseRow
 
@@ -38,6 +39,7 @@ PAUSED_KEY = "gmail_paused"
 BACKLOG_KEY = "gmail_backlog_ids"
 PENDING_CHANNEL_KEY = "gmail_pending_channel"
 _DONE = {"logged", "ignored", "asked", "skipped"}
+_SHEET_LIMIT_SECONDS = 60
 _DAY_SECONDS = 24 * 60 * 60
 _BACKLOG_TEXT = (
     "There is mail I have not logged. "
@@ -126,6 +128,7 @@ class EmailService:
         self._notify = lambda _text: None
         self._notifier_bound = False
         self._queued_notices: list[str] = []
+        self._sheet_limited_at: float | None = None
         self._lock = threading.RLock()
 
     def bind_notifier(self, loop, send) -> None:
@@ -393,14 +396,32 @@ class EmailService:
         note = decode_pubsub_notification(body)
         if note is None:
             return 400, {"ok": False}
+        if self._sheet_limit_active():
+            return 503, {"ok": False}
         try:
             if self._push_must_wait():
                 return 503, {"ok": False}
             self.process_notification(note.history_id)
-        except Exception:
+        except Exception as exc:
+            if _is_sheet_rate_limit(exc):
+                self._remember_sheet_limit()
+                LOGGER.warning("Google Sheets is limiting reads, so Gmail taps will wait before trying again.")
+                return 503, {"ok": False}
             LOGGER.exception("Gmail notification could not be handled")
             return 500, {"ok": False}
         return 200, {"ok": True}
+
+    def _sheet_limit_active(self) -> bool:
+        """True while a recent Sheets read limit should keep this tap off the sheet."""
+        with self._lock:
+            started = self._sheet_limited_at
+            if started is None:
+                return False
+            return time.monotonic() - started < _SHEET_LIMIT_SECONDS
+
+    def _remember_sheet_limit(self) -> None:
+        with self._lock:
+            self._sheet_limited_at = time.monotonic()
 
     def _push_must_wait(self) -> bool:
         """A live tap with no mailbox bookmark must not be answered as success.
@@ -444,7 +465,14 @@ class EmailService:
     def _consume(self, message_id: str) -> list[str]:
         if self._done(message_id):
             return []
-        subject, body, addresses = self.mailbox.fetch(message_id)
+        try:
+            subject, body, addresses = self.mailbox.fetch(message_id)
+        except Exception as exc:
+            if not _is_not_found(exc):
+                raise
+            self.state.set(_message_key(message_id), "skipped")
+            LOGGER.info("Gmail message %s is no longer in the mailbox, so it was skipped.", message_id)
+            return []
         decision = self._decide(subject, body, tuple(addresses))
         if decision.action == "ignore":
             self.state.set(_message_key(message_id), "ignored")
@@ -840,6 +868,11 @@ def is_email_command(text: str) -> bool:
         "log email backlog",
         "skip email backlog",
     } or lowered.startswith("email channel ")
+
+
+def _is_sheet_rate_limit(exc: Exception) -> bool:
+    status = getattr(exc, "status_code", None) or getattr(getattr(exc, "resp", None), "status", None)
+    return str(status) == "429"
 
 
 def _message_key(message_id: str) -> str:

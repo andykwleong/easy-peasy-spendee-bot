@@ -7,6 +7,9 @@ import unittest
 from datetime import date
 from datetime import datetime
 from decimal import Decimal
+from unittest.mock import patch
+
+from googleapiclient.errors import HttpError
 
 from getrichbot import categories as category_lists
 from getrichbot.dashboard_http import DashboardApp
@@ -481,6 +484,96 @@ class EmailWatchTests(unittest.TestCase):
         self.assertEqual(len(service._queued_notices), 1)
         self.assertIn("Sample Shop", service._queued_notices[0])
         self.assertEqual(state.get(BACKLOG_KEY), None)
+
+    def test_missing_message_is_skipped_and_the_later_purchase_logs(self):
+        service, mailbox, state, writer = service_for(config_with())
+        state.set(HISTORY_KEY, "100")
+        mailbox.next_history = "250"
+        mailbox.added = ["gone", "buy"]
+        mailbox.messages["buy"] = (PURCHASE_SUBJECT, FOODPANDA_BODY, ("person-a@example.com",))
+        original_fetch = mailbox.fetch
+
+        def fetch(message_id):
+            if message_id == "gone":
+                mailbox.fetch_calls += 1
+                raise _http_error(404, "Not Found")
+            return original_fetch(message_id)
+
+        mailbox.fetch = fetch
+        sent = []
+        service._notify = sent.append
+        service._notifier_bound = True
+
+        status, payload = service.handle_http("POST", {"authorization": "Bearer test-token"}, _push_body("250"))
+
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["ok"])
+        self.assertEqual([row.description for row in writer.rows], ["fp*Food Panda"])
+        self.assertEqual(state.get("gmail_message_id:gone"), "skipped")
+        self.assertEqual(state.get(HISTORY_KEY), "250")
+        self.assertEqual(sent, ["logged Food"])
+
+    def test_sheet_limit_waits_a_minute_before_reading_again(self):
+        service, mailbox, _state, _writer = service_for(config_with())
+        sheet = _LimitingSheet()
+        sheet.values[HISTORY_KEY] = "100"
+        service.state = sheet
+        mailbox.added = []
+        body = _push_body("200")
+        clock = {"now": 1_000.0}
+
+        with patch("getrichbot.gmail_watch.time.monotonic", lambda: clock["now"]):
+            status, payload = service.handle_http("POST", {"authorization": "Bearer test-token"}, body)
+            self.assertEqual(status, 503)
+            self.assertFalse(payload["ok"])
+            self.assertEqual(sheet.calls, 1)
+            self.assertEqual(mailbox.history_calls, 0)
+
+            clock["now"] = 1_059.0
+            status, payload = service.handle_http("POST", {"authorization": "Bearer test-token"}, body)
+            self.assertEqual(status, 503)
+            self.assertFalse(payload["ok"])
+            self.assertEqual(sheet.calls, 1)
+            self.assertEqual(mailbox.history_calls, 0)
+
+            clock["now"] = 1_060.0
+            sheet.limited = False
+            status, payload = service.handle_http("POST", {"authorization": "Bearer test-token"}, body)
+            self.assertGreater(sheet.calls, 1)
+            self.assertEqual(mailbox.history_calls, 1)
+            self.assertEqual(status, 200)
+            self.assertTrue(payload["ok"])
+
+
+def _http_error(status: int, reason: str) -> HttpError:
+    response = type("Response", (), {"status": status, "reason": reason})()
+    return HttpError(response, b"")
+
+
+def _push_body(history_id: str) -> bytes:
+    encoded = base64.urlsafe_b64encode(
+        json.dumps({"emailAddress": "mailbox@example.com", "historyId": history_id}).encode()
+    ).decode()
+    return json.dumps({"message": {"data": encoded, "messageId": "1"}, "subscription": "sub"}).encode()
+
+
+class _LimitingSheet:
+    def __init__(self):
+        self.values: dict[str, str] = {}
+        self.calls = 0
+        self.limited = True
+
+    def get(self, key: str):
+        self.calls += 1
+        if self.limited:
+            raise _http_error(429, "Read requests per minute per user")
+        return self.values.get(key)
+
+    def set(self, key: str, value: str) -> None:
+        self.calls += 1
+        if self.limited:
+            raise _http_error(429, "Read requests per minute per user")
+        self.values[key] = value
 
 
 class _HistoryCall:

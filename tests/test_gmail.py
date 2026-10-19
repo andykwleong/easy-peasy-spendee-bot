@@ -7,8 +7,6 @@ import unittest
 from datetime import date
 from datetime import datetime
 from decimal import Decimal
-from unittest.mock import patch
-
 from googleapiclient.errors import HttpError
 
 from getrichbot import categories as category_lists
@@ -24,6 +22,7 @@ from getrichbot.gmail_watch import EmailService
 from getrichbot.gmail_watch import EmailSettings
 from getrichbot.gmail_watch import WriteOutcome
 from getrichbot.gmail_watch import decode_pubsub_notification
+from getrichbot.sheets import SheetsClient
 from getrichbot.shop_category import categorize_email_shop
 from test_email_mail import FOODPANDA_BODY
 from test_email_mail import PAYNOW_BODY
@@ -513,36 +512,80 @@ class EmailWatchTests(unittest.TestCase):
         self.assertEqual(state.get(HISTORY_KEY), "250")
         self.assertEqual(sent, ["logged Food"])
 
-    def test_sheet_limit_waits_a_minute_before_reading_again(self):
-        service, mailbox, _state, _writer = service_for(config_with())
+    def test_sheet_limit_does_not_delay_the_next_email_tap(self):
+        service, mailbox, _state, writer = service_for(config_with())
         sheet = _LimitingSheet()
         sheet.values[HISTORY_KEY] = "100"
         service.state = sheet
-        mailbox.added = []
+        mailbox.added = ["buy"]
+        mailbox.messages["buy"] = (PURCHASE_SUBJECT, FOODPANDA_BODY, ("person-a@example.com",))
+        sent = []
+        service._notify = sent.append
+        service._notifier_bound = True
         body = _push_body("200")
-        clock = {"now": 1_000.0}
 
-        with patch("getrichbot.gmail_watch.time.monotonic", lambda: clock["now"]):
-            status, payload = service.handle_http("POST", {"authorization": "Bearer test-token"}, body)
-            self.assertEqual(status, 503)
-            self.assertFalse(payload["ok"])
-            self.assertEqual(sheet.calls, 1)
-            self.assertEqual(mailbox.history_calls, 0)
+        status, payload = service.handle_http("POST", {"authorization": "Bearer test-token"}, body)
+        self.assertNotEqual(status, 200)
+        self.assertFalse(payload["ok"])
+        self.assertEqual(mailbox.history_calls, 0)
 
-            clock["now"] = 1_059.0
-            status, payload = service.handle_http("POST", {"authorization": "Bearer test-token"}, body)
-            self.assertEqual(status, 503)
-            self.assertFalse(payload["ok"])
-            self.assertEqual(sheet.calls, 1)
-            self.assertEqual(mailbox.history_calls, 0)
+        sheet.limited = False
+        status, payload = service.handle_http("POST", {"authorization": "Bearer test-token"}, body)
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(mailbox.history_calls, 1)
+        self.assertEqual(len(writer.rows), 1)
+        self.assertTrue(any("sheet limit" in text.casefold() for text in sent))
 
-            clock["now"] = 1_060.0
-            sheet.limited = False
-            status, payload = service.handle_http("POST", {"authorization": "Bearer test-token"}, body)
-            self.assertGreater(sheet.calls, 1)
-            self.assertEqual(mailbox.history_calls, 1)
-            self.assertEqual(status, 200)
-            self.assertTrue(payload["ok"])
+    def test_log_email_backlog_logs_the_saved_pile_and_says_it_is_finished(self):
+        service, mailbox, state, writer = service_for(config_with())
+        state.set(BACKLOG_KEY, "one,two")
+        mailbox.added = ["not-in-the-list"]
+        mailbox.recent = ["also-not"]
+        mailbox.messages["one"] = (PURCHASE_SUBJECT, FOODPANDA_BODY, ("person-a@example.com",))
+        mailbox.messages["two"] = (PURCHASE_SUBJECT, FOODPANDA_BODY, ("person-a@example.com",))
+
+        replies = service.handle_command("log email backlog")
+
+        self.assertEqual([row.description for row in writer.rows], ["fp*Food Panda", "fp*Food Panda"])
+        self.assertEqual(mailbox.fetch_calls, 2)
+        self.assertEqual(mailbox.history_calls, 0)
+        self.assertEqual(mailbox.recent_calls, 0)
+        self.assertEqual(state.get(BACKLOG_KEY), "")
+        self.assertTrue(any("finished" in reply.casefold() for reply in replies))
+
+    def test_sheet_limit_during_log_email_backlog_is_the_telegram_reply(self):
+        service, _mailbox, _state, writer = service_for(config_with())
+        sheet = _LimitingSheet()
+        sheet.values[BACKLOG_KEY] = "one,two"
+        service.state = sheet
+
+        telegram = []
+        for reply in service.handle_command("log email backlog"):
+            telegram.append(reply)
+
+        text = "\n".join(telegram)
+        self.assertIn("sheet limit", text.casefold())
+        self.assertIn("nothing was logged", text.casefold())
+        self.assertEqual(sheet.values.get(BACKLOG_KEY), "one,two")
+        self.assertEqual(writer.rows, [])
+
+    def test_backlog_error_says_the_pile_was_not_logged(self):
+        service, mailbox, state, writer = service_for(config_with())
+        state.set(BACKLOG_KEY, "one,two")
+        mailbox.messages["one"] = (PURCHASE_SUBJECT, FOODPANDA_BODY, ("person-a@example.com",))
+        mailbox.messages["two"] = (PURCHASE_SUBJECT, FOODPANDA_BODY, ("person-a@example.com",))
+
+        def fetch(message_id):
+            mailbox.fetch_calls += 1
+            raise RuntimeError(f"mailbox down for {message_id}")
+
+        mailbox.fetch = fetch
+        replies = service.handle_command("log email backlog")
+
+        self.assertTrue(any("pile was not logged" in reply.casefold() for reply in replies))
+        self.assertEqual(state.get(BACKLOG_KEY), "one,two")
+        self.assertEqual(writer.rows, [])
 
 
 def _http_error(status: int, reason: str) -> HttpError:
@@ -798,6 +841,96 @@ class GmailHistoryTests(unittest.TestCase):
         self.assertEqual(writer.rows[0].amount, Decimal("18.50"))
         self.assertEqual(len(service._queued_notices), 1)
         self.assertIn("Sample Shop", service._queued_notices[0])
+
+
+class _Executable:
+    def __init__(self, action):
+        self._action = action
+
+    def execute(self):
+        return self._action()
+
+
+class _BotStateValues:
+    def __init__(self, sheet: "_BotStateSheet"):
+        self.sheet = sheet
+
+    def get(self, **_kwargs):
+        def read():
+            self.sheet.value_gets += 1
+            return {"values": [list(row) for row in self.sheet.rows]}
+
+        return _Executable(read)
+
+    def update(self, **kwargs):
+        def write():
+            self.sheet.value_writes += 1
+            cell = str(kwargs["range"]).split("!")[1]
+            row_number = int("".join(char for char in cell if char.isdigit()))
+            value = kwargs["body"]["values"][0][0]
+            row = self.sheet.rows[row_number - 1]
+            if len(row) < 2:
+                row.append("")
+            row[1] = value
+            return {}
+
+        return _Executable(write)
+
+    def append(self, **kwargs):
+        def write():
+            self.sheet.value_writes += 1
+            self.sheet.rows.append(list(kwargs["body"]["values"][0]))
+            return {}
+
+        return _Executable(write)
+
+
+class _BotStateSpreadsheets:
+    def __init__(self, sheet: "_BotStateSheet"):
+        self.sheet = sheet
+        self._values = _BotStateValues(sheet)
+
+    def get(self, **_kwargs):
+        def read():
+            self.sheet.metadata_gets += 1
+            return {"sheets": [{"properties": {"title": "Bot State", "sheetId": 4}}]}
+
+        return _Executable(read)
+
+    def values(self):
+        return self._values
+
+
+class _BotStateSheet:
+    def __init__(self):
+        self.rows = [["gmail_history_id", "100"]]
+        self.metadata_gets = 0
+        self.value_gets = 0
+        self.value_writes = 0
+        self._spreadsheets = _BotStateSpreadsheets(self)
+
+    def spreadsheets(self):
+        return self._spreadsheets
+
+
+class BotStateReadTests(unittest.TestCase):
+    def test_second_bot_state_read_does_not_look_up_the_spreadsheet_again(self):
+        client = SheetsClient("sheet-id")
+        sheet = _BotStateSheet()
+        client.service = sheet
+
+        self.assertEqual(client.get_state_value("Bot State", "gmail_history_id"), "100")
+        metadata_gets = sheet.metadata_gets
+        value_gets = sheet.value_gets
+        self.assertGreaterEqual(metadata_gets, 1)
+        self.assertGreaterEqual(value_gets, 1)
+
+        self.assertEqual(client.get_state_value("Bot State", "gmail_history_id"), "100")
+        self.assertEqual(sheet.metadata_gets, metadata_gets)
+        self.assertEqual(sheet.value_gets, value_gets)
+
+        client.set_state_value("Bot State", "gmail_history_id", "250")
+        self.assertEqual(client.get_state_value("Bot State", "gmail_history_id"), "250")
 
 
 if __name__ == "__main__":

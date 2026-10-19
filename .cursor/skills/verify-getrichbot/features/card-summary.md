@@ -32,7 +32,7 @@ Preconditions:
 
 ## Gotchas
 
-- The Cards chips are named `Alex` and `Sam`. Recent uses `Alex only` and `Both`. They are different controls.
+- The Cards chips are named `Alex` and `Sam`. Recent uses `Alex only`, `Sam only`, and `Both`. They are different controls. A click named `Sam` is the Cards chip.
 - `18%` and `6%` come from the seed amounts and caps. After a recent-transactions category edit, the card spend is unchanged, but a fresh launch is still required so the recipe starts from the seed.
 - Sample Cashback has no Card Limits row. The screen says `No cap`. Do not treat a missing card as a failure.
 - A green, yellow, orange, or red band is a colour on the bar. The proof text is the percent and the dollars, not the colour name.

@@ -4,13 +4,13 @@ const ERROR_TEXT = {
   not_allowed: "This Telegram account is not allowed to open the dashboard.",
   locked: "This page is locked.",
   sheet: "I could not read the Google Sheet just now. Nothing was changed. Try again in a moment.",
-  scope: "Choose your own spending, or both.",
+  scope: "Choose one person, or both.",
   cards: "Choose your own cards, or the other person's."
 };
 
 const state = {
   view: "recent",
-  scope: "mine",
+  scope: "both",
   cards: "mine",
   missingCategory: false,
   editingId: "",
@@ -153,7 +153,7 @@ async function loginWithWidget(user) {
     return;
   }
   state.loggedOut = false;
-  state.scope = "mine";
+  state.scope = "both";
   state.cards = "mine";
   state.missingCategory = false;
   state.editingId = "";
@@ -325,25 +325,26 @@ function renderTop() {
   return header;
 }
 
+function scopeChip(id, label) {
+  const chip = el("button", "chip", label);
+  chip.type = "button";
+  chip.setAttribute("aria-pressed", String(state.scope === id));
+  chip.addEventListener("click", () => {
+    if (state.scope === id) return;
+    state.scope = id;
+    loadDashboard();
+  });
+  return chip;
+}
+
 function renderRecent() {
   const section = el("section");
   const head = el("div", "page-head");
   head.append(el("h2", "", "Recent transactions"));
   const filters = el("div", "filters");
-  [
-    ["mine", state.payload.viewer_label + " only"],
-    ["both", "Both"]
-  ].forEach(([id, label]) => {
-    const chip = el("button", "chip", label);
-    chip.type = "button";
-    chip.setAttribute("aria-pressed", String(state.scope === id));
-    chip.addEventListener("click", () => {
-      if (state.scope === id) return;
-      state.scope = id;
-      loadDashboard();
-    });
-    filters.append(chip);
-  });
+  const labels = Array.isArray(state.payload.household_labels) ? state.payload.household_labels : [];
+  labels.forEach((name) => filters.append(scopeChip(name, name + " only")));
+  filters.append(scopeChip("both", "Both"));
   const missing = el("button", "chip", "No category");
   missing.type = "button";
   missing.setAttribute("aria-pressed", String(state.missingCategory));

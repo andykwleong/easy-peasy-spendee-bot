@@ -23,7 +23,7 @@ from getrichbot.dashboard_auth import (
     verify_login_widget,
     verify_webapp_init_data,
 )
-from getrichbot.dashboard_view import build_dashboard_payload
+from getrichbot.dashboard_view import build_dashboard_payload, recent_scope_allowed
 from getrichbot.row_edits import expense_kind, format_saved_row, plan_edit
 from getrichbot.sheets import CATEGORY_SHEET_READ_TIMEOUT_SECONDS
 from getrichbot.shop_category import apply_email_shop_correction
@@ -198,8 +198,8 @@ class DashboardApp:
         label = self.context.label_for_user(identity.user_id)
         if label is None:
             return _json(401, {"ok": False, "error": "not_allowed"})
-        scope = query.get("scope", "mine")
-        if scope not in {"mine", "both"}:
+        scope = query.get("scope", "both")
+        if not recent_scope_allowed(scope, self._household_labels()):
             return _json(400, {"ok": False, "error": "scope"})
         cards_scope = query.get("cards", "mine")
         if cards_scope not in {"mine", "other"}:
@@ -246,7 +246,7 @@ class DashboardApp:
         field = payload.get("field")
         value = payload.get("value")
         owner = payload.get("owner")
-        scope = payload.get("scope", "mine")
+        scope = payload.get("scope", "both")
         cards_scope = payload.get("cards", "mine")
         missing_category = _missing_category_flag(payload.get("missing"))
         if not isinstance(entry_id, str) or not entry_id.strip() or len(entry_id) > 40:
@@ -257,7 +257,7 @@ class DashboardApp:
             return _json(400, {"ok": False, "error": "invalid"})
         if owner is not None and not isinstance(owner, str):
             return _json(400, {"ok": False, "error": "invalid"})
-        if scope not in {"mine", "both"} or cards_scope not in {"mine", "other"}:
+        if not recent_scope_allowed(scope, self._household_labels()) or cards_scope not in {"mine", "other"}:
             return _json(400, {"ok": False, "error": "scope"})
         try:
             result = self._write_edit(
@@ -445,7 +445,7 @@ class DashboardApp:
             })
         entry_id = payload.get("id")
         source = payload.get("source")
-        scope = payload.get("scope", "mine")
+        scope = payload.get("scope", "both")
         cards_scope = payload.get("cards", "mine")
         missing_category = _missing_category_flag(payload.get("missing"))
         if not isinstance(entry_id, str) or not entry_id.strip() or len(entry_id) > 40:
@@ -454,7 +454,7 @@ class DashboardApp:
             return _json(400, {"ok": False, "error": "invalid"})
         if not isinstance(scope, str) or not isinstance(cards_scope, str):
             return _json(400, {"ok": False, "error": "invalid"})
-        if scope not in {"mine", "both"} or cards_scope not in {"mine", "other"}:
+        if not recent_scope_allowed(scope, self._household_labels()) or cards_scope not in {"mine", "other"}:
             return _json(400, {"ok": False, "error": "scope"})
         try:
             result = self._write_delete(label, entry_id.strip(), source, scope, cards_scope, missing_category)

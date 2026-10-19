@@ -98,7 +98,7 @@ def main() -> None:
     hosts.set_defaults(func=cmd_browser_hosts)
 
     sheet = sub.add_parser("sheet-show")
-    sheet.add_argument("--scope", choices=("mine", "both"), required=True)
+    sheet.add_argument("--scope", choices=("both", "Alex", "Sam"), required=True)
     sheet.add_argument("--path", required=True)
     sheet.set_defaults(func=cmd_sheet_show)
 

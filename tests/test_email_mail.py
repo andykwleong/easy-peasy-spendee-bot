@@ -1306,6 +1306,69 @@ class EmailMailTests(unittest.TestCase):
         self.assertEqual(decision.last4, "1111")
         self.assertEqual(decision.shop, "SAMPLE SHOP")
 
+    def test_account_ending_with_mobile_ending_is_paynow_not_an_unmatched_card(self):
+        looked_up = []
+
+        def channels_for(owner, payment_method):
+            looked_up.append((owner, payment_method))
+            return ("Online", "PayWave")
+
+        body = (
+            "Dear Customer,\n"
+            "\n"
+            "We refer to your PAYNOW dated 19 Oct. We are pleased to confirm that the transaction was completed.\n"
+            "\n"
+            "Date & Time:\t19 Oct 10:16 (SGT)\n"
+            "Amount:\tSGD188.00\n"
+            "From:\tSample Joint Account A/C ending 1234\n"
+            "To:\tSAMPLE NAME (MOBILE ending 5678)\n"
+        )
+        config = config_with(last4="1111")
+        decision = decide_mail(
+            "Payment sent",
+            body,
+            ("person-a@example.com",),
+            forwarders={"person-a@example.com": "Me"},
+            methods=config.payment_methods,
+            categories=("Food", "Groceries", INCOME_MISC),
+            channels_for=channels_for,
+            category_for=lambda shop, logged_by, body="": None,
+            today=TODAY,
+        )
+
+        self.assertEqual(decision.action, "log", decision.text)
+        self.assertNotEqual(
+            decision.text,
+            "I got a purchase but could not match one card from the Last 4 column. I have not logged it.",
+        )
+        self.assertEqual(decision.payment_method, "PayNow")
+        self.assertEqual(decision.payment_owner, "")
+        self.assertEqual(decision.payment_channel, "")
+        self.assertEqual(decision.last4, "")
+        self.assertEqual(decision.amount, Decimal("188.00"))
+        self.assertEqual(decision.expense_date, date(2026, 10, 19))
+        self.assertIn(decision.shop, ("SAMPLE NAME", ""))
+        self.assertEqual(decision.category, "")
+        self.assertEqual(looked_up, [])
+
+        card = decide(
+            "Card transaction",
+            "\n".join(
+                (
+                    "Date & Time: 19 Oct 10:16 (SGT)",
+                    "Amount: SGD10.00",
+                    "card ending 1111",
+                    "To: SAMPLE SHOP",
+                )
+            ),
+            config,
+        )
+        self.assertEqual(card.action, "log", card.text)
+        self.assertEqual(card.payment_method, "UOB Sample Visa")
+        self.assertEqual(card.last4, "1111")
+        self.assertEqual(card.payment_owner, "Me")
+        self.assertNotEqual(card.payment_method, "PayNow")
+
     def test_incoming_paynow_refund_dividend_and_interest_stay_income_with_an_account_ending(self):
         bankish = "\n".join(
             (

@@ -252,7 +252,7 @@ class DashboardHttpTests(unittest.TestCase):
         )
         dashboard_status, _, dashboard = app.handle(
             "GET",
-            "/api/dashboard?scope=mine&label=Sam",
+            "/api/dashboard?scope=both&label=Sam",
             {"X-Telegram-Init-Data": init_data},
             b"",
             secure=True,
@@ -291,10 +291,10 @@ class DashboardHttpTests(unittest.TestCase):
         init_data = sign_webapp(111)
         headers = {"X-Telegram-Init-Data": init_data}
 
-        full_status, _, full = app.handle("GET", "/api/dashboard?scope=mine", headers, b"", secure=True)
+        full_status, _, full = app.handle("GET", "/api/dashboard?scope=both", headers, b"", secure=True)
         filtered_status, _, filtered = app.handle(
             "GET",
-            "/api/dashboard?scope=mine&missing=1",
+            "/api/dashboard?scope=both&missing=1",
             headers,
             b"",
             secure=True,
@@ -307,6 +307,162 @@ class DashboardHttpTests(unittest.TestCase):
         self.assertEqual([row["id"] for row in body_json(filtered)["recent"]], ["bb2002"])
         self.assertEqual(body_json(filtered)["recent"][0]["category"], "")
         self.assertIn("aa1001", [row["id"] for row in body_json(filtered)["raw_expenses"]])
+
+    def test_either_signed_in_person_can_read_the_other_persons_recent_rows(self):
+        sheets = EditableSheets()
+        sheets.records.extend(
+            [
+                ExpenseRecord(
+                    row_number=3,
+                    entry_id="bb2002",
+                    timestamp="15:00:00",
+                    expense_date="2026-09-21",
+                    month="2026-09",
+                    logged_by="Sam",
+                    raw_input="sample",
+                    amount=Decimal("12.40"),
+                    category="Groceries",
+                    description="Sample market",
+                    input_type="text",
+                    status="Confirmed",
+                    transaction_type="Expense",
+                    payment_method="Sample Mastercard",
+                    payment_owner="Sam",
+                ),
+                ExpenseRecord(
+                    row_number=4,
+                    entry_id="cc3003",
+                    timestamp="11:00:00",
+                    expense_date="2026-09-19",
+                    month="2026-09",
+                    logged_by="Alex",
+                    raw_input="sample",
+                    amount=Decimal("7.00"),
+                    category="Food",
+                    description="Sample gift",
+                    input_type="text",
+                    status="Confirmed",
+                    transaction_type="Expense",
+                    payment_method="Sample Mastercard",
+                    payment_owner="Sam",
+                ),
+                ExpenseRecord(
+                    row_number=5,
+                    entry_id="dd4004",
+                    timestamp="16:00:00",
+                    expense_date="2026-09-22",
+                    month="2026-09",
+                    logged_by="Sam",
+                    raw_input="sample",
+                    amount=Decimal("4.00"),
+                    category="",
+                    description="Sample stall",
+                    input_type="text",
+                    status="Confirmed",
+                    transaction_type="Expense",
+                    payment_method="Sample Visa",
+                    payment_owner="Alex",
+                ),
+            ]
+        )
+        app, _sheets = app_for(sheets)
+        alex = {"X-Telegram-Init-Data": sign_webapp(111)}
+        sam = {"X-Telegram-Init-Data": sign_webapp(222)}
+
+        alex_status, _, alex_payload = app.handle("GET", "/api/dashboard", alex, b"", secure=True)
+        sam_status, _, sam_payload = app.handle("GET", "/api/dashboard", sam, b"", secure=True)
+        alex_body = body_json(alex_payload)
+        sam_body = body_json(sam_payload)
+
+        self.assertEqual(alex_status, 200)
+        self.assertEqual(sam_status, 200)
+        self.assertEqual(alex_body["scope"], "both")
+        self.assertEqual(sam_body["scope"], "both")
+        self.assertEqual(alex_body["household_labels"], ["Alex", "Sam"])
+        self.assertEqual(sam_body["household_labels"], ["Alex", "Sam"])
+        self.assertEqual(alex_body["viewer_label"], "Alex")
+        self.assertEqual(sam_body["viewer_label"], "Sam")
+        self.assertEqual(
+            [row["id"] for row in alex_body["recent"]],
+            ["dd4004", "bb2002", "aa1001", "cc3003"],
+        )
+        self.assertEqual([row["id"] for row in sam_body["recent"]], [row["id"] for row in alex_body["recent"]])
+
+        sam_for_alex_status, _, sam_for_alex = app.handle("GET", "/api/dashboard?scope=Sam", alex, b"", secure=True)
+        alex_for_sam_status, _, alex_for_sam = app.handle("GET", "/api/dashboard?scope=Alex", sam, b"", secure=True)
+        missing_status, _, missing = app.handle(
+            "GET",
+            "/api/dashboard?scope=Sam&missing=1",
+            alex,
+            b"",
+            secure=True,
+        )
+
+        self.assertEqual(sam_for_alex_status, 200)
+        self.assertEqual(alex_for_sam_status, 200)
+        self.assertEqual(missing_status, 200)
+        self.assertEqual([row["id"] for row in body_json(sam_for_alex)["recent"]], ["dd4004", "bb2002"])
+        self.assertTrue(all(row["logged_by"] == "Sam" for row in body_json(sam_for_alex)["recent"]))
+        self.assertEqual([row["id"] for row in body_json(alex_for_sam)["recent"]], ["aa1001", "cc3003"])
+        gift = next(row for row in body_json(alex_for_sam)["recent"] if row["id"] == "cc3003")
+        self.assertEqual(gift["logged_by"], "Alex")
+        self.assertEqual(gift["payment_owner"], "Sam")
+        self.assertEqual([row["id"] for row in body_json(missing)["recent"]], ["dd4004"])
+        self.assertEqual(body_json(sam_for_alex)["cards"]["showing"], "mine")
+        self.assertEqual(body_json(sam_for_alex)["cards"]["owner"], "Alex")
+
+        calls_before = len(sheets.calls)
+        mine_status, _, mine_body = app.handle("GET", "/api/dashboard?scope=mine", sam, b"", secure=True)
+        self.assertEqual(mine_status, 400)
+        self.assertEqual(body_json(mine_body)["error"], "scope")
+        self.assertNotIn(b"Sample cafe", mine_body)
+        self.assertEqual(len(sheets.calls), calls_before)
+
+        edit_status, _, edit_body = app.handle(
+            "POST",
+            "/api/dashboard/edit",
+            {"Content-Type": "application/json", **alex},
+            json.dumps({
+                "id": "aa1001",
+                "source": "expense",
+                "field": "amount",
+                "value": "9.00",
+                "scope": "mine",
+            }).encode(),
+            secure=True,
+        )
+        delete_status, _, delete_body = app.handle(
+            "POST",
+            "/api/dashboard/delete",
+            {"Content-Type": "application/json", **alex},
+            json.dumps({
+                "id": "aa1001",
+                "source": "expense",
+                "confirm": True,
+                "scope": "someone-else",
+            }).encode(),
+            secure=True,
+        )
+        self.assertEqual(edit_status, 400)
+        self.assertEqual(body_json(edit_body)["error"], "scope")
+        self.assertEqual(delete_status, 400)
+        self.assertEqual(body_json(delete_body)["error"], "scope")
+        self.assertEqual(sheets.writes, [])
+        self.assertEqual(sheets.deletes, [])
+
+    def test_recent_page_does_not_use_a_viewer_relative_scope(self):
+        app, _sheets = app_for()
+
+        status, _, payload = app.handle("GET", "/dashboard.js", {}, b"", secure=False)
+
+        self.assertEqual(status, 200)
+        script = payload.decode()
+        self.assertIn("household_labels", script)
+        self.assertNotIn('viewer_label + " only"', script)
+        self.assertNotIn('scope: "mine"', script)
+        self.assertNotIn('state.scope = "mine"', script)
+        self.assertIn("No category", script)
+        self.assertIn('["mine", cards.viewer_label]', script)
 
     def test_widget_login_sets_a_thirty_day_cookie_and_logout_clears_it(self):
         app, _sheets = app_for()
@@ -407,7 +563,7 @@ class DashboardHttpTests(unittest.TestCase):
         token = issue_session_token(111, TOKEN, now=NOW)
         status, _, payload = app.handle(
             "GET",
-            "/api/dashboard?scope=mine&cards=mine",
+            "/api/dashboard?scope=both&cards=mine",
             {"cookie": f"grb_session={token}"},
             b"",
             secure=False,
@@ -675,7 +831,7 @@ class DashboardHttpTests(unittest.TestCase):
 
         status, _, payload = app.handle(
             "GET",
-            "/api/dashboard?scope=mine&cards=mine",
+            "/api/dashboard?scope=both&cards=mine",
             {"X-Telegram-Init-Data": sign_webapp(111)},
             b"",
             secure=False,

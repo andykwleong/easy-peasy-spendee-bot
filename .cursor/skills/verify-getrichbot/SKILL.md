@@ -59,15 +59,15 @@ Anything else prints `not ok` and exits `1`. Do not drive it.
 
 Read `features/README.md`, then the feature file. Run the commands there literally.
 
-Browser commands talk to a Chrome window this helper started. They click by role and accessible name. A button's accessible name is its `aria-label` when it has one (`Delete Sample cafe`), otherwise its visible text (`Both`, `Fix tagging`, `Cards`).
+Browser commands talk to a Chrome window this helper started. They click by role and accessible name. A button's accessible name is its `aria-label` when it has one (`Delete Sample cafe`), otherwise its visible text (`Alex only`, `Both`, `Fix tagging`, `Cards`).
 
 ```bash
 python3 .cursor/skills/verify-getrichbot/scripts/verify_dashboard.py browser-open
 python3 .cursor/skills/verify-getrichbot/scripts/verify_dashboard.py browser-login --as alex --wait-text "Signed in as Alex"
-python3 .cursor/skills/verify-getrichbot/scripts/verify_dashboard.py browser-click --role button --name "Both" --wait-text "Sample market"
+python3 .cursor/skills/verify-getrichbot/scripts/verify_dashboard.py browser-click --role button --name "Alex only" --wait-text "Sample cafe"
 python3 .cursor/skills/verify-getrichbot/scripts/verify_dashboard.py browser-select --label "Category" --value "Groceries" --wait-text "Updated $18.50 to Groceries"
 python3 .cursor/skills/verify-getrichbot/scripts/verify_dashboard.py browser-expect --contains "Sample cafe" --absent "Sample market"
-python3 .cursor/skills/verify-getrichbot/scripts/verify_dashboard.py sheet-show --scope both --path .cursor/skills/verify-getrichbot/artifacts/recent/sheet.json
+python3 .cursor/skills/verify-getrichbot/scripts/verify_dashboard.py sheet-show --scope Alex --path .cursor/skills/verify-getrichbot/artifacts/recent/sheet.json
 ```
 
 `browser-login` runs the same callback the Telegram login widget calls (`onTelegramAuth`). The browser then POSTs that signed payload to the local `/api/session/widget` endpoint. The session cookie is HttpOnly. Later `sheet-show` reads `/api/dashboard` from the page so the cookie is included. That is a second view of the same rows, not a hidden test route.

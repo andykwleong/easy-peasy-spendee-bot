@@ -160,11 +160,12 @@ class DashboardViewTests(unittest.TestCase):
 
         mine = build_dashboard_payload(
             viewer_label="Alex",
-            scope="mine",
+            scope="Alex",
             records=records,
             card_usage=usage,
             payment_config=payment_config(),
             today=date(2026, 9, 26),
+            household_labels=("Alex", "Sam"),
         )
         both = build_dashboard_payload(
             viewer_label="Alex",
@@ -233,7 +234,7 @@ class DashboardViewTests(unittest.TestCase):
         ]
         payload = build_dashboard_payload(
             viewer_label="Alex",
-            scope="mine",
+            scope="both",
             records=records,
             card_usage=[],
             payment_config=payment_config(),
@@ -337,7 +338,7 @@ class DashboardViewTests(unittest.TestCase):
 
         full = build_dashboard_payload(
             viewer_label="Alex",
-            scope="mine",
+            scope="both",
             records=records,
             card_usage=usage,
             payment_config=payment_config(),
@@ -345,7 +346,7 @@ class DashboardViewTests(unittest.TestCase):
         )
         filtered = build_dashboard_payload(
             viewer_label="Alex",
-            scope="mine",
+            scope="both",
             records=records,
             card_usage=usage,
             payment_config=payment_config(),
@@ -362,6 +363,90 @@ class DashboardViewTests(unittest.TestCase):
         self.assertNotIn("pending", filtered["recent"][0])
         self.assertIn("aa1001", [row["id"] for row in filtered["raw_expenses"]])
         self.assertIn("cc1001", [row["id"] for row in filtered["card_usage"]])
+
+    def test_recent_person_filter_follows_logged_by_and_keeps_label_order(self):
+        records = [
+            expense(
+                "aa1001",
+                "18.50",
+                "Food",
+                logged_by="Alex",
+                payment_method="Sample Mastercard",
+                payment_owner="Sam",
+                description="Sample cafe",
+                timestamp="15:00:00",
+            ),
+            expense(
+                "bb2002",
+                "12.40",
+                "Groceries",
+                logged_by="Sam",
+                payment_method="Sample Mastercard",
+                payment_owner="Sam",
+                description="Sample market",
+                timestamp="14:00:00",
+            ),
+            expense(
+                "cc3003",
+                "4.00",
+                "",
+                logged_by="Sam",
+                payment_method="Sample Visa",
+                payment_owner="Alex",
+                description="Sample stall",
+                timestamp="13:00:00",
+            ),
+            expense(
+                "dd4004",
+                "9.00",
+                "Food",
+                logged_by="Alex",
+                status="Pending",
+                description="Not confirmed",
+                timestamp="16:00:00",
+            ),
+        ]
+        usage = [card_usage("ee5005", "6.00", "Sample Cashback", logged_by="Alex", payment_owner="Sam")]
+        labels = ("Sam", "Alex")
+        shared = {
+            "records": records,
+            "card_usage": usage,
+            "payment_config": payment_config(),
+            "today": date(2026, 9, 26),
+            "household_labels": labels,
+        }
+
+        opened_by_alex = build_dashboard_payload(viewer_label="Alex", scope="both", **shared)
+        opened_by_sam = build_dashboard_payload(viewer_label="Sam", scope="both", **shared)
+
+        self.assertEqual(opened_by_alex["household_labels"], ["Sam", "Alex"])
+        self.assertEqual(opened_by_sam["household_labels"], ["Sam", "Alex"])
+        self.assertEqual(opened_by_alex["scope"], "both")
+        self.assertEqual(
+            [item["id"] for item in opened_by_alex["recent"]],
+            ["aa1001", "bb2002", "cc3003", "ee5005"],
+        )
+        self.assertEqual(
+            [item["id"] for item in opened_by_sam["recent"]],
+            [item["id"] for item in opened_by_alex["recent"]],
+        )
+
+        alex_rows = build_dashboard_payload(viewer_label="Sam", scope="Alex", **shared)
+        sam_rows = build_dashboard_payload(viewer_label="Alex", scope="Sam", missing_category=True, **shared)
+        sam_full = build_dashboard_payload(viewer_label="Alex", scope="Sam", **shared)
+
+        self.assertEqual([item["id"] for item in alex_rows["recent"]], ["aa1001", "ee5005"])
+        self.assertEqual(alex_rows["recent"][0]["payment_owner"], "Sam")
+        self.assertEqual(alex_rows["recent"][0]["logged_by"], "Alex")
+        self.assertEqual([item["id"] for item in sam_full["recent"]], ["bb2002", "cc3003"])
+        self.assertEqual(sam_full["recent"][1]["payment_owner"], "Alex")
+        self.assertEqual([item["id"] for item in sam_rows["recent"]], ["cc3003"])
+        self.assertEqual(alex_rows["cards"]["owner"], "Sam")
+        self.assertEqual(sam_full["cards"]["owner"], "Alex")
+        self.assertEqual(alex_rows["cards_scope"], "mine")
+
+        with self.assertRaises(ValueError):
+            build_dashboard_payload(viewer_label="Alex", scope="mine", **shared)
 
 
 if __name__ == "__main__":

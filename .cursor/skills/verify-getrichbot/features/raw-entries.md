@@ -28,7 +28,7 @@ Preconditions:
 
 ## Gotchas
 
-- Raw entries ignores the Recent `Alex only` / `Both` filter. Sam's row is supposed to be here.
+- Raw entries ignores the Recent `Alex only`, `Sam only`, and `Both` chips. Sam's row is supposed to be here.
 - The delete control on a raw row is named `Delete Sample cafe` or `Delete Sample market`. This recipe does not click them.
 - Card Usage says `No rows.` because the seed has no card-only spend. That empty state is the proof.
 - Entry ids are `aa1001` and `bb2002`. A six-character id in Telegram chat is a delete lookup, which this page does not perform.

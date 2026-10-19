@@ -13,6 +13,22 @@ RECENT_LIMIT = 40
 RAW_LIMIT = 200
 
 
+def named_household_labels(household_labels: tuple[str, ...]) -> tuple[str, ...]:
+    """Configured names, in the order they were given, with blanks dropped."""
+    labels: list[str] = []
+    for label in household_labels:
+        if label and label not in labels:
+            labels.append(label)
+    return tuple(labels)
+
+
+def recent_scope_allowed(scope: str, household_labels: tuple[str, ...]) -> bool:
+    """Recent scope is everyone, or one configured household name."""
+    if scope == "both":
+        return True
+    return scope in named_household_labels(household_labels)
+
+
 def limit_band(percent: Decimal) -> str:
     if not percent.is_finite():
         return "green"
@@ -38,12 +54,13 @@ def build_dashboard_payload(
     household_labels: tuple[str, ...] = (),
     missing_category: bool = False,
 ) -> dict:
-    if scope not in {"mine", "both"}:
-        raise ValueError("scope must be mine or both")
+    labels = named_household_labels(household_labels)
+    if not recent_scope_allowed(scope, labels):
+        raise ValueError("scope must be both or a household label")
     if cards_scope not in {"mine", "other"}:
         raise ValueError("cards scope must be mine or other")
 
-    other_label = next((label for label in household_labels if label and label != viewer_label), "")
+    other_label = next((label for label in labels if label != viewer_label), "")
     if cards_scope == "other" and not other_label:
         raise ValueError("cards scope")
     card_owner = other_label if cards_scope == "other" else viewer_label
@@ -54,7 +71,7 @@ def build_dashboard_payload(
     ]
     raw_expenses = _raw_expenses(records)
     usage_rows = _raw_card_usage(card_usage)
-    recent = _recent_items(records, card_usage, viewer_label, scope)
+    recent = _recent_items(records, card_usage, scope)
     if missing_category:
         recent = [item for item in recent if expense_category_is_blank(item)]
     cards = _cards_snapshot(card_owner, records, card_usage, payment_config, today, cards_error)
@@ -63,6 +80,7 @@ def build_dashboard_payload(
     cards["other_label"] = other_label
     return {
         "viewer_label": viewer_label,
+        "household_labels": list(labels),
         "scope": scope,
         "cards_scope": cards_scope,
         "recent": recent[:RECENT_LIMIT],
@@ -186,13 +204,12 @@ def _limit_label(limit: CardLimit) -> str:
 def _recent_items(
     records: list[ExpenseRecord],
     card_usage: list[CardUsageRecord],
-    viewer_label: str,
     scope: str,
 ) -> list[dict]:
     items = [_recent_expense(record) for record in records if record.status.casefold() == "confirmed"]
     items.extend(_recent_card_usage(record) for record in card_usage if record.status.casefold() == "confirmed")
-    if scope == "mine":
-        items = [item for item in items if item["logged_by"] == viewer_label]
+    if scope != "both":
+        items = [item for item in items if item["logged_by"] == scope]
     items.sort(key=lambda item: (item["date"], item["time"], item["id"]), reverse=True)
     return items
 

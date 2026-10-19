@@ -29,7 +29,7 @@ Preconditions:
 
 ## Gotchas
 
-- The table is household-wide. `Alex only` on Recent does not filter Month.
+- The table is household-wide. `Alex only` or `Sam only` on Recent does not filter Month.
 - The seed has no income row, so Total income is `$0.00`. A missing income category line is expected. Do not add a fake income row to make a richer table.
 - After the recent-transactions recipe changes Sample cafe to Groceries, September Food disappears and Groceries becomes `$30.90`. Launch again before this recipe.
 - August category cells are blank. August totals are `$0.00`. Do not fail the blank category cells.

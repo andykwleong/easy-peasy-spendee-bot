@@ -127,6 +127,9 @@ class EmailService:
         self._notify = lambda _text: None
         self._notifier_bound = False
         self._queued_notices: list[str] = []
+        # Failure sentences already sent since the last successful tap.
+        # There is no timer. A tap that returns 200 forgets them, and so does a restart.
+        self._told_tap_failures: set[str] = set()
         self._lock = threading.RLock()
 
     def bind_notifier(self, loop, send) -> None:
@@ -152,6 +155,18 @@ class EmailService:
                 return
             notify = self._notify
         notify(text)
+
+    def _tell_tap_failure(self, text: str) -> None:
+        """Send this failure sentence once until a tap succeeds. The next tap is still tried."""
+        with self._lock:
+            if text in self._told_tap_failures:
+                return
+            self._told_tap_failures.add(text)
+        self._tell(text)
+
+    def _forget_tap_failures(self) -> None:
+        with self._lock:
+            self._told_tap_failures.clear()
 
     def start_tap(self, *, pause: Callable[[float], None] | None = None, retry_seconds: float = 15) -> None:
         """Ask Gmail to tap this process. A slow category sheet does not delay this."""
@@ -412,9 +427,10 @@ class EmailService:
                 return 503, {"ok": False}
             self.process_notification(note.history_id)
         except Exception as exc:
-            self._tell(_email_failure_text(exc))
+            self._tell_tap_failure(_email_failure_text(exc))
             LOGGER.exception("Gmail notification could not be handled")
             return 500, {"ok": False}
+        self._forget_tap_failures()
         return 200, {"ok": True}
 
     def _push_must_wait(self) -> bool:

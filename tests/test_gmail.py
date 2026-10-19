@@ -537,6 +537,41 @@ class EmailWatchTests(unittest.TestCase):
         self.assertEqual(len(writer.rows), 1)
         self.assertTrue(any("sheet limit" in text.casefold() for text in sent))
 
+    def test_sheet_limit_sentence_is_sent_once_until_a_tap_succeeds(self):
+        service, mailbox, _state, _writer = service_for(config_with())
+        sheet = _LimitingSheet()
+        sheet.values[HISTORY_KEY] = "100"
+        service.state = sheet
+        mailbox.added = []
+        sent = []
+        service._notify = sent.append
+        service._notifier_bound = True
+        body = _push_body("200")
+
+        first_status, _first_payload = service.handle_http("POST", {"authorization": "Bearer test-token"}, body)
+        self.assertEqual(first_status, 500)
+        calls_after_first = sheet.calls
+        self.assertEqual(sent, ["The sheet limit stopped me from logging this mail."])
+
+        second_status, _second_payload = service.handle_http("POST", {"authorization": "Bearer test-token"}, body)
+        self.assertEqual(second_status, 500)
+        self.assertGreater(sheet.calls, calls_after_first)
+        self.assertEqual(sent, ["The sheet limit stopped me from logging this mail."])
+
+        sheet.limited = False
+        ok_status, ok_payload = service.handle_http("POST", {"authorization": "Bearer test-token"}, body)
+        self.assertEqual(ok_status, 200)
+        self.assertTrue(ok_payload["ok"])
+        self.assertEqual(len(sent), 1)
+
+        sheet.limited = True
+        third_status, _third_payload = service.handle_http("POST", {"authorization": "Bearer test-token"}, body)
+        self.assertEqual(third_status, 500)
+        self.assertEqual(sent, [
+            "The sheet limit stopped me from logging this mail.",
+            "The sheet limit stopped me from logging this mail.",
+        ])
+
     def test_log_email_backlog_logs_the_saved_pile_and_says_it_is_finished(self):
         service, mailbox, state, writer = service_for(config_with())
         state.set(BACKLOG_KEY, "one,two")

@@ -225,6 +225,68 @@ def latest_logged_row(
     return "expense", expense
 
 
+def row_for_immediate_correction(
+    expenses: list[ExpenseRecord],
+    card_usage: list[CardUsageRecord],
+    logged_by: str,
+    *,
+    reply_message_id: str | int | None = None,
+    reply_entry_id: str | None = None,
+    last_bot_message_id: str | int | None = None,
+) -> tuple[str, ExpenseRecord | CardUsageRecord] | None:
+    """Choose the saved row for a finished category, amount, card, or channel correction.
+
+    A Telegram reply points at that message. The entry id in the replied text
+    wins. With no entry id, the message id stored on the row is used. A reply
+    that does not match a row is left unmatched.
+
+    With no reply, the previous bot message is used when that link matches a
+    row. Otherwise the latest row logged by this person is used.
+    """
+    if reply_message_id not in (None, "") or reply_entry_id not in (None, ""):
+        if reply_entry_id not in (None, ""):
+            return _row_by_entry_id(expenses, card_usage, str(reply_entry_id))
+        return _row_by_message_id(expenses, card_usage, reply_message_id or "")
+    if last_bot_message_id not in (None, ""):
+        linked = _row_by_message_id(expenses, card_usage, last_bot_message_id)
+        if linked is not None:
+            return linked
+    return latest_logged_row(expenses, card_usage, logged_by)
+
+
+def _row_by_entry_id(
+    expenses: list[ExpenseRecord],
+    card_usage: list[CardUsageRecord],
+    entry_id: str,
+) -> tuple[str, ExpenseRecord | CardUsageRecord] | None:
+    wanted = entry_id.strip().casefold()
+    if not wanted:
+        return None
+    for record in reversed(expenses):
+        if record.entry_id.casefold() == wanted:
+            return "expense", record
+    for record in reversed(card_usage):
+        if record.entry_id.casefold() == wanted:
+            return "card_usage", record
+    return None
+
+
+def _row_by_message_id(
+    expenses: list[ExpenseRecord],
+    card_usage: list[CardUsageRecord],
+    message_id: str | int,
+) -> tuple[str, ExpenseRecord | CardUsageRecord] | None:
+    expense = record_for_message_id(expenses, message_id)
+    if expense is not None:
+        return "expense", expense
+    wanted = str(message_id)
+    for record in reversed(card_usage):
+        stored = str(getattr(record, "telegram_message_id", "") or "")
+        if stored == wanted:
+            return "card_usage", record
+    return None
+
+
 def find_payment_method(
     config: PaymentConfig,
     raw_name: str,

@@ -36,7 +36,7 @@ from getrichbot.image_utils import prepare_image_for_vision
 from getrichbot.logging_utils import configure_logging
 from getrichbot.models import CardUsageRow, ExpenseDraft, ExpenseRecord, ExpenseRow
 from getrichbot.parser import categorize_description, extract_date_phrase, extract_standalone_date, parse_expense, parse_expenses
-from getrichbot.row_edits import category_for_linked_message, expense_kind, format_saved_row, latest_logged_row, match_category, parse_immediate_edit, plan_edit, record_for_message_id
+from getrichbot.row_edits import category_for_linked_message, expense_kind, format_saved_row, match_category, parse_immediate_edit, plan_edit, record_for_message_id, row_for_immediate_correction
 from getrichbot.sheet_changes import SheetChanges
 from getrichbot.sheets import SheetsClient
 from getrichbot.startup import load_category_config_from_sheets
@@ -1683,7 +1683,28 @@ class FinanceBot:
         usages = []
         if hasattr(self.sheets, "get_card_usage_records"):
             usages = self.sheets.get_card_usage_records(getattr(self.settings, "card_usage_sheet", "Card Usage"))
-        found = latest_logged_row(records, usages, logged_by)
+        reply = getattr(update.message, "reply_to_message", None)
+        reply_id = None
+        reply_entry_id = None
+        if reply is not None:
+            reply_id = getattr(reply, "message_id", None)
+            replied_text = getattr(reply, "text", None) or getattr(reply, "caption", None) or ""
+            reply_entry_id = entry_id_in_text(replied_text)
+        last_id = None
+        if (
+            reply_id in (None, "")
+            and hasattr(self.sheets, "get_state_value")
+            and hasattr(self.settings, "bot_state_sheet")
+        ):
+            last_id = self.sheets.get_state_value(self.settings.bot_state_sheet, LAST_BOT_MESSAGE_KEY)
+        found = row_for_immediate_correction(
+            records,
+            usages,
+            logged_by,
+            reply_message_id=reply_id,
+            reply_entry_id=reply_entry_id,
+            last_bot_message_id=last_id,
+        )
         if found is None:
             await update.message.reply_text("I could not find a recent logged row to update.")
             return True

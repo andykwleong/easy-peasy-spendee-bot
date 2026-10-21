@@ -4,6 +4,7 @@ from decimal import Decimal
 from getrichbot.bot import FinanceBot
 from getrichbot.cards import parse_payment_config
 from getrichbot.categories import configure_category_config
+from getrichbot.email_mail import LAST_BOT_MESSAGE_KEY
 from getrichbot.models import CardUsageRecord, ExpenseRecord
 from getrichbot.row_edits import (
     category_picker_choices,
@@ -248,7 +249,7 @@ class TelegramImmediateEditTests(unittest.IsolatedAsyncioTestCase):
         self.original = configure_snapshot()
         configure_category_config(
             {
-                "variable_categories": ["Food", "Groceries", "Travel", "Income - Sample Pay"],
+                "variable_categories": ["Food", "Groceries", "Travel", "Gifts", "Income - Sample Pay"],
                 "fixed_categories": ["Sample Bills"],
                 "category_keywords": {},
                 "priority_keywords": [],
@@ -328,6 +329,231 @@ class TelegramImmediateEditTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("yes to delete", update.message.replies[0].lower())
         self.assertEqual(sheets.updated, [])
 
+    async def test_change_to_gifts_reply_updates_only_the_replied_row(self):
+        earlier, later = confirmed_pair()
+        handled, sheets, update = await self._run(
+            "Change to gifts",
+            [earlier, later],
+            reply=logged_reply("abc111", 501),
+        )
+
+        self.assertTrue(handled)
+        self.assertEqual(updated_rows(sheets), [4])
+        self.assertEqual(sheets.updated[0]["category"], "Gifts")
+        self.assertIn("[abc111]", update.message.replies[0])
+        self.assertNotIn("[b7c729]", update.message.replies[0])
+
+    async def test_change_to_gifts_without_a_reply_updates_the_previous_bot_message(self):
+        earlier, later = confirmed_pair()
+        handled, sheets, update = await self._run(
+            "Change to gifts",
+            [earlier, later],
+            state={LAST_BOT_MESSAGE_KEY: "501"},
+        )
+
+        self.assertTrue(handled)
+        self.assertEqual(updated_rows(sheets), [4])
+        self.assertEqual(sheets.updated[0]["category"], "Gifts")
+        self.assertIn("[abc111]", update.message.replies[0])
+        self.assertNotIn("[b7c729]", update.message.replies[0])
+
+    async def test_bare_gifts_reply_still_updates_the_replied_row(self):
+        earlier, later = confirmed_pair()
+        handled, sheets, update = await self._run(
+            "gifts",
+            [earlier, later],
+            reply=logged_reply("abc111", 501),
+        )
+
+        self.assertTrue(handled)
+        self.assertEqual(updated_rows(sheets), [4])
+        self.assertEqual(sheets.updated[0]["category"], "Gifts")
+        self.assertIn("[abc111]", update.message.replies[0])
+        self.assertNotIn("[b7c729]", update.message.replies[0])
+
+    async def test_reply_entry_id_wins_when_the_message_id_is_a_different_row(self):
+        earlier, later = confirmed_pair()
+        handled, sheets, update = await self._run(
+            "Change to gifts",
+            [earlier, later],
+            reply=logged_reply("abc111", 502),
+        )
+
+        self.assertTrue(handled)
+        self.assertEqual(updated_rows(sheets), [4])
+        self.assertIn("[abc111]", update.message.replies[0])
+
+    async def test_reply_without_an_entry_id_uses_the_stored_message_id(self):
+        earlier, later = confirmed_pair()
+        handled, sheets, update = await self._run(
+            "change category to gifts",
+            [earlier, later],
+            reply=FakeReply("Logged $21.00 at Sample Wholefoods - 20 October 2026", 501),
+        )
+
+        self.assertTrue(handled)
+        self.assertEqual(updated_rows(sheets), [4])
+        self.assertEqual(sheets.updated[0]["category"], "Gifts")
+        self.assertIn("[abc111]", update.message.replies[0])
+
+    async def test_reply_to_someone_elses_logged_message_updates_that_row(self):
+        partner = expense(
+            row_number=3,
+            entry_id="abc111",
+            timestamp="09:00:00",
+            expense_date="2026-10-20",
+            amount=Decimal("21.00"),
+            category="Food",
+            description="Sample Market",
+            logged_by="Sam",
+            telegram_message_id="501",
+        )
+        mine = expense(
+            row_number=8,
+            entry_id="b7c729",
+            timestamp="18:30:00",
+            expense_date="2026-10-21",
+            amount=Decimal("40.00"),
+            category="Transport",
+            description="Sample Fuel",
+            logged_by="Alex",
+            telegram_message_id="502",
+        )
+        handled, sheets, update = await self._run(
+            "Change to gifts",
+            [partner, mine],
+            reply=logged_reply("abc111", 501),
+        )
+
+        self.assertTrue(handled)
+        self.assertEqual(updated_rows(sheets), [3])
+        self.assertEqual(sheets.updated[0]["category"], "Gifts")
+        self.assertNotIn("logged_by", sheets.updated[0])
+        self.assertIn("[abc111]", update.message.replies[0])
+        self.assertNotIn("[b7c729]", update.message.replies[0])
+
+    async def test_amount_card_and_channel_replies_update_the_replied_row(self):
+        cases = [
+            ("change amount to 30", "amount", Decimal("30.00")),
+            ("change card to Sample Mastercard", "payment_method", "Sample Mastercard"),
+            ("change channel to Online", "payment_channel", "Online"),
+        ]
+        for text, field, expected in cases:
+            with self.subTest(text=text):
+                earlier, later = confirmed_pair()
+                handled, sheets, update = await self._run(
+                    text,
+                    [earlier, later],
+                    reply=logged_reply("abc111", 501),
+                )
+
+                self.assertTrue(handled)
+                self.assertEqual(updated_rows(sheets), [4])
+                self.assertEqual(sheets.updated[0][field], expected)
+                self.assertIn("[abc111]", update.message.replies[0])
+                self.assertNotIn("[b7c729]", update.message.replies[0])
+
+    async def test_a_reply_to_card_only_spend_does_not_edit_the_later_expense(self):
+        usage = CardUsageRecord(
+            row_number=2,
+            entry_id="card01",
+            timestamp="08:00:00",
+            usage_date="2026-10-20",
+            month="2026-10",
+            logged_by="Alex",
+            raw_input="card only",
+            amount=Decimal("12.00"),
+            payment_method="Sample Visa",
+            description="Sample clinic",
+            usage_type="Claimable",
+            status="Confirmed",
+            payment_owner="Alex",
+            payment_channel="",
+        )
+        _earlier, later = confirmed_pair()
+        reply = FakeReply(
+            "Tracked $12.00 on Sample Visa - 20 October 2026 - card limit only, not added to expenses [card01]",
+            601,
+        )
+
+        handled, sheets, update = await self._run(
+            "Change to gifts",
+            [later],
+            reply=reply,
+            usage=[usage],
+        )
+        self.assertTrue(handled)
+        self.assertEqual(sheets.updated, [])
+        self.assertEqual(update.message.replies[0], "Card-only spend has no expense category.")
+
+        handled, sheets, update = await self._run(
+            "change amount to 9.50",
+            [later],
+            reply=reply,
+            usage=[usage],
+        )
+        self.assertTrue(handled)
+        self.assertEqual(updated_rows(sheets), [2])
+        self.assertEqual(sheets.updated[0]["amount"], Decimal("9.50"))
+        self.assertEqual(sheets.updated[0]["sheet"], "Card Usage")
+        self.assertIn("[card01]", update.message.replies[0])
+
+    async def test_a_reply_entry_id_that_matches_nothing_does_not_update_the_latest_row(self):
+        earlier, later = confirmed_pair()
+        handled, sheets, update = await self._run(
+            "Change to gifts",
+            [earlier, later],
+            reply=logged_reply("gone00", 501),
+        )
+
+        self.assertTrue(handled)
+        self.assertEqual(sheets.updated, [])
+        self.assertIn("could not find", update.message.replies[0].lower())
+
+    async def _run(self, text, records, reply=None, state=None, usage=None):
+        sheets = BotSheets(records, state=state)
+        if usage is not None:
+            sheets.usage = usage
+        bot = FinanceBot(BotSettings(), sheets)
+        update = FakeUpdate(text, reply_to_message=reply)
+        handled = await bot.handle_plain_language_command(update)
+        return handled, sheets, update
+
+
+def confirmed_pair():
+    earlier = expense(
+        row_number=4,
+        entry_id="abc111",
+        timestamp="09:00:00",
+        expense_date="2026-10-20",
+        amount=Decimal("21.00"),
+        category="Food",
+        description="Sample Wholefoods",
+        telegram_message_id="501",
+    )
+    later = expense(
+        row_number=8,
+        entry_id="b7c729",
+        timestamp="18:30:00",
+        expense_date="2026-10-21",
+        amount=Decimal("40.00"),
+        category="Transport",
+        description="Sample Fuel",
+        telegram_message_id="502",
+    )
+    return earlier, later
+
+
+def logged_reply(entry_id, message_id):
+    return FakeReply(
+        f"Logged $21.00 at Sample Wholefoods - 20 October 2026 via Sample Shop Card (PayWave) [{entry_id}]",
+        message_id,
+    )
+
+
+def updated_rows(sheets):
+    return [item["row_number"] for item in sheets.updated]
+
 
 def configure_snapshot():
     from getrichbot import categories
@@ -355,6 +581,7 @@ class BotSettings:
     card_limits_sheet = "Card Limits"
     categories_sheet = "Categories"
     category_keywords_sheet = "Category Keywords"
+    bot_state_sheet = "Bot State"
     me_label = "Alex"
     wife_label = "Sam"
     openai_api_key = None
@@ -367,10 +594,11 @@ class BotSettings:
 
 
 class BotSheets:
-    def __init__(self, records):
+    def __init__(self, records, state=None):
         self.records = records
         self.updated = []
         self.usage = []
+        self.state = {} if state is None else state
 
     def get_expense_records(self, sheet_name):
         return self.records
@@ -378,14 +606,17 @@ class BotSheets:
     def get_card_usage_records(self, sheet_name):
         return self.usage
 
+    def get_state_value(self, sheet_name, key):
+        return self.state.get(key)
+
     def get_payment_config(self, payment_methods_sheet, card_limits_sheet):
         return payment_config()
 
     def update_expense_record(self, sheet_name, row_number, **kwargs):
-        self.updated.append(kwargs)
+        self.updated.append({"sheet": sheet_name, "row_number": row_number, **kwargs})
 
     def update_card_usage_record(self, sheet_name, row_number, **kwargs):
-        self.updated.append(kwargs)
+        self.updated.append({"sheet": sheet_name, "row_number": row_number, **kwargs})
 
     def update_monthly_summary(self, sheet_name, rows):
         return None
@@ -405,18 +636,25 @@ class FakeChat:
     id = -100
 
 
+class FakeReply:
+    def __init__(self, text, message_id):
+        self.text = text
+        self.message_id = message_id
+
+
 class FakeMessage:
-    def __init__(self, text):
+    def __init__(self, text, reply_to_message=None):
         self.text = text
         self.replies = []
+        self.reply_to_message = reply_to_message
 
     async def reply_text(self, text, **kwargs):
         self.replies.append(text)
 
 
 class FakeUpdate:
-    def __init__(self, text):
-        self.message = FakeMessage(text)
+    def __init__(self, text, reply_to_message=None):
+        self.message = FakeMessage(text, reply_to_message=reply_to_message)
         self.effective_user = FakeUser()
         self.effective_chat = FakeChat()
 

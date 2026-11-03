@@ -1097,7 +1097,12 @@ function bindRawPan(frame) {
 function startRawPan(event) {
   if (event.button !== 0) return;
   if (event.target.closest("button, a, input, select, textarea, label")) return;
-  state.rawPan = { startX: event.clientX, startLeft: event.currentTarget.scrollLeft };
+  state.rawPan = {
+    startX: event.clientX,
+    startY: event.clientY,
+    startLeft: event.currentTarget.scrollLeft,
+    startTop: window.scrollY
+  };
   event.currentTarget.classList.add("is-panning");
   event.preventDefault();
 }
@@ -1107,6 +1112,7 @@ function moveRawPan(event) {
   const frame = document.querySelector(".raw-frame");
   if (!frame) return;
   frame.scrollLeft = state.rawPan.startLeft - (event.clientX - state.rawPan.startX);
+  window.scrollTo(window.scrollX, state.rawPan.startTop - (event.clientY - state.rawPan.startY));
 }
 
 function endRawPan() {

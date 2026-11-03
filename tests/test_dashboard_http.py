@@ -693,6 +693,8 @@ class DashboardHttpTests(unittest.TestCase):
         self.assertIn("raw-frame", script)
         self.assertIn("bindRawPan", script)
         self.assertIn("scrollLeft", script)
+        self.assertIn("window.scrollY", script)
+        self.assertIn("startY", script)
         self.assertNotIn('shell.classList.add("app-fill")', script)
         self.assertIn("limit.percent_label", script)
         self.assertIn("No cap", script)

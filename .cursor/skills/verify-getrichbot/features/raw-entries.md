@@ -29,7 +29,7 @@ Preconditions:
 ## Gotchas
 
 - Raw entries ignores the Recent `Andy`, `FX`, and `Both` chips. Sam's row is supposed to be here.
-- The table has no scrollbar. Up and down is the page. Sideways is a mouse drag on the table, not a bar.
+- The table has no scrollbar. The page still scrolls up and down. A mouse drag on the table moves it sideways and up and down.
 - The delete control on a raw row is named `Delete Sample cafe` or `Delete Sample market`. This recipe does not click them.
 - Card Usage says `No rows.` because the seed has no card-only spend. That empty state is the proof.
 - Entry ids are `aa1001` and `bb2002`. A six-character id in Telegram chat is a delete lookup, which this page does not perform.

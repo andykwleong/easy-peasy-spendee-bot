@@ -1,6 +1,6 @@
 ---
 name: verify-getrichbot
-description: "Drive the GetRichBot household web dashboard on a local fake-sheet server. Use to prove Recent, Cards, Month, Raw entries, or delete behavior without starting the live Telegram bot or opening the Railway site."
+description: "Drive the GetRichBot household web dashboard on a local fake-sheet server. Use to prove Recent, Cards, Month, Raw entries, Eval, or delete behavior without starting the live Telegram bot or opening the Railway site."
 ---
 
 # Verify GetRichBot
@@ -25,9 +25,11 @@ What launch does:
 
 - Listens on `127.0.0.1` only. The default port is `41731`. Override with `GETRICHBOT_VERIFY_PORT`. It does not read `PORT`, so it will not attach to a Railway-style port by accident.
 - Seeds two confirmed rows and three sample cards. Today is fixed at 26 Sep 2026, so the open month is September 2026.
-  - `aa1001`: Alex, 20 Sep 2026, Food, Sample cafe, $18.50, Sample Visa.
-  - `bb2002`: Sam, 18 Sep 2026, Groceries, Sample market, $12.40, Sample Mastercard.
+  - `aa1001`: Alex, 20 Sep 2026, Food, Sample cafe, $18.50, Sample Visa. Its group note is `Message sent`.
+  - `bb2002`: Sam, 18 Sep 2026, Groceries, Sample market, $12.40, Sample Mastercard. Its group note is `message fail`.
   - Sample Visa (Alex) has a $100 calendar cap. Sample Cashback (Alex) has no cap. Sample Mastercard (Sam) has a $200 calendar cap.
+  - Eval Log has three September 2026 rows and no mail body: Sample cafe stayed Food, Sample market was Groceries then Food, and one mail had no amount. Eval shows 67% logged, 50% unchanged after logging, and 50% sent.
+- The group-note marks and the Eval Log rows live only in this verification process. They are not written to a Google Sheet. Cleanup drops them. A category saved on Recent can change the category score, so read Eval before that save or launch again.
 - Uses the public example categories (Food, Groceries, and the other names in the repo's example list). It does not read `.env`, `categories.json`, or a Google Sheet.
 - If `python-dotenv` is missing, launch creates `.venv` and installs `python-dotenv==1.0.1`, then restarts itself with that interpreter. `.venv` is gitignored. It does not install the Telegram or Google libraries and it does not start the bot. Creating `.venv` needs the system package that provides `python3 -m venv` (on Ubuntu, `python3.12-venv`). If that package is missing, launch stops with the venv error. Install the package and run launch again.
 - Writes the process record to `/tmp/getrichbot-verify/instance.json`. Override the directory with `GETRICHBOT_VERIFY_STATE`. One verification server at a time. A second launch refuses while the first is still running.
@@ -73,6 +75,8 @@ python3 .cursor/skills/verify-getrichbot/scripts/verify_dashboard.py sheet-show 
 `browser-login` runs the same callback the Telegram login widget calls (`onTelegramAuth`). The browser then POSTs that signed payload to the local `/api/session/widget` endpoint. The session cookie is HttpOnly. Later `sheet-show` reads `/api/dashboard` from the page so the cookie is included. That is a second view of the same rows, not a hidden test route.
 
 `browser-click` fails if zero or more than one control has that role and name. It does not guess.
+
+`browser-drag` pans the open Raw entries table from the Sample cafe cell. It fails unless the table moves sideways. It does not click a button. A net amount that starts with a minus must be passed as `--contains=-$30.90`. A separate argument that starts with `-` is read as another flag.
 
 There is no command that opens Telegram. The refused command is `python -m getrichbot.bot`.
 
@@ -120,6 +124,6 @@ Start a fresh launch for each feature. Category edits and deletes stay in the se
 
 ## Helpers
 
-The only helper is `.cursor/skills/verify-getrichbot/scripts/verify_dashboard.py`. Run it with `python3` from the repo root. Commands: `launch`, `doctor`, `browser-open`, `browser-login`, `browser-click`, `browser-select`, `browser-expect`, `browser-screenshot`, `browser-snapshot`, `browser-hosts`, `sheet-show`, `cleanup`. `serve` is the private child process `launch` starts. Do not start it yourself.
+The only helper is `.cursor/skills/verify-getrichbot/scripts/verify_dashboard.py`. Run it with `python3` from the repo root. Commands: `launch`, `doctor`, `browser-open`, `browser-login`, `browser-click`, `browser-select`, `browser-expect`, `browser-screenshot`, `browser-snapshot`, `browser-hosts`, `browser-drag`, `sheet-show`, `cleanup`. `serve` is the private child process `launch` starts. Do not start it yourself.
 
 When the dashboard's screens change, update the feature files with `/maintain-verification-skill`.

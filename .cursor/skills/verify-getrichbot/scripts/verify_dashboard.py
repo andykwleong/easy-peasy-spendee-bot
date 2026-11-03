@@ -97,6 +97,9 @@ def main() -> None:
     hosts.add_argument("--path", required=True)
     hosts.set_defaults(func=cmd_browser_hosts)
 
+    drag = sub.add_parser("browser-drag")
+    drag.set_defaults(func=cmd_browser_drag)
+
     sheet = sub.add_parser("sheet-show")
     sheet.add_argument("--scope", choices=("both", "Alex", "Sam"), required=True)
     sheet.add_argument("--path", required=True)
@@ -401,6 +404,54 @@ def cmd_browser_hosts(args: argparse.Namespace) -> None:
         print(host)
 
 
+def cmd_browser_drag(_args: argparse.Namespace) -> None:
+    """Pan the Raw entries table. Fails unless the table moves sideways."""
+    instance = _require_instance()
+    expression = """
+        (() => {
+          const frame = document.querySelector('.raw-frame');
+          if (!frame) return {ok: false, reason: 'Raw entries is not open.'};
+          const cell = [...frame.querySelectorAll('td')].find((el) => (el.textContent || '').trim() === 'Sample cafe');
+          if (!cell) return {ok: false, reason: 'Sample cafe cell is missing.'};
+          const beforeLeft = frame.scrollLeft;
+          const beforeTop = window.scrollY;
+          const startX = 640;
+          const startY = 420;
+          const shiftX = 180;
+          const shiftY = 120;
+          cell.dispatchEvent(new MouseEvent('mousedown', {
+            bubbles: true, cancelable: true, button: 0, clientX: startX, clientY: startY
+          }));
+          window.dispatchEvent(new MouseEvent('mousemove', {
+            bubbles: true, cancelable: true, button: 0, clientX: startX - shiftX, clientY: startY + shiftY
+          }));
+          const movedLeft = frame.scrollLeft;
+          const movedTop = window.scrollY;
+          window.dispatchEvent(new MouseEvent('mouseup', {
+            bubbles: true, cancelable: true, button: 0, clientX: startX - shiftX, clientY: startY + shiftY
+          }));
+          return {
+            ok: true,
+            beforeLeft,
+            movedLeft,
+            beforeTop,
+            movedTop,
+            panning: frame.classList.contains('is-panning')
+          };
+        })()
+    """
+    with _cdp(instance) as cdp:
+        result = _evaluate(cdp, expression)
+    if not result or not result.get("ok"):
+        raise SystemExit(f"Could not drag the raw table: {result}")
+    if result["movedLeft"] <= result["beforeLeft"] or result["panning"]:
+        raise SystemExit(f"The raw table did not move sideways: {result}")
+    print(
+        f"drag left={result['beforeLeft']}->{result['movedLeft']} "
+        f"top={result['beforeTop']}->{result['movedTop']}"
+    )
+
+
 def cmd_sheet_show(args: argparse.Namespace) -> None:
     instance = _require_instance()
     path = _evidence_path(args.path)
@@ -497,6 +548,15 @@ class FakeSheets:
         self.usage: list = []
         self.summary_rows: list = []
         self.keywords: list = []
+        self.state_rows = [
+            ["group_post:aa1001", "Message sent"],
+            ["group_post:bb2002", "message fail"],
+        ]
+        self.eval_rows = [
+            ["2026-09-20", "sample-cafe-mail", "cafe@example.com", "Sample cafe", "pass", "logged", "aa1001", "Food", "keyword", "Food"],
+            ["2026-09-18", "sample-market-mail", "market@example.com", "Sample market", "pass", "logged", "bb2002", "Groceries", "keyword", "Food"],
+            ["2026-09-12", "sample-quiet-mail", "quiet@example.com", "Quiet note", "fail", "no_amount", "", "", "", ""],
+        ]
         self.config = parse_payment_config(
             [
                 ["Payment Method", "Owner", "Type", "Cycle Type", "Cycle Start Day", "Active"],
@@ -519,6 +579,12 @@ class FakeSheets:
 
     def get_payment_config(self, payment_methods_sheet, card_limits_sheet):
         return self.config
+
+    def get_state_rows(self, sheet_name):
+        return [list(row) for row in self.state_rows]
+
+    def get_eval_log_rows(self):
+        return [list(row) for row in self.eval_rows]
 
     def update_expense_record(self, sheet_name, row_number, **kwargs):
         updated = []

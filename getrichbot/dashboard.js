@@ -30,7 +30,11 @@ const state = {
   watchAbort: null,
   wake: null,
   retryDelay: 15000,
-  refreshNote: ""
+  refreshNote: "",
+  evalPeriod: "",
+  evalOpenId: "",
+  evalOpenText: "",
+  evalOpenError: ""
 };
 
 const app = document.querySelector("#app");
@@ -878,15 +882,223 @@ function messageMark(row) {
 function renderEval() {
   const section = el("section");
   const info = (state.payload && state.payload.agent_eval) || {};
+  const period = selectedEvalPeriod(info);
   const head = el("div", "page-head");
-  head.append(el("h2", "", "Eval"));
+  const text = el("div");
+  text.append(el("h2", "", "Eval"));
+  text.append(el("p", "sub", "Mail and categories use the day the mail was handled. Group notes use the expense date."));
+  head.append(text);
   section.append(head);
-  const box = el("div", "later-box");
-  box.append(el("p", "eval-count", String(info.messages_sent || 0)));
-  box.append(el("p", "", "Messages sent"));
-  box.append(el("p", "sub", info.description || "Telegram accepted the group post."));
-  section.append(box);
+  section.append(evalPeriodChips(info, period));
+  section.append(renderEmailEval(info, period));
+  section.append(renderCategoryEval(info, period));
+  section.append(renderGroupEval(info, period));
   return section;
+}
+
+function selectedEvalPeriod(info) {
+  if (state.evalPeriod) return state.evalPeriod;
+  const today = String(info.today || "");
+  return today.length >= 7 ? today.slice(0, 7) : "all";
+}
+
+function evalPeriodChips(info, period) {
+  const filters = el("div", "filters eval-periods");
+  evalMonths(info).forEach((month) => {
+    filters.append(evalPeriodChip(month, monthLabel(month), period));
+  });
+  filters.append(evalPeriodChip("all", "All time", period));
+  return filters;
+}
+
+function evalPeriodChip(id, label, period) {
+  const chip = el("button", "chip", label);
+  chip.type = "button";
+  chip.setAttribute("aria-pressed", String(period === id));
+  chip.addEventListener("click", () => {
+    if (state.evalPeriod === id) return;
+    state.evalPeriod = id;
+    state.evalOpenId = "";
+    state.evalOpenText = "";
+    state.evalOpenError = "";
+    render();
+  });
+  return chip;
+}
+
+function evalMonths(info) {
+  const months = new Set();
+  const today = String(info.today || "");
+  if (today.length >= 7) months.add(today.slice(0, 7));
+  ["emails", "purchases", "group_messages"].forEach((key) => {
+    (info[key] || []).forEach((row) => {
+      const month = String(row.date || "").slice(0, 7);
+      if (/^\d{4}-\d{2}$/.test(month)) months.add(month);
+    });
+  });
+  return Array.from(months).sort().reverse();
+}
+
+function monthLabel(month) {
+  const names = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+  const parts = String(month || "").split("-");
+  const name = names[Number(parts[1]) - 1];
+  if (!name || !parts[0]) return month;
+  return name + " " + parts[0];
+}
+
+function inEvalPeriod(dateText, period) {
+  if (period === "all") return true;
+  return String(dateText || "").slice(0, 7) === period;
+}
+
+function periodPhrase(period) {
+  return period === "all" ? "all time" : monthLabel(period);
+}
+
+function wholePercent(part, whole) {
+  if (!whole) return null;
+  return Math.floor((part * 100 + Math.floor(whole / 2)) / whole);
+}
+
+function renderEmailEval(info, period) {
+  const block = el("div", "eval-block");
+  block.append(el("h3", "", "Email logging"));
+  const rows = (info.emails || []).filter((row) => inEvalPeriod(row.date, period));
+  const logged = rows.filter((row) => row.result === "pass");
+  const missed = rows.filter((row) => row.result !== "pass");
+  const percent = wholePercent(logged.length, rows.length);
+  if (percent === null) {
+    block.append(el("p", "", "No mail for " + periodPhrase(period) + "."));
+    return block;
+  }
+  block.append(el("p", "eval-count", percent + "%"));
+  block.append(el("p", "", "logged"));
+  block.append(el("p", "", logged.length + " logged"));
+  block.append(el("p", "", missed.length + " not logged"));
+  if (!missed.length) {
+    block.append(el("p", "sub", "Every mail in this view was logged."));
+    return block;
+  }
+  const list = el("div", "eval-list");
+  missed.forEach((row) => list.append(renderFailedMail(row)));
+  block.append(list);
+  return block;
+}
+
+function renderFailedMail(row) {
+  const item = el("div", "eval-row");
+  const button = el("button", "text-btn", "Show this mail");
+  button.type = "button";
+  button.addEventListener("click", () => toggleFailedMail(row.message_id));
+  item.append(el("p", "", shortDate(row.date) + " · " + (row.sender || "Unknown sender")));
+  item.append(el("p", "", row.subject || "(no subject)"));
+  item.append(el("p", "sub", row.reason || "Not logged"));
+  item.append(button);
+  if (state.evalOpenId === row.message_id) {
+    const note = el("pre", "eval-mail");
+    if (state.evalOpenError) note.textContent = state.evalOpenError;
+    else if (state.evalOpenText) note.textContent = state.evalOpenText;
+    else note.textContent = "Reading that mail...";
+    item.append(note);
+  }
+  return item;
+}
+
+function toggleFailedMail(messageId) {
+  if (state.evalOpenId === messageId) {
+    state.evalOpenId = "";
+    state.evalOpenText = "";
+    state.evalOpenError = "";
+    render();
+    return;
+  }
+  state.evalOpenId = messageId;
+  state.evalOpenText = "";
+  state.evalOpenError = "";
+  render();
+  const headers = telegramInitData() && !state.loggedOut ? { "X-Telegram-Init-Data": telegramInitData() } : {};
+  fetch("/api/dashboard/eval-mail?id=" + encodeURIComponent(messageId), {
+    credentials: "same-origin",
+    headers: headers
+  }).then((response) => response.json().catch(() => ({ ok: false }))).then((body) => {
+    if (state.evalOpenId !== messageId) return;
+    if (!body || !body.ok) state.evalOpenError = (body && body.message) || "I could not read that mail.";
+    else state.evalOpenText = body.body || "That mail had no text.";
+    render();
+  }).catch(() => {
+    if (state.evalOpenId !== messageId) return;
+    state.evalOpenError = "I could not read that mail.";
+    render();
+  });
+}
+
+function renderCategoryEval(info, period) {
+  const block = el("div", "eval-block");
+  block.append(el("h3", "", "Categories"));
+  const rows = (info.purchases || []).filter((row) => inEvalPeriod(row.date, period));
+  const changed = rows.filter((row) => row.changed);
+  const kept = rows.length - changed.length;
+  const percent = wholePercent(kept, rows.length);
+  if (percent === null) {
+    block.append(el("p", "", "No email purchases for " + periodPhrase(period) + "."));
+    return block;
+  }
+  block.append(el("p", "eval-count", percent + "%"));
+  block.append(el("p", "", "unchanged after logging"));
+  block.append(el("p", "", kept + " left as logged"));
+  block.append(el("p", "", changed.length + " changed later"));
+  if (!changed.length) {
+    block.append(el("p", "sub", "No email purchase was given a different category after it was logged."));
+    return block;
+  }
+  const list = el("div", "eval-list");
+  changed.forEach((row) => {
+    const item = el("div", "eval-row");
+    const shop = row.shop ? row.shop + ": " : "";
+    item.append(el("p", "", shop + (row.first_category || "blank") + ", then " + (row.final_category || "blank")));
+    item.append(el("p", "sub", shortDate(row.date)));
+    list.append(item);
+  });
+  block.append(list);
+  return block;
+}
+
+function renderGroupEval(info, period) {
+  const block = el("div", "eval-block");
+  block.append(el("h3", "", "Group messages"));
+  const rows = (info.group_messages || []).filter((row) => inEvalPeriod(row.date, period));
+  const sent = rows.filter((row) => row.sent);
+  const missed = rows.filter((row) => !row.sent);
+  const percent = wholePercent(sent.length, rows.length);
+  if (percent === null) {
+    block.append(el("p", "", "No group notes for " + periodPhrase(period) + "."));
+    return block;
+  }
+  block.append(el("p", "eval-count", percent + "%"));
+  block.append(el("p", "", "sent"));
+  block.append(el("p", "", sent.length + " sent"));
+  block.append(el("p", "", missed.length + " not sent"));
+  if (!missed.length) {
+    block.append(el("p", "sub", "Telegram accepted every group note in this view."));
+    return block;
+  }
+  const list = el("div", "eval-list");
+  missed.forEach((row) => {
+    const item = el("div", "eval-row");
+    item.append(el("p", "", (row.shop || "Unknown shop") + " · $" + row.amount));
+    item.append(el("p", "sub", shortDate(row.date) + " · logged by " + (row.logged_by || "unknown")));
+    list.append(item);
+  });
+  block.append(list);
+  return block;
+}
+
+function shortDate(iso) {
+  const names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || ""));
+  if (!match) return String(iso || "");
+  return Number(match[3]) + " " + names[Number(match[2]) - 1] + " " + match[1];
 }
 
 function legend() {

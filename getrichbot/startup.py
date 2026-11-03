@@ -61,6 +61,9 @@ def start_page_and_mail(
 
     print("Dashboard page is starting.", flush=True)
     dashboard_server = start_dashboard_server(settings, sheets, gmail_push=email_service.handle_http)
+    mail_reader = getattr(email_service, "read_failed_mail", None)
+    if dashboard_server is not None and mail_reader is not None:
+        dashboard_server.dashboard_app.read_mail = mail_reader
     email_service.start_tap()
     reader = category_sheets
     if reader is None:

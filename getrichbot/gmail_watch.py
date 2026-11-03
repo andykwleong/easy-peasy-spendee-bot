@@ -13,12 +13,21 @@ from decimal import Decimal
 from typing import Callable
 
 from getrichbot import categories as category_lists
+from getrichbot.email_mail import REASON_DUPLICATE
+from getrichbot.email_mail import REASON_LOGGED
+from getrichbot.email_mail import REASON_NOT_FOUND
+from getrichbot.email_mail import REASON_NOT_WRITTEN
+from getrichbot.email_mail import REASON_NO_INCOME_MISC
+from getrichbot.email_mail import REASON_REVERSAL
+from getrichbot.email_mail import REASON_REVERSAL_MISSING
+from getrichbot.email_mail import REASON_SHEET_UNREADABLE
 from getrichbot.email_mail import EmailDecision
 from getrichbot.email_mail import INCOME_MISC
 from getrichbot.email_mail import SINGAPORE_TZ
 from getrichbot.email_mail import build_expense_row
+from getrichbot.eval_log import eval_sheet_row
 from getrichbot.shop_category import apply_shop_keyword
-from getrichbot.shop_category import categorize_email_shop
+from getrichbot.shop_category import email_shop_match
 from getrichbot.shop_category import shop_choice_state_key
 from getrichbot.shop_category import stop_shop_keyword
 from getrichbot.shop_lookup import lookup_shop_text
@@ -135,6 +144,7 @@ class EmailService:
         # reset on the next tap. There is no timer.
         self._tap_stage = threading.local()
         self._lock = threading.RLock()
+        self.eval_log = None
 
     def bind_notifier(self, loop, send) -> None:
         def notify(text: str) -> None:
@@ -394,7 +404,7 @@ class EmailService:
             payment_channel=match,
             description=str(current.get("shop") or ""),
         )
-        text = self._write(decision, str(current.get("message_id") or ""))
+        text = self._write(decision, str(current.get("message_id") or ""), "", "")
         self._save_pending(pending[1:])
         return [text] if text else []
 
@@ -485,16 +495,22 @@ class EmailService:
         if self._done(message_id):
             return []
         try:
-            subject, body, addresses = self.mailbox.fetch(message_id)
+            fetched = self.mailbox.fetch(message_id)
         except Exception as exc:
             if not _is_not_found(exc):
                 raise
             self.state.set(_message_key(message_id), "skipped")
             LOGGER.info("Gmail message %s is no longer in the mailbox, so it was skipped.", message_id)
+            self._record_eval(message_id, "", "", result="fail", reason=REASON_NOT_FOUND)
             return []
-        decision = self._decide(subject, body, tuple(addresses))
+        subject, body, addresses = fetched[0], fetched[1], tuple(fetched[2])
+        sender = fetched[3] if len(fetched) > 3 else ""
+        if not sender and addresses:
+            sender = str(addresses[0])
+        decision = self._decide(subject, body, addresses)
         if decision.action == "ignore":
             self.state.set(_message_key(message_id), "ignored")
+            self._record_eval(message_id, sender, subject, result="fail", reason=decision.reason or REASON_NOT_WRITTEN)
             return []
         if decision.action == "ask":
             if decision.kind == "channel":
@@ -502,13 +518,23 @@ class EmailService:
                 self.state.set(_message_key(message_id), "channel")
             else:
                 self.state.set(_message_key(message_id), "asked")
+            self._record_eval(message_id, sender, subject, result="fail", reason=decision.reason or REASON_NOT_WRITTEN)
             return [decision.text] if decision.text else []
         if decision.action == "reverse":
             removed, text = self._reverse(decision)
             self.state.set(_message_key(message_id), "logged" if removed else "asked")
+            if removed:
+                reason = REASON_REVERSAL
+            elif text == REVERSAL_MISSING_TEXT:
+                reason = REASON_REVERSAL_MISSING
+            elif "could not read" in (text or "").casefold():
+                reason = REASON_SHEET_UNREADABLE
+            else:
+                reason = REASON_NOT_WRITTEN
+            self._record_eval(message_id, sender, subject, result="fail", reason=reason)
             return [text] if text else []
         if decision.action == "log":
-            text = self._write(decision, message_id)
+            text = self._write(decision, message_id, subject, sender)
             return [text] if text else []
         return []
 
@@ -537,9 +563,10 @@ class EmailService:
             return False, REVERSAL_MISSING_TEXT
         return True, reversal_removed_text(match)
 
-    def _write(self, decision: EmailDecision, message_id: str) -> str:
+    def _write(self, decision: EmailDecision, message_id: str, subject: str = "", sender: str = "") -> str:
         if decision.category == INCOME_MISC and not self.context.has_income_misc():
             self.state.set(_message_key(message_id), "asked")
+            self._record_eval(message_id, sender, subject, result="fail", reason=REASON_NO_INCOME_MISC)
             return (
                 "I have not logged this. The sheet has no category named exactly "
                 "Income - misc, and I will not invent one."
@@ -554,7 +581,65 @@ class EmailService:
                 self.state.set(shop_choice_state_key(row.entry_id), json.dumps(list(decision.shop_choices)))
             except Exception:
                 LOGGER.exception("Could not store the shop category buttons. The purchase is still logged.")
+        if outcome.logged:
+            reason = decision.reason or REASON_LOGGED
+        elif "duplicate" in (outcome.text or "").casefold():
+            reason = REASON_DUPLICATE
+        else:
+            reason = REASON_NOT_WRITTEN
+        self._record_eval(
+            message_id,
+            sender,
+            subject,
+            result="pass" if outcome.logged else "fail",
+            reason=reason,
+            entry_id=row.entry_id if outcome.logged else "",
+            first_category=decision.category if outcome.logged else "",
+            category_source=decision.category_source if outcome.logged else "",
+            final_category=decision.category if outcome.logged else "",
+            purchase=outcome.logged and decision.kind == "purchase",
+        )
         return text
+
+    def _record_eval(
+        self,
+        message_id: str,
+        sender: str,
+        subject: str,
+        *,
+        result: str,
+        reason: str,
+        entry_id: str = "",
+        first_category: str = "",
+        category_source: str = "",
+        final_category: str = "",
+        purchase: bool = False,
+    ) -> None:
+        """Append one Eval Log row. A failed append is logged and does not stop the mail."""
+        writer = self.eval_log
+        if writer is None:
+            return
+        row = eval_sheet_row(
+            logged_on=self._now().date().isoformat(),
+            message_id=message_id,
+            sender=sender,
+            subject=subject,
+            result=result,
+            reason=reason,
+            entry_id=entry_id,
+            first_category=first_category,
+            category_source=category_source,
+            final_category=final_category,
+            purchase=purchase,
+        )
+        try:
+            writer(row)
+        except Exception:
+            LOGGER.exception("Could not write the Eval Log row. The mail handling was not changed.")
+
+    def read_failed_mail(self, message_id: str) -> str:
+        fetched = self.mailbox.fetch(message_id)
+        return str(fetched[1] if len(fetched) > 1 else "")
 
     def _decide(self, subject: str, body: str, addresses: tuple[str, ...]) -> EmailDecision:
         try:
@@ -566,6 +651,7 @@ class EmailService:
                 action="ask",
                 kind="unclear",
                 text="I got mail but could not read the card list. I have not logged it.",
+                reason=REASON_SHEET_UNREADABLE,
             )
         return decide_mail(
             subject,
@@ -807,7 +893,7 @@ class BotEmailContext:
                 settings.openai_model,
             )
 
-        return categorize_email_shop(
+        matched = email_shop_match(
             shop,
             logged_by,
             settings.me_label,
@@ -817,6 +903,9 @@ class BotEmailContext:
             save,
             ask,
         )
+        category = matched.category or ""
+        source = matched.source if category else "none"
+        return category, source
 
 
 def attach_email(bot, settings, sheets) -> EmailService:
@@ -832,6 +921,7 @@ def attach_email(bot, settings, sheets) -> EmailService:
         context=BotEmailContext(bot),
         writer=bot.log_email_row,
     )
+    service.eval_log = sheets.append_eval_log
     bot.email_service = service
     return service
 

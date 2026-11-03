@@ -41,6 +41,7 @@ class FetchedMail:
     subject: str
     body: str
     addresses: tuple[str, ...]
+    sender: str = ""
 
 
 class GmailApiMailbox:
@@ -112,7 +113,7 @@ class GmailApiMailbox:
     def fetch(self, message_id: str) -> tuple[str, str, tuple[str, ...]]:
         message = self._gmail().users().messages().get(userId="me", id=message_id, format="full").execute()
         fetched = parse_gmail_message(message)
-        return fetched.subject, fetched.body, fetched.addresses
+        return fetched.subject, fetched.body, fetched.addresses, fetched.sender
 
     def _gmail(self):
         if self._service is None:
@@ -191,7 +192,12 @@ def parse_gmail_message(message: dict) -> FetchedMail:
     subject = _header(headers, "Subject")
     address_blob = "\n".join(_header(headers, name) for name in _HEADER_NAMES)
     addresses = addresses_in_text(address_blob + "\n" + _plain_text(payload))
-    return FetchedMail(subject=subject, body=_plain_text(payload), addresses=addresses)
+    return FetchedMail(
+        subject=subject,
+        body=_plain_text(payload),
+        addresses=addresses,
+        sender=_header(headers, "From"),
+    )
 
 
 def verify_pubsub_token(token: str, audience: str, expected_email: str | None) -> bool:

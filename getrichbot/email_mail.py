@@ -27,6 +27,32 @@ _ENTRY_RE = re.compile(r"\[([A-Za-z0-9]{6})\]")
 SINGAPORE_TZ = ZoneInfo("Asia/Singapore")
 INCOME_MISC = "Income - misc"
 
+REASON_LOGGED = "logged"
+REASON_NO_AMOUNT = "no_amount"
+REASON_NO_DATE = "no_date"
+REASON_NO_CARD = "no_card"
+REASON_NO_CARD_MATCH = "no_card_match"
+REASON_SALARY = "salary"
+REASON_STATEMENT = "statement"
+REASON_REVERSAL = "reversal"
+REASON_REVERSAL_MISSING = "reversal_missing"
+REASON_NOT_FOUND = "not_found"
+REASON_NO_INCOME_MISC = "no_income_misc"
+REASON_DUPLICATE = "duplicate"
+REASON_SHEET_UNREADABLE = "sheet_unreadable"
+REASON_NOT_WRITTEN = "not_written"
+DECIDE_MAIL_REASONS = (
+    REASON_LOGGED,
+    REASON_NO_AMOUNT,
+    REASON_NO_DATE,
+    REASON_NO_CARD,
+    REASON_NO_CARD_MATCH,
+    REASON_SALARY,
+    REASON_STATEMENT,
+    REASON_REVERSAL,
+    REASON_NO_INCOME_MISC,
+)
+
 PURCHASE_SUBJECT = "uob - transaction alert"
 REFUND_SUBJECT = "your transaction has been refunded"
 STATEMENT_SUBJECT = "your estatement/eadvice is ready for viewing"
@@ -105,6 +131,8 @@ class EmailDecision:
     channels: tuple[str, ...] = ()
     description: str = ""
     shop_choices: tuple[str, ...] = ()
+    reason: str = ""
+    category_source: str = ""
 
 
 def decide_mail(
@@ -124,7 +152,7 @@ def decide_mail(
 ) -> EmailDecision:
     kind = classify_kind(subject, body)
     if kind == "statement":
-        return EmailDecision(action="ignore", kind=kind)
+        return EmailDecision(action="ignore", kind=kind, reason=REASON_STATEMENT)
     if kind in {"refund", "paynow", "dividend", "interest"}:
         return _income_decision(kind, body, addresses, forwarders, categories, today)
     if _REVERSAL_RE.search(body or ""):
@@ -149,6 +177,7 @@ def decide_mail(
             action="ask",
             kind=kind,
             text="This looks like salary. I have not logged it. Type income in the chat if you want it recorded.",
+            reason=REASON_SALARY,
         )
     return purchase
 
@@ -326,11 +355,12 @@ def _purchase_decision(
     missing = _missing_purchase_pieces(amount, expense_date, last4)
     if missing:
         if amount is None and not last4:
-            return EmailDecision(action="ignore", kind="purchase")
+            return EmailDecision(action="ignore", kind="purchase", reason=REASON_NO_AMOUNT)
         return EmailDecision(
             action="ask",
             kind="purchase",
             text=_missing_purchase_text(missing),
+            reason=_missing_reason(missing),
         )
     matches = match_cards_by_last4(last4, methods)
     if len(matches) != 1:
@@ -340,6 +370,7 @@ def _purchase_decision(
             shop=shop,
             amount=amount,
             text="I got a purchase but could not match one card from the Last 4 column. I have not logged it.",
+            reason=REASON_NO_CARD_MATCH,
         )
     card = matches[0]
     logged_by = _logged_by(addresses, forwarders) or ""
@@ -374,6 +405,8 @@ def _purchase_decision(
         payment_channel=channel,
         description=shop,
         shop_choices=chosen_category.choices,
+        reason=REASON_LOGGED,
+        category_source=chosen_category.source or "none",
     )
 
 
@@ -402,11 +435,12 @@ def _bank_account_decision(
         missing.append("date")
     if missing:
         if amount is None:
-            return EmailDecision(action="ignore", kind="purchase")
+            return EmailDecision(action="ignore", kind="purchase", reason=REASON_NO_AMOUNT)
         return EmailDecision(
             action="ask",
             kind="purchase",
             text=_missing_purchase_text(missing),
+            reason=_missing_reason(missing),
         )
     logged_by = _logged_by(addresses, forwarders) or ""
     chosen_category = purchase_category(
@@ -430,6 +464,8 @@ def _bank_account_decision(
         payment_method=PAYNOW_METHOD,
         description=shop,
         shop_choices=chosen_category.choices,
+        reason=REASON_LOGGED,
+        category_source=chosen_category.source or "none",
     )
 
 
@@ -450,6 +486,7 @@ def _reversal_decision(body: str, today: date) -> EmailDecision:
         shop=shop,
         last4=last4,
         expense_date=_mail_date(body, today),
+        reason=REASON_REVERSAL,
     )
 
 
@@ -469,6 +506,7 @@ def _income_decision(
                 "I have not logged this. The sheet has no category named exactly "
                 "Income - misc, and I will not invent one."
             ),
+            reason=REASON_NO_INCOME_MISC,
         )
     amount = _one_amount(body)
     if amount is None:
@@ -476,6 +514,7 @@ def _income_decision(
             action="ask",
             kind=kind,
             text="I could not see one amount, so I have not logged this as income.",
+            reason=REASON_NO_AMOUNT,
         )
     labels = {
         "refund": "Refund",
@@ -493,6 +532,7 @@ def _income_decision(
         category=INCOME_MISC,
         logged_by=logged_by,
         description=description,
+        reason=REASON_LOGGED,
     )
 
 
@@ -579,6 +619,14 @@ def _missing_purchase_pieces(amount, expense_date, last4) -> list[str]:
     if not last4:
         missing.append("card")
     return missing
+
+
+def _missing_reason(missing: list[str]) -> str:
+    if "amount" in missing:
+        return REASON_NO_AMOUNT
+    if "date" in missing:
+        return REASON_NO_DATE
+    return REASON_NO_CARD
 
 
 def _missing_purchase_text(missing: list[str]) -> str:

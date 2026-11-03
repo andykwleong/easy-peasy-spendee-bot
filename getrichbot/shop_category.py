@@ -36,12 +36,14 @@ class ShopCategory:
     category: str | None
     learned_keyword: str = ""
     lookup_query: str = ""
+    source: str = "none"
 
 
 @dataclass(frozen=True)
 class PurchaseCategory:
     category: str = ""
     choices: tuple[str, ...] = ()
+    source: str = "none"
 
 
 @dataclass(frozen=True)
@@ -134,35 +136,30 @@ def purchase_category(
     """
     history = _shop_history(expense_records, shop)
     if len(history) == 1:
-        return PurchaseCategory(history[0])
+        return PurchaseCategory(history[0], source="none")
     if len(history) > 1:
         _stop_shop_keyword(stop_keyword, shop)
-        return PurchaseCategory("", history)
+        return PurchaseCategory("", history, "none")
 
     sheet = tuple(category for category in categories if category)
     if is_grab_shop(shop):
         transport = existing_transport_category(sheet) or ""
         if transport:
             _remember_purchase_shop(remember_category, shop, transport)
-        return PurchaseCategory(transport)
+            return PurchaseCategory(transport, source="grab")
+        return PurchaseCategory("", source="none")
     expense_names = tuple(category for category in sheet if not category.casefold().startswith("income -"))
     named = category_named_in_text(body, expense_names)
     if named:
         _remember_purchase_shop(remember_category, shop, named)
-        return PurchaseCategory(named)
-    try:
-        try:
-            category = category_for(shop, logged_by, body) or ""
-        except TypeError:
-            category = category_for(shop, logged_by) or ""
-    except Exception:
-        LOGGER.exception("Could not choose a category. The purchase is still logged with a blank category.")
-        category = ""
+        return PurchaseCategory(named, source="none")
+    category, source = _category_from_callback(category_for, shop, logged_by, body)
     if str(category).casefold().startswith("income -"):
-        return PurchaseCategory("")
+        return PurchaseCategory("", source="none")
     if category:
         _remember_purchase_shop(remember_category, shop, category)
-    return PurchaseCategory(str(category or ""))
+        return PurchaseCategory(str(category), source=source)
+    return PurchaseCategory("", source="none")
 
 
 def confirmed_shop_categories(records, shop: str) -> tuple[str, ...]:
@@ -292,12 +289,12 @@ def resolve_shop_category(
     if is_grab_shop(shop):
         transport = existing_transport_category(sheet_categories)
         if transport:
-            return ShopCategory(transport, shop_keyword(shop))
+            return ShopCategory(transport, shop_keyword(shop), source="grab")
         return ShopCategory(None)
     allowed = tuple(category for category in sheet_categories if not category.casefold().startswith("income"))
     known = category_from_keywords(shop, logged_by, me_label, wife_label)
     if known in allowed:
-        return ShopCategory(known)
+        return ShopCategory(known, source="keyword")
     named = _category_name_in_text(shop, allowed)
     if named is not None:
         return ShopCategory(named)
@@ -324,7 +321,7 @@ def resolve_shop_category(
     accepted = _accepted_category(chosen, sheet_categories)
     if accepted is None:
         return ShopCategory(None, "", query)
-    return ShopCategory(accepted, shop_keyword(query), query)
+    return ShopCategory(accepted, shop_keyword(query), query, "exa_ai")
 
 
 def categorize_email_shop(
@@ -337,13 +334,54 @@ def categorize_email_shop(
     save,
     ask=None,
 ) -> str | None:
+    return email_shop_match(shop, logged_by, me_label, wife_label, categories, lookup, save, ask).category
+
+
+def email_shop_match(
+    shop: str,
+    logged_by: str,
+    me_label: str,
+    wife_label: str,
+    categories: tuple[str, ...],
+    lookup,
+    save,
+    ask=None,
+) -> ShopCategory:
     result = resolve_shop_category(shop, logged_by, me_label, wife_label, categories, lookup, ask)
     if result.category and result.learned_keyword:
         try:
             save(result.learned_keyword, result.category)
         except Exception:
             LOGGER.exception("Could not save the shop keyword. The purchase is still logged.")
-    return result.category
+    return result
+
+
+def _category_from_callback(category_for, shop: str, logged_by: str, body) -> tuple[str, str]:
+    try:
+        try:
+            raw = category_for(shop, logged_by, body)
+        except TypeError:
+            raw = category_for(shop, logged_by)
+    except Exception:
+        LOGGER.exception("Could not choose a category. The purchase is still logged with a blank category.")
+        return "", "none"
+    if isinstance(raw, tuple):
+        category = raw[0] if raw else ""
+        source = raw[1] if len(raw) > 1 else "none"
+        return str(category or ""), _source_name(source, bool(category))
+    text = str(raw or "")
+    if not text:
+        return "", "none"
+    return text, "keyword"
+
+
+def _source_name(source, chosen: bool) -> str:
+    if not chosen:
+        return "none"
+    text = str(source or "").strip().casefold()
+    if text in {"keyword", "grab", "exa_ai", "none"}:
+        return text
+    return "none"
 
 
 def remember_email_shop_correction(record, category: str, save) -> None:

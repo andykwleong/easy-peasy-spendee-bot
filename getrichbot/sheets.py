@@ -8,8 +8,13 @@ from typing import Any
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
-from getrichbot.models import CardUsageRecord, CardUsageRow, ExpenseRecord, ExpenseRow, is_paynow_method
 from getrichbot.cards import PaymentConfig, parse_payment_config
+from getrichbot.eval_log import CATEGORY_SOURCES
+from getrichbot.eval_log import EVAL_HEADERS
+from getrichbot.eval_log import EVAL_LOG_SHEET
+from getrichbot.eval_log import category_after_choice
+from getrichbot.eval_log import parse_eval_rows
+from getrichbot.models import CardUsageRecord, CardUsageRow, ExpenseRecord, ExpenseRow, is_paynow_method
 from getrichbot.sheet_changes import SheetChanges
 
 LOGGER = logging.getLogger(__name__)
@@ -129,6 +134,65 @@ class SheetsClient:
             body={"values": [row.to_sheet_row(include_payment_owner=include_payment_owner, include_payment_channel=include_payment_channel)]},
         ).execute()
         self._note_sheet_write(sheet_name)
+
+    def append_eval_log(self, values: list[str]) -> None:
+        """Append one hidden Eval Log row. The caller catches a failure."""
+        self._ensure_hidden_sheet(EVAL_LOG_SHEET)
+        header = self._service().spreadsheets().values().get(
+            spreadsheetId=self.sheet_id,
+            range=f"{EVAL_LOG_SHEET}!A1:J1",
+        ).execute()
+        if not header.get("values"):
+            self._service().spreadsheets().values().update(
+                spreadsheetId=self.sheet_id,
+                range=f"{EVAL_LOG_SHEET}!A1:J1",
+                valueInputOption="RAW",
+                body={"values": [list(EVAL_HEADERS)]},
+            ).execute()
+        self._service().spreadsheets().values().append(
+            spreadsheetId=self.sheet_id,
+            range=f"{EVAL_LOG_SHEET}!A:J",
+            valueInputOption="RAW",
+            insertDataOption="INSERT_ROWS",
+            body={"values": [values]},
+        ).execute()
+        self._note_sheet_write(EVAL_LOG_SHEET)
+
+    def get_eval_log_rows(self) -> list[list[str]]:
+        if self._sheet_id(EVAL_LOG_SHEET) is None:
+            return []
+        result = self._service().spreadsheets().values().get(
+            spreadsheetId=self.sheet_id,
+            range=f"{EVAL_LOG_SHEET}!A2:J",
+        ).execute()
+        return result.get("values", [])
+
+    def update_eval_category(self, entry_id: str, category: str) -> None:
+        """First choice fills both category columns. A later choice updates the final one."""
+        cleaned = " ".join((category or "").split())
+        target = (entry_id or "").strip()
+        if not cleaned or not target or self._sheet_id(EVAL_LOG_SHEET) is None:
+            return
+        rows = self.get_eval_log_rows()
+        updates = []
+        for row in parse_eval_rows(rows):
+            if row.entry_id.casefold() != target.casefold():
+                continue
+            if row.result != "pass" or row.category_source not in CATEGORY_SOURCES:
+                continue
+            new_first, new_final = category_after_choice(row.first_category, row.final_category, cleaned)
+            if new_first == row.first_category and new_final == row.final_category:
+                continue
+            if new_first != row.first_category:
+                updates.append({"range": f"{EVAL_LOG_SHEET}!H{row.row_number}", "values": [[new_first]]})
+            updates.append({"range": f"{EVAL_LOG_SHEET}!J{row.row_number}", "values": [[new_final]]})
+        if not updates:
+            return
+        self._service().spreadsheets().values().batchUpdate(
+            spreadsheetId=self.sheet_id,
+            body={"valueInputOption": "RAW", "data": updates},
+        ).execute()
+        self._note_sheet_write(EVAL_LOG_SHEET)
 
     def get_payment_config(self, payment_methods_sheet: str, card_limits_sheet: str) -> PaymentConfig:
         methods_source, method_rows = self._get_values_first_available(
@@ -689,6 +753,34 @@ class SheetsClient:
         sheet_id = self._sheet_id(sheet_name)
         if sheet_id is None:
             raise RuntimeError(f"Could not create sheet tab: {sheet_name}")
+        return sheet_id
+
+    def _ensure_hidden_sheet(self, sheet_name: str) -> int:
+        sheet_id = self._sheet_id(sheet_name)
+        if sheet_id is None:
+            self._service().spreadsheets().batchUpdate(
+                spreadsheetId=self.sheet_id,
+                body={"requests": [{"addSheet": {"properties": {"title": sheet_name, "hidden": True}}}]},
+            ).execute()
+            with self._cache_lock:
+                self._tab_ids.clear()
+            sheet_id = self._sheet_id(sheet_name)
+            if sheet_id is None:
+                raise RuntimeError(f"Could not create sheet tab: {sheet_name}")
+            return sheet_id
+        self._service().spreadsheets().batchUpdate(
+            spreadsheetId=self.sheet_id,
+            body={
+                "requests": [
+                    {
+                        "updateSheetProperties": {
+                            "properties": {"sheetId": sheet_id, "hidden": True},
+                            "fields": "hidden",
+                        }
+                    }
+                ]
+            },
+        ).execute()
         return sheet_id
 
     def _sheet_id(self, sheet_name: str) -> int | None:

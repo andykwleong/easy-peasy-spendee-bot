@@ -24,6 +24,10 @@ from getrichbot.dashboard_auth import (
     verify_webapp_init_data,
 )
 from getrichbot.dashboard_view import build_dashboard_payload, cards_scope_allowed, named_household_labels, recent_scope_allowed
+from getrichbot.eval_log import failed_message_ids
+from getrichbot.eval_log import limit_mail_text
+from getrichbot.eval_log import remember_category_choice
+from getrichbot.eval_log import valid_message_id
 from getrichbot.group_post import marks_from_state_rows
 from getrichbot.row_edits import expense_kind, format_saved_row, plan_edit
 from getrichbot.sheets import CATEGORY_SHEET_READ_TIMEOUT_SECONDS
@@ -99,6 +103,7 @@ class DashboardApp:
         self._bot_username: str | None = None
         self._changes_missing_logged = False
         self.gmail_push = None
+        self.read_mail = None
         self._gmail_lock = threading.Lock()
         self._static = {
             path: (content_type, file_path.read_bytes())
@@ -132,6 +137,8 @@ class DashboardApp:
             return self._login_widget(body, secure)
         if method == "GET" and path == "/api/dashboard":
             return self._dashboard(normalized, query)
+        if method == "GET" and path == "/api/dashboard/eval-mail":
+            return self._eval_mail(normalized, query)
         if method == "GET" and path == "/api/dashboard/changes":
             return self._changes(normalized, query)
         if method == "POST" and path == "/api/dashboard/edit":
@@ -371,6 +378,7 @@ class DashboardApp:
                         planned.category,
                         records,
                     )
+                    remember_category_choice(self.context.sheets, record.entry_id, planned.category)
                 try:
                     self._refresh_monthly_summary(timeout_seconds=CATEGORY_SHEET_READ_TIMEOUT_SECONDS)
                 except Exception:
@@ -550,10 +558,51 @@ class DashboardApp:
             household_labels=self._household_labels(),
             missing_category=missing_category,
             message_marks=self._message_marks(),
+            eval_rows=self._eval_rows(),
         )
         if change_mark is not None:
             payload["change_mark"] = change_mark
         return payload
+
+    def _eval_mail(self, headers: dict[str, str], query: dict[str, str]) -> tuple[int, list[tuple[str, str]], bytes]:
+        """One failed mail, read when that row is opened. A miss does not blank the Eval tab."""
+        identity = self._identity_from_headers(headers)
+        if identity is None:
+            return _json(401, {"ok": False, "error": "locked"})
+        if self.context.label_for_user(identity.user_id) is None:
+            return _json(401, {"ok": False, "error": "not_allowed"})
+        message_id = query.get("id", "")
+        if not valid_message_id(message_id):
+            return _json(200, {"ok": False, "message": "I could not read that mail."})
+        try:
+            allowed = message_id in failed_message_ids(self._eval_rows())
+        except Exception:
+            LOGGER.warning("Dashboard could not check Eval Log for one mail. The rest of Eval is unchanged.")
+            return _json(200, {"ok": False, "message": "I could not read that mail."})
+        if not allowed:
+            return _json(200, {"ok": False, "message": "I could not read that mail."})
+        reader = self.read_mail
+        if reader is None:
+            return _json(200, {"ok": False, "message": "I could not read that mail."})
+        try:
+            body = reader(message_id)
+        except Exception:
+            LOGGER.exception("Dashboard could not read that one mail. The rest of Eval is unchanged.")
+            return _json(200, {"ok": False, "message": "I could not read that mail."})
+        return _json(200, {"ok": True, "body": limit_mail_text(str(body or ""))})
+
+    def _eval_rows(self) -> list[list[str]]:
+        reader = getattr(self.context.sheets, "get_eval_log_rows", None)
+        if reader is None:
+            return []
+        try:
+            rows = reader()
+        except Exception:
+            LOGGER.warning("Dashboard could not read Eval Log. The other numbers are still shown.")
+            return []
+        if not isinstance(rows, list):
+            return []
+        return rows
 
     def _message_marks(self) -> dict[str, str]:
         """Bot State marks for the status dots. A failed read leaves every row unmarked."""
@@ -673,6 +722,7 @@ def start_dashboard_server(
     host: str = "0.0.0.0",
     port: int | None = None,
     gmail_push=None,
+    read_mail=None,
 ) -> DashboardHTTPServer | None:
     if port is None:
         raw_port = os.getenv("PORT", "8080").strip() or "8080"
@@ -683,6 +733,7 @@ def start_dashboard_server(
             return None
     app = DashboardApp(context_from_settings(settings, sheets))
     app.gmail_push = gmail_push
+    app.read_mail = read_mail
     try:
         server = DashboardHTTPServer(host, port, app)
     except OSError:

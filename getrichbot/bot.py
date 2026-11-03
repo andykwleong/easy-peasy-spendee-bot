@@ -40,6 +40,8 @@ from getrichbot.parser import categorize_description, extract_date_phrase, extra
 from getrichbot.row_edits import category_for_linked_message, expense_kind, format_saved_row, match_category, parse_immediate_edit, plan_edit, record_for_message_id, row_for_immediate_correction
 from getrichbot.sheet_changes import SheetChanges
 from getrichbot.sheets import SheetsClient
+from getrichbot.eval_log import EVAL_LOG_SHEET
+from getrichbot.eval_log import remember_category_choice
 from getrichbot.startup import load_category_config_from_sheets
 from getrichbot.startup import start_page_and_mail
 from getrichbot.summary import (
@@ -571,6 +573,7 @@ class FinanceBot:
 
         await query.answer()
         record_shop_category_choice(self.sheets, self.settings.raw_expenses_sheet, record, tap.category)
+        remember_category_choice(self.sheets, record.entry_id, tap.category)
         try:
             self.sheets.set_state_value(self.settings.bot_state_sheet, shop_choice_state_key(entry_id), "")
         except Exception:
@@ -1642,6 +1645,7 @@ class FinanceBot:
         if chosen.status != "ok" or record is None or chosen.category not in ALL_CATEGORIES:
             return False
         record_shop_category_choice(self.sheets, self.settings.raw_expenses_sheet, record, chosen.category)
+        remember_category_choice(self.sheets, record.entry_id, chosen.category)
         try:
             self.sheets.set_state_value(self.settings.bot_state_sheet, shop_choice_state_key(entry_id), "")
         except Exception:
@@ -1697,6 +1701,7 @@ class FinanceBot:
             updates["payment_owner"] = ""
             updates["payment_channel"] = ""
         self.sheets.update_expense_record(self.settings.raw_expenses_sheet, record.row_number, **updates)
+        remember_category_choice(self.sheets, record.entry_id, category)
         apply_email_shop_correction(
             self.sheets,
             self.settings.category_keywords_sheet,
@@ -1825,6 +1830,7 @@ class FinanceBot:
                 updates["payment_channel"] = planned.payment_channel
             self.sheets.update_expense_record(sheet_name, record.row_number, **updates)
             if planned.category is not None:
+                remember_category_choice(self.sheets, record.entry_id, planned.category)
                 apply_email_shop_correction(
                     self.sheets,
                     self.settings.category_keywords_sheet,
@@ -1958,6 +1964,7 @@ class FinanceBot:
                 transaction_type=_transaction_type_for_category(change.category, change.record.input_type) if change.category else None,
             )
             if change.category:
+                remember_category_choice(self.sheets, change.record.entry_id, change.category)
                 apply_email_shop_correction(
                     self.sheets,
                     self.settings.category_keywords_sheet,
@@ -3828,6 +3835,7 @@ def main() -> None:
         watched_sheets=frozenset({
             settings.raw_expenses_sheet,
             settings.card_usage_sheet,
+            EVAL_LOG_SHEET,
         })
     )
     sheets = SheetsClient(

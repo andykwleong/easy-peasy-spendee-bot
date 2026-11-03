@@ -5,6 +5,7 @@ from decimal import Decimal
 
 from getrichbot.cards import CardLimit, PaymentConfig, build_card_summary
 from getrichbot.categories import ALL_CATEGORIES
+from getrichbot.eval_log import eval_view
 from getrichbot.group_post import message_status_for
 from getrichbot.group_post import messages_sent_count
 from getrichbot.models import CardUsageRecord, ExpenseRecord, is_paynow_method
@@ -114,6 +115,7 @@ def build_dashboard_payload(
     household_labels: tuple[str, ...] = (),
     missing_category: bool = False,
     message_marks: dict[str, str] | None = None,
+    eval_rows: list[list[str]] | None = None,
 ) -> dict:
     labels = named_household_labels(household_labels)
     if not recent_scope_allowed(scope, labels):
@@ -168,6 +170,7 @@ def build_dashboard_payload(
             "scoring": False,
             "messages_sent": messages_sent_count(marks),
             "description": EVAL_DESCRIPTION,
+            **eval_view(eval_rows, records, card_usage, marks, today),
         },
     }
 

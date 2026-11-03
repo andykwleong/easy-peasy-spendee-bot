@@ -275,7 +275,6 @@ function mountWidget() {
 function render() {
   app.replaceChildren();
   const shell = el("div");
-  if (state.view === "raw") shell.classList.add("app-fill");
   shell.append(renderTop());
   const main = el("main");
   const wrap = el("div", "wrap");
@@ -821,6 +820,7 @@ function renderRaw() {
   head.append(el("h2", "", "Raw entries"));
   section.append(head);
   const frame = el("div", "raw-frame");
+  bindRawPan(frame);
   if (state.payload.raw_expenses_truncated) {
     frame.append(el("p", "sub", "Showing the latest " + state.payload.raw_expenses_limit + " raw expense rows."));
   }
@@ -1083,6 +1083,37 @@ async function waitForMark(since) {
   } finally {
     if (state.watchAbort === abort) state.watchAbort = null;
   }
+}
+
+function bindRawPan(frame) {
+  if (!state.rawPanBound) {
+    state.rawPanBound = true;
+    window.addEventListener("mousemove", moveRawPan);
+    window.addEventListener("mouseup", endRawPan);
+  }
+  frame.addEventListener("mousedown", startRawPan);
+}
+
+function startRawPan(event) {
+  if (event.button !== 0) return;
+  if (event.target.closest("button, a, input, select, textarea, label")) return;
+  state.rawPan = { startX: event.clientX, startLeft: event.currentTarget.scrollLeft };
+  event.currentTarget.classList.add("is-panning");
+  event.preventDefault();
+}
+
+function moveRawPan(event) {
+  if (!state.rawPan) return;
+  const frame = document.querySelector(".raw-frame");
+  if (!frame) return;
+  frame.scrollLeft = state.rawPan.startLeft - (event.clientX - state.rawPan.startX);
+}
+
+function endRawPan() {
+  if (!state.rawPan) return;
+  state.rawPan = null;
+  const frame = document.querySelector(".raw-frame");
+  if (frame) frame.classList.remove("is-panning");
 }
 
 function keepScroll(paint) {

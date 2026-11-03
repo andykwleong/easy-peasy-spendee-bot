@@ -691,10 +691,15 @@ class DashboardHttpTests(unittest.TestCase):
         self.assertNotIn("Card Usage counts toward the card", script)
         self.assertIn('["raw", "Raw entries"]', script)
         self.assertIn("raw-frame", script)
+        self.assertIn("bindRawPan", script)
+        self.assertIn("scrollLeft", script)
+        self.assertNotIn('shell.classList.add("app-fill")', script)
         self.assertIn("limit.percent_label", script)
         self.assertIn("No cap", script)
         self.assertIn(".raw-frame", css)
-        self.assertIn("overflow: scroll", css)
+        self.assertIn("overflow: hidden", css)
+        self.assertNotIn("overflow: scroll", css)
+        self.assertNotIn("::-webkit-scrollbar", css)
 
     def test_saved_row_stays_saved_when_the_month_rewrite_cannot_reread_the_sheet(self):
         sheets = EditableSheets()

@@ -382,6 +382,15 @@ class DashboardHttpTests(unittest.TestCase):
         self.assertEqual(sam_body["household_labels"], ["Alex", "Sam"])
         self.assertEqual(alex_body["viewer_label"], "Alex")
         self.assertEqual(sam_body["viewer_label"], "Sam")
+        self.assertEqual(alex_body["person_filters"], sam_body["person_filters"])
+        self.assertEqual(
+            alex_body["person_filters"],
+            [{"scope": "Alex", "label": "Andy"}, {"scope": "Sam", "label": "FX"}],
+        )
+        self.assertEqual(alex_body["recent"][0]["message_status"], "")
+        self.assertEqual(alex_body["agent_eval"]["messages_sent"], 0)
+        self.assertEqual(alex_body["agent_eval"]["description"], "Telegram accepted the group post.")
+        self.assertNotIn("message_status", alex_body["agent_eval"])
         self.assertEqual(
             [row["id"] for row in alex_body["recent"]],
             ["dd4004", "bb2002", "aa1001", "cc3003"],
@@ -457,12 +466,18 @@ class DashboardHttpTests(unittest.TestCase):
 
         self.assertEqual(status, 200)
         script = payload.decode()
-        self.assertIn("household_labels", script)
+        self.assertIn("person_filters", script)
+        self.assertNotIn("household_labels", script)
         self.assertNotIn('viewer_label + " only"', script)
+        self.assertNotIn('name + " only"', script)
         self.assertNotIn('scope: "mine"', script)
         self.assertNotIn('state.scope = "mine"', script)
         self.assertIn("No category", script)
-        self.assertIn('["mine", cards.viewer_label]', script)
+        self.assertNotIn('["mine", cards.viewer_label]', script)
+        self.assertIn('["eval", "Eval"]', script)
+        self.assertIn('row.message_status === "Message sent"', script)
+        self.assertIn('row.message_status !== "message fail"', script)
+        self.assertNotIn("guesses were right or wrong", script)
 
     def test_widget_login_sets_a_thirty_day_cookie_and_logout_clears_it(self):
         app, _sheets = app_for()
@@ -666,6 +681,8 @@ class DashboardHttpTests(unittest.TestCase):
         script = script_payload.decode()
         css = css_payload.decode()
         self.assertNotIn('["later", "Agent eval"]', script)
+        self.assertIn('["eval", "Eval"]', script)
+        self.assertNotIn("guesses were right or wrong", script)
         self.assertNotIn("section.append(legend())", script)
         self.assertNotIn("bandText(limit.band)", script)
         self.assertNotIn("The same rows as the record book", script)
@@ -923,6 +940,92 @@ class DashboardHttpTests(unittest.TestCase):
         self.assertIn('active.tagName !== "INPUT"', script)
         self.assertIn('active.tagName !== "SELECT"', script)
         self.assertIn("Could not refresh. The list on screen is unchanged.", script)
+
+
+    def test_message_marks_keep_a_blank_row_blank_and_count_only_sent(self):
+        sheets = FakeSheets()
+        sheets.records.append(
+            ExpenseRecord(
+                row_number=3,
+                entry_id="bb2002",
+                timestamp="15:00:00",
+                expense_date="2026-09-21",
+                month="2026-09",
+                logged_by="Sam",
+                raw_input="sample",
+                amount=Decimal("4.00"),
+                category="Food",
+                description="Sample market",
+                input_type="text",
+                status="Confirmed",
+                transaction_type="Expense",
+                payment_method="Sample Visa",
+                payment_owner="Sam",
+            )
+        )
+
+        def get_state_rows(sheet_name):
+            self.assertEqual(sheet_name, "Bot State")
+            return [
+                ["group_post:aa1001", "Message sent"],
+                ["group_post:bb2002", "Message sent"],
+                ["group_post:cc3003", "message fail"],
+                ["group_post:dd4004", ""],
+                ["last_bot_message_id", "10"],
+                ["group_post:ee5005", "guessed"],
+            ]
+
+        sheets.get_state_rows = get_state_rows
+        app, _sheets = app_for(sheets)
+
+        status, _, payload = app.handle(
+            "GET",
+            "/api/dashboard?scope=both",
+            {"X-Telegram-Init-Data": sign_webapp(222)},
+            b"",
+            secure=True,
+        )
+        body = body_json(payload)
+        by_id = {row["id"]: row for row in body["recent"]}
+
+        self.assertEqual(status, 200)
+        self.assertEqual(by_id["aa1001"]["message_status"], "Message sent")
+        self.assertEqual(by_id["bb2002"]["message_status"], "Message sent")
+        self.assertEqual(body["agent_eval"]["messages_sent"], 2)
+        self.assertEqual(body["agent_eval"]["description"], "Telegram accepted the group post.")
+        self.assertFalse(body["agent_eval"]["scoring"])
+        self.assertNotIn("recent", body["agent_eval"])
+        failed = app.handle(
+            "GET",
+            "/api/dashboard?cards=Sam",
+            {"X-Telegram-Init-Data": sign_webapp(111)},
+            b"",
+            secure=True,
+        )
+        self.assertEqual(failed[0], 200)
+        self.assertEqual(body_json(failed[2])["cards"]["owner"], "Sam")
+
+    def test_unreadable_message_marks_leave_rows_without_a_dot(self):
+        sheets = FakeSheets()
+
+        def get_state_rows(_sheet_name):
+            raise RuntimeError("private bot state")
+
+        sheets.get_state_rows = get_state_rows
+        app, _sheets = app_for(sheets)
+        status, _, payload = app.handle(
+            "GET",
+            "/api/dashboard",
+            {"X-Telegram-Init-Data": sign_webapp(111)},
+            b"",
+            secure=True,
+        )
+        body = body_json(payload)
+
+        self.assertEqual(status, 200)
+        self.assertEqual(body["recent"][0]["message_status"], "")
+        self.assertEqual(body["agent_eval"]["messages_sent"], 0)
+        self.assertNotIn(b"private bot state", payload)
 
 
 class _FastChanges(SheetChanges):
@@ -1376,7 +1479,8 @@ class DashboardPromptTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(item["id"] != "aa1001" for item in deleted["recent"]))
         self.assertTrue(any(item["id"] == "bb2002" and item["logged_by"] == "Sam" for item in deleted["recent"]))
         self.assertTrue(hasattr(sheets, "summary_rows"))
-        self.assertNotIn(b"Andy", deleted_body)
+        self.assertEqual([item["label"] for item in deleted["person_filters"]], ["Andy", "FX"])
+        self.assertEqual([item["scope"] for item in deleted["person_filters"]], ["Alex", "Sam"])
 
     async def test_menu_button_failure_does_not_stop_startup(self):
         class Bot:

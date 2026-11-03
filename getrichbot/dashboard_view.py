@@ -5,9 +5,15 @@ from decimal import Decimal
 
 from getrichbot.cards import CardLimit, PaymentConfig, build_card_summary
 from getrichbot.categories import ALL_CATEGORIES
+from getrichbot.group_post import message_status_for
+from getrichbot.group_post import messages_sent_count
 from getrichbot.models import CardUsageRecord, ExpenseRecord, is_paynow_method
 from getrichbot.row_edits import edit_choices
 from getrichbot.summary import SummaryPeriod, _is_income_category, build_spending_summary
+
+ANDY_FILTER = "Andy"
+FX_FILTER = "FX"
+EVAL_DESCRIPTION = "Telegram accepted the group post."
 
 RECENT_LIMIT = 40
 RAW_LIMIT = 200
@@ -27,6 +33,60 @@ def recent_scope_allowed(scope: str, household_labels: tuple[str, ...]) -> bool:
     if scope == "both":
         return True
     return scope in named_household_labels(household_labels)
+
+
+def cards_scope_allowed(cards_scope: str, household_labels: tuple[str, ...]) -> bool:
+    """Cards can still say mine or other, or name one configured person."""
+    if cards_scope in {"mine", "other"}:
+        return True
+    return cards_scope in named_household_labels(household_labels)
+
+
+def _clear_person_role(name: str) -> str | None:
+    folded = " ".join(name.strip().casefold().split())
+    if folded == "andy" or folded.startswith("andy ") or folded.startswith("andy'"):
+        return ANDY_FILTER
+    if folded == "fx":
+        return FX_FILTER
+    return None
+
+
+def person_filter_labels(household_labels: tuple[str, ...]) -> list[dict[str, str]]:
+    """Fixed Andy and FX labels for the two configured people.
+
+    The scope value stays the configured name, so the sheet filter does not change.
+    The button text is Andy or FX for every viewer.
+
+    If one configured name is clearly Andy, that person is Andy and the other is FX.
+    If one configured name is exactly FX, that person is FX and the other is Andy.
+    Otherwise the given order is used: the first person is Andy and the second is FX.
+    The dashboard passes the me label first and the wife label second, so this does
+    not depend on who is logged in and does not need a Telegram id.
+    """
+    labels = named_household_labels(household_labels)
+    if not labels:
+        return []
+    if len(labels) == 1:
+        return [{"scope": labels[0], "label": _clear_person_role(labels[0]) or ANDY_FILTER}]
+
+    andy_index = None
+    fx_index = None
+    for index, name in enumerate(labels):
+        role = _clear_person_role(name)
+        if role == ANDY_FILTER and andy_index is None:
+            andy_index = index
+        elif role == FX_FILTER and fx_index is None:
+            fx_index = index
+    if andy_index is None and fx_index is None:
+        andy_index, fx_index = 0, 1
+    elif andy_index is None:
+        andy_index = next(index for index in range(len(labels)) if index != fx_index)
+    elif fx_index is None:
+        fx_index = next(index for index in range(len(labels)) if index != andy_index)
+    return [
+        {"scope": labels[andy_index], "label": ANDY_FILTER},
+        {"scope": labels[fx_index], "label": FX_FILTER},
+    ]
 
 
 def limit_band(percent: Decimal) -> str:
@@ -53,17 +113,24 @@ def build_dashboard_payload(
     cards_scope: str = "mine",
     household_labels: tuple[str, ...] = (),
     missing_category: bool = False,
+    message_marks: dict[str, str] | None = None,
 ) -> dict:
     labels = named_household_labels(household_labels)
     if not recent_scope_allowed(scope, labels):
         raise ValueError("scope must be both or a household label")
-    if cards_scope not in {"mine", "other"}:
-        raise ValueError("cards scope must be mine or other")
+    if not cards_scope_allowed(cards_scope, labels):
+        raise ValueError("cards scope must be mine, other, or a household label")
 
     other_label = next((label for label in labels if label != viewer_label), "")
     if cards_scope == "other" and not other_label:
         raise ValueError("cards scope")
-    card_owner = other_label if cards_scope == "other" else viewer_label
+    if cards_scope == "mine":
+        card_owner = viewer_label
+    elif cards_scope == "other":
+        card_owner = other_label
+    else:
+        card_owner = cards_scope
+    marks = message_marks or {}
 
     months = [
         _month_snapshot(records, _previous_month_period(today)),
@@ -71,7 +138,7 @@ def build_dashboard_payload(
     ]
     raw_expenses = _raw_expenses(records)
     usage_rows = _raw_card_usage(card_usage)
-    recent = _recent_items(records, card_usage, scope)
+    recent = _recent_items(records, card_usage, scope, marks)
     if missing_category:
         recent = [item for item in recent if expense_category_is_blank(item)]
     cards = _cards_snapshot(card_owner, records, card_usage, payment_config, today, cards_error)
@@ -95,7 +162,13 @@ def build_dashboard_payload(
         "card_usage_limit": RAW_LIMIT,
         "card_usage_truncated": len(usage_rows) > RAW_LIMIT,
         "edit_choices": edit_choices(payment_config),
-        "agent_eval": {"status": "later", "scoring": False},
+        "person_filters": person_filter_labels(labels),
+        "agent_eval": {
+            "status": "ready",
+            "scoring": False,
+            "messages_sent": messages_sent_count(marks),
+            "description": EVAL_DESCRIPTION,
+        },
     }
 
 
@@ -205,16 +278,17 @@ def _recent_items(
     records: list[ExpenseRecord],
     card_usage: list[CardUsageRecord],
     scope: str,
+    marks: dict[str, str],
 ) -> list[dict]:
-    items = [_recent_expense(record) for record in records if record.status.casefold() == "confirmed"]
-    items.extend(_recent_card_usage(record) for record in card_usage if record.status.casefold() == "confirmed")
+    items = [_recent_expense(record, marks) for record in records if record.status.casefold() == "confirmed"]
+    items.extend(_recent_card_usage(record, marks) for record in card_usage if record.status.casefold() == "confirmed")
     if scope != "both":
         items = [item for item in items if item["logged_by"] == scope]
     items.sort(key=lambda item: (item["date"], item["time"], item["id"]), reverse=True)
     return items
 
 
-def _recent_expense(record: ExpenseRecord) -> dict:
+def _recent_expense(record: ExpenseRecord, marks: dict[str, str]) -> dict:
     kind = _expense_kind(record)
     payment_owner = ""
     if kind != "income" and record.payment_method:
@@ -235,10 +309,11 @@ def _recent_expense(record: ExpenseRecord) -> dict:
         "payment_channel": "" if kind == "income" else record.payment_channel,
         "kind": kind,
         "source": "expense",
+        "message_status": message_status_for(record.entry_id, marks),
     }
 
 
-def _recent_card_usage(record: CardUsageRecord) -> dict:
+def _recent_card_usage(record: CardUsageRecord, marks: dict[str, str]) -> dict:
     return {
         "id": record.entry_id,
         "date": record.usage_date,
@@ -252,6 +327,7 @@ def _recent_card_usage(record: CardUsageRecord) -> dict:
         "payment_channel": record.payment_channel,
         "kind": "card_only",
         "source": "card_usage",
+        "message_status": message_status_for(record.entry_id, marks),
     }
 
 

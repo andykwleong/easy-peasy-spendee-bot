@@ -7,7 +7,7 @@ Raw entries shows the full expense table and the card-only table, including rows
 - `raw-open` opens the raw table from the dashboard navigation.
 - `raw-expenses` lists both seed expense rows with their entry ids.
 - `raw-usage` shows an empty Card Usage table.
-- `raw-unfiltered` keeps Sam's row visible even when Recent is set to Alex only.
+- `raw-unfiltered` keeps Sam's row visible even when Recent is set to Andy.
 
 ## How to get to it (user POV)
 
@@ -28,7 +28,7 @@ Preconditions:
 
 ## Gotchas
 
-- Raw entries ignores the Recent `Alex only`, `Sam only`, and `Both` chips. Sam's row is supposed to be here.
+- Raw entries ignores the Recent `Andy`, `FX`, and `Both` chips. Sam's row is supposed to be here.
 - The delete control on a raw row is named `Delete Sample cafe` or `Delete Sample market`. This recipe does not click them.
 - Card Usage says `No rows.` because the seed has no card-only spend. That empty state is the proof.
 - Entry ids are `aa1001` and `bb2002`. A six-character id in Telegram chat is a delete lookup, which this page does not perform.

@@ -23,6 +23,7 @@ from getrichbot.email_mail import email_logged_text
 from getrichbot.email_mail import entry_id_in_text
 from getrichbot.email_mail import logged_notice_entry_id
 from getrichbot.gmail_watch import WriteOutcome, attach_email, is_email_command
+from getrichbot.group_post import MESSAGE_FAIL, MESSAGE_SENT, deliver_group_post, group_post_key, logged_row_ids, one_attempt
 from getrichbot.shop_category import SHOP_CATEGORY_CALLBACK
 from getrichbot.shop_category import apply_email_shop_correction
 from getrichbot.shop_category import record_shop_category_choice
@@ -204,6 +205,7 @@ class FixedReview:
 @dataclass
 class FixedAddResult:
     added_count: int = 0
+    entry_ids: tuple[str, ...] = ()
 
 
 @dataclass
@@ -235,6 +237,8 @@ class FinanceBot:
         self.recent_logged: list[RecentLoggedExpense] = []
         self.email_service = None
         self.ai = None
+        # In-flight group-post retries. There is no timer. Each task ends after one retry.
+        self._group_post_tasks: set[asyncio.Task] = set()
 
     def _ai(self):
         if not self.settings.openai_api_key:
@@ -440,7 +444,11 @@ class FinanceBot:
 
         logged_line = await self._record_or_request_payment(update, draft, logged_by, draft.category, "Text")
         if logged_line:
-            await update.message.reply_text(logged_line)
+            await self._post_group_notice(
+                lambda: update.message.reply_text(logged_line),
+                logged_line,
+                update.effective_chat.id,
+            )
 
     def _income_category_options(self, draft: ExpenseDraft) -> tuple[str, ...]:
         if re.search(r"\bincome\b", draft.raw_input, flags=re.IGNORECASE) is None:
@@ -503,7 +511,11 @@ class FinanceBot:
         row = self._expense_row_from_pending(pending, category, "Confirmed", "Text", None)
         logged_line = await self._append_or_hold_duplicate(update, row)
         if logged_line:
-            await query.edit_message_text(logged_line)
+            await self._post_group_notice(
+                lambda: query.edit_message_text(logged_line),
+                logged_line,
+                query.message.chat_id if query.message is not None else None,
+            )
 
     def shop_category_markup(self, text: str):
         if MIXED_SHOP_ASK not in (text or ""):
@@ -624,7 +636,11 @@ class FinanceBot:
 
         logged_line = await self._record_pending_or_request_payment(update, pending_id, pending, category, date_override)
         if logged_line:
-            await update.message.reply_text(logged_line)
+            await self._post_group_notice(
+                lambda: update.message.reply_text(logged_line),
+                logged_line,
+                update.effective_chat.id,
+            )
 
     async def handle_ai_command(self, update: Update) -> bool:
         ai = self._ai()
@@ -845,7 +861,11 @@ class FinanceBot:
 
         logged_line = await self._record_pending_or_request_payment(update, pending_id, pending, category, date_override)
         if logged_line:
-            await update.message.reply_text(logged_line)
+            await self._post_group_notice(
+                lambda: update.message.reply_text(logged_line),
+                logged_line,
+                update.effective_chat.id,
+            )
         return True
 
     async def handle_pending_update(self, update: Update) -> bool:
@@ -902,7 +922,12 @@ class FinanceBot:
                 cancel_unselected=True,
             )
             if logged_lines:
-                await update.message.reply_text("\n\n".join(logged_lines))
+                notice = "\n\n".join(logged_lines)
+                await self._post_group_notice(
+                    lambda: update.message.reply_text(notice),
+                    notice,
+                    update.effective_chat.id,
+                )
             return True
 
         category_updates, invalid_categories = self._parse_pending_category_changes(lowered, len(matching))
@@ -929,7 +954,12 @@ class FinanceBot:
                 latest_batch_only=bool(self._latest_pending_batch_id(update)),
             )
             if logged_lines:
-                await update.message.reply_text("\n\n".join(logged_lines))
+                notice = "\n\n".join(logged_lines)
+                await self._post_group_notice(
+                    lambda: update.message.reply_text(notice),
+                    notice,
+                    update.effective_chat.id,
+                )
             else:
                 await update.message.reply_text(self._pending_summary(update, "That pending entry still needs a category:"))
             return True
@@ -938,7 +968,12 @@ class FinanceBot:
         if category_reply in VARIABLE_CATEGORIES:
             logged_lines, changed = await self._apply_category_reply(update, category_reply)
             if logged_lines:
-                await update.message.reply_text("\n\n".join(logged_lines))
+                notice = "\n\n".join(logged_lines)
+                await self._post_group_notice(
+                    lambda: update.message.reply_text(notice),
+                    notice,
+                    update.effective_chat.id,
+                )
                 return True
             if changed:
                 if self._payment_choice_is_active(update):
@@ -1232,7 +1267,13 @@ class FinanceBot:
             fixed_month_date=review.month_date,
             fixed_items=review.items,
         )
-        await update.message.reply_text(self._fixed_add_result_message(result, target_month))
+        notice = self._fixed_add_result_message(result, target_month)
+        await self._post_group_notice(
+            lambda: update.message.reply_text(notice),
+            notice,
+            update.effective_chat.id,
+            entry_ids=list(result.entry_ids),
+        )
 
     def _fixed_review_message(self, review: FixedReview) -> str:
         lines = [f"Confirm fixed expenses for {_month_label(review.month_date)}:"]
@@ -1316,7 +1357,13 @@ class FinanceBot:
             fixed_month_date=month_date,
             fixed_items=fixed_items,
         )
-        await update.message.reply_text(self._fixed_add_result_message(result, target_month))
+        notice = self._fixed_add_result_message(result, target_month)
+        await self._post_group_notice(
+            lambda: update.message.reply_text(notice),
+            notice,
+            update.effective_chat.id,
+            entry_ids=list(result.entry_ids),
+        )
 
     def _fixed_add_result_message(self, result: FixedAddResult, target_month: str) -> str:
         if result.added_count:
@@ -1452,7 +1499,11 @@ class FinanceBot:
             message += "\n\nPending IDs: " + ", ".join(pending_ids)
         if skipped_lines:
             message += "\n\nSkipped lines:\n" + "\n".join(f"- {line}" for line in skipped_lines)
-        await update.message.reply_text(message)
+        await self._post_group_notice(
+            lambda: update.message.reply_text(message),
+            message,
+            update.effective_chat.id,
+        )
 
     async def _reply_with_summary(self, update: Update, text: str) -> None:
         if update.message is None or update.effective_user is None:
@@ -2076,18 +2127,28 @@ class FinanceBot:
         if pending.pending_id is not None:
             self.pending.pop(pending.pending_id, None)
         if key in self.pending_payment_batches:
-            await update.message.reply_text(self._logged_line(pending.row))
+            notice = self._logged_line(pending.row)
+            await self._post_group_notice(
+                lambda: update.message.reply_text(notice),
+                notice,
+                update.effective_chat.id,
+            )
             await self._continue_payment_batch(update)
             return True
         remaining = self._matching_pending(update, latest_batch_only=True) or self._matching_pending(update)
         if remaining:
-            await update.message.reply_text(
+            notice = (
                 self._logged_line(pending.row)
                 + "\n\n"
                 + self._pending_summary(update, "Pending expenses still need your decision:")
             )
         else:
-            await update.message.reply_text(self._logged_line(pending.row))
+            notice = self._logged_line(pending.row)
+        await self._post_group_notice(
+            lambda: update.message.reply_text(notice),
+            notice,
+            update.effective_chat.id,
+        )
         return True
 
     def _find_duplicate(self, row: ExpenseRow) -> ExpenseRecord | None:
@@ -2169,7 +2230,7 @@ class FinanceBot:
 
         expense_date = _last_day_of_month(month_date)
         self.sheets.delete_fixed_expenses_for_month(self.settings.raw_expenses_sheet, month_date.strftime("%Y-%m"))
-        added_count = 0
+        added_ids: list[str] = []
         for item in fixed:
             category = str(item["category"])
             row = ExpenseRow(
@@ -2187,8 +2248,8 @@ class FinanceBot:
                 transaction_type="Fixed",
             )
             self.sheets.append_expense(self.settings.raw_expenses_sheet, row)
-            added_count += 1
-        return FixedAddResult(added_count)
+            added_ids.append(row.entry_id)
+        return FixedAddResult(len(added_ids), tuple(added_ids))
 
     async def _handle_email_command(self, update: Update, text: str) -> None:
         if update.message is None or update.effective_user is None:
@@ -2530,7 +2591,12 @@ class FinanceBot:
             response_parts.append("\n\n".join(logged_lines))
         if not response_parts:
             response_parts.append(self._pending_summary(update, "Current pending entries:"))
-        await update.message.reply_text("\n\n".join(response_parts))
+        notice = "\n\n".join(response_parts)
+        await self._post_group_notice(
+            lambda: update.message.reply_text(notice),
+            notice,
+            update.effective_chat.id,
+        )
         return True
 
     def _update_pending_positions(self, update: Update, positions: list[int], category: str | None, parsed_date) -> None:
@@ -2816,7 +2882,12 @@ class FinanceBot:
                 break
 
         if logged_lines:
-            await update.message.reply_text("\n\n".join(logged_lines))
+            notice = "\n\n".join(logged_lines)
+            await self._post_group_notice(
+                lambda: update.message.reply_text(notice),
+                notice,
+                update.effective_chat.id,
+            )
         elif not duplicate_seen:
             await update.message.reply_text("Pending expenses still need categories. Use: confirm abc123 Food")
 
@@ -3154,7 +3225,12 @@ class FinanceBot:
             self.sheets.append_card_usage(self.settings.card_usage_sheet, row)
             self.pending.pop(pending_id, None)
             await query.edit_message_reply_markup(reply_markup=None)
-            await query.edit_message_text(self._card_usage_logged_line(row))
+            notice = self._card_usage_logged_line(row)
+            await self._post_group_notice(
+                lambda: query.edit_message_text(notice),
+                notice,
+                query.message.chat_id if query.message is not None else None,
+            )
             await self._continue_payment_batch(update)
             return
 
@@ -3176,7 +3252,11 @@ class FinanceBot:
         await query.edit_message_reply_markup(reply_markup=None)
         if logged_line:
             self.pending.pop(pending_id, None)
-            await query.edit_message_text(logged_line)
+            await self._post_group_notice(
+                lambda: query.edit_message_text(logged_line),
+                logged_line,
+                query.message.chat_id if query.message is not None else None,
+            )
             await self._continue_payment_batch(update)
 
     async def _begin_payment_batch(self, update: Update, pending_ids: list[str]) -> None:
@@ -3333,6 +3413,67 @@ class FinanceBot:
             telegram_chat_id=pending.chat_id,
             telegram_message_id=pending.message_id,
         )
+
+    def _targets_group(self, chat_id: int | str | None) -> bool:
+        group = getattr(self.settings, "telegram_chat_id", None)
+        if group in (None, ""):
+            return False
+        return str(chat_id) == str(group)
+
+    def store_group_marks(self, entry_ids: list[str], mark: str) -> None:
+        """Save Message sent or message fail. The row text and card digits are not written."""
+        if mark not in {MESSAGE_SENT, MESSAGE_FAIL}:
+            return
+        setter = getattr(self.sheets, "set_state_value", None)
+        if setter is None:
+            return
+        sheet = getattr(self.settings, "bot_state_sheet", "Bot State")
+        for entry_id in entry_ids:
+            if not entry_id or not re.fullmatch(r"[A-Za-z0-9]{6}", entry_id):
+                continue
+            try:
+                setter(sheet, group_post_key(entry_id), mark)
+            except Exception:
+                LOGGER.exception("Could not store the group-post mark. The purchase is still logged.")
+
+    def _schedule_group_retry(self, entry_ids: list[str], send) -> None:
+        """One more try after the first group post failed. This does not block the chat."""
+
+        async def retry() -> None:
+            kind, message_id = await one_attempt(send)
+            if not entry_ids:
+                return
+            self.store_group_marks(entry_ids, MESSAGE_SENT if kind == "sent" and message_id else MESSAGE_FAIL)
+
+        task = asyncio.get_running_loop().create_task(retry())
+        self._group_post_tasks.add(task)
+        task.add_done_callback(self._group_post_tasks.discard)
+
+    async def _post_group_notice(
+        self,
+        sender,
+        text: str,
+        chat_id: int | str | None,
+        entry_ids: list[str] | None = None,
+    ) -> None:
+        """Send the confirmation. The sheet row is already written.
+
+        A reply in the household group is the group post. The first try is awaited
+        so the next chat prompt stays after it. If that try errors, one retry runs
+        in the background. A chat that is not the household group is unchanged.
+        """
+        if not self._targets_group(chat_id):
+            await sender()
+            return
+        ids = list(entry_ids) if entry_ids is not None else logged_row_ids(text)
+        kind, message_id = await one_attempt(sender)
+        if kind == "sent" and message_id:
+            self.store_group_marks(ids, MESSAGE_SENT)
+            return
+        if kind == "silent":
+            return
+        LOGGER.warning("The group post failed. One retry will run in the background. The sheet row is already saved.")
+        self._schedule_group_retry(ids, sender)
 
     def _logged_line(self, row: ExpenseRow) -> str:
         if row.transaction_type.lower() == "income":
@@ -3722,17 +3863,23 @@ def main() -> None:
             application.create_task(finance_bot.run_monthly_scheduler(application.bot))
 
         async def send_email_notice(text: str) -> None:
+            # The sheet row is already written. This runs in the background, then retries once.
             if settings.telegram_chat_id is None:
                 LOGGER.warning("An email notice was not sent because TELEGRAM_CHAT_ID is not set.")
                 return
-            sent = await application.bot.send_message(
-                chat_id=settings.telegram_chat_id,
-                text=text,
-                reply_markup=finance_bot.shop_category_markup(text),
-            )
-            message_id = getattr(sent, "message_id", None)
+
+            async def send():
+                return await application.bot.send_message(
+                    chat_id=settings.telegram_chat_id,
+                    text=text,
+                    reply_markup=finance_bot.shop_category_markup(text),
+                )
+
+            mark, message_id = await deliver_group_post(send)
             if message_id is not None:
                 finance_bot.remember_email_notice(text, message_id)
+            if mark:
+                finance_bot.store_group_marks(logged_row_ids(text), mark)
 
         email_service.bind_notifier(asyncio.get_running_loop(), send_email_notice)
         try:

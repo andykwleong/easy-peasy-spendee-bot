@@ -150,6 +150,24 @@ tr.needs-category td {
 .tx-shop { min-width: 0; }
 .merchant { font-weight: 700; font-size: 1.05rem; overflow-wrap: anywhere; }
 .tx-date, .tx-logged, .tx-card { color: var(--muted); font-size: 0.92rem; }
+.msg-mark {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: block;
+  flex: none;
+}
+.dot-green { background: var(--green); }
+.dot-red { background: var(--red); }
+.eval-count { font-size: 2.4rem; font-weight: 750; letter-spacing: -0.04em; line-height: 1.1; }
 .tx-date, .tx-card { margin-top: 2px; }
 .tx-category { min-width: 0; }
 .tx-logged { overflow-wrap: anywhere; }

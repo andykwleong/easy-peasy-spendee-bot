@@ -23,7 +23,8 @@ from getrichbot.dashboard_auth import (
     verify_login_widget,
     verify_webapp_init_data,
 )
-from getrichbot.dashboard_view import build_dashboard_payload, recent_scope_allowed
+from getrichbot.dashboard_view import build_dashboard_payload, cards_scope_allowed, named_household_labels, recent_scope_allowed
+from getrichbot.group_post import marks_from_state_rows
 from getrichbot.row_edits import expense_kind, format_saved_row, plan_edit
 from getrichbot.sheets import CATEGORY_SHEET_READ_TIMEOUT_SECONDS
 from getrichbot.shop_category import apply_email_shop_correction
@@ -83,6 +84,8 @@ class DashboardContext:
     sheets: object
     monthly_summary_sheet: str = "Monthly Summary"
     category_keywords_sheet: str = "Category Keywords"
+    bot_state_sheet: str = "Bot State"
+    household_order: tuple[str, ...] = ()
     today: Callable[[], date] | None = None
 
 
@@ -202,7 +205,7 @@ class DashboardApp:
         if not recent_scope_allowed(scope, self._household_labels()):
             return _json(400, {"ok": False, "error": "scope"})
         cards_scope = query.get("cards", "mine")
-        if cards_scope not in {"mine", "other"}:
+        if not cards_scope_allowed(cards_scope, self._household_labels()):
             return _json(400, {"ok": False, "error": "cards"})
         try:
             payload = self._read_sheet(label, scope, cards_scope, _missing_category_flag(query.get("missing")))
@@ -257,7 +260,7 @@ class DashboardApp:
             return _json(400, {"ok": False, "error": "invalid"})
         if owner is not None and not isinstance(owner, str):
             return _json(400, {"ok": False, "error": "invalid"})
-        if not recent_scope_allowed(scope, self._household_labels()) or cards_scope not in {"mine", "other"}:
+        if not recent_scope_allowed(scope, self._household_labels()) or not cards_scope_allowed(cards_scope, self._household_labels()):
             return _json(400, {"ok": False, "error": "scope"})
         try:
             result = self._write_edit(
@@ -454,7 +457,7 @@ class DashboardApp:
             return _json(400, {"ok": False, "error": "invalid"})
         if not isinstance(scope, str) or not isinstance(cards_scope, str):
             return _json(400, {"ok": False, "error": "invalid"})
-        if not recent_scope_allowed(scope, self._household_labels()) or cards_scope not in {"mine", "other"}:
+        if not recent_scope_allowed(scope, self._household_labels()) or not cards_scope_allowed(cards_scope, self._household_labels()):
             return _json(400, {"ok": False, "error": "scope"})
         try:
             result = self._write_delete(label, entry_id.strip(), source, scope, cards_scope, missing_category)
@@ -546,12 +549,30 @@ class DashboardApp:
             cards_scope=cards_scope,
             household_labels=self._household_labels(),
             missing_category=missing_category,
+            message_marks=self._message_marks(),
         )
         if change_mark is not None:
             payload["change_mark"] = change_mark
         return payload
 
+    def _message_marks(self) -> dict[str, str]:
+        """Bot State marks for the status dots. A failed read leaves every row unmarked."""
+        reader = getattr(self.context.sheets, "get_state_rows", None)
+        if reader is None:
+            return {}
+        try:
+            rows = reader(self.context.bot_state_sheet)
+        except Exception:
+            LOGGER.warning("Dashboard could not read message marks. Rows are shown without a status dot.")
+            return {}
+        if not isinstance(rows, list):
+            return {}
+        return marks_from_state_rows(rows)
+
     def _household_labels(self) -> tuple[str, ...]:
+        ordered = named_household_labels(self.context.household_order)
+        if ordered:
+            return ordered
         labels: list[str] = []
         for user_id in sorted(self.context.allowed_user_ids):
             label = self.context.label_for_user(user_id)
@@ -640,6 +661,8 @@ def context_from_settings(settings, sheets) -> DashboardContext:
         sheets=sheets,
         monthly_summary_sheet=settings.monthly_summary_sheet,
         category_keywords_sheet=settings.category_keywords_sheet,
+        bot_state_sheet=getattr(settings, "bot_state_sheet", "Bot State"),
+        household_order=(getattr(settings, "me_label", ""), getattr(settings, "wife_label", "")),
     )
 
 

@@ -310,7 +310,7 @@ The page rearranges itself. A narrow window uses the phone layout. A wide window
 
 It shows recent transactions (yours, or both), card summary, the household monthly income, expenses, and net, the raw rows, and card-only rows that stay out of household spending. Income is for the household, not split by person. On Cards, a toggle switches between your credit cards and the other person's. The colours stay the same as Telegram: green under 60%, yellow from 60% to 79%, orange from 80% to 94%, red at 95% or more. A card with no limit still shows, and it does not get a made-up percentage. The page keeps the coloured bar and the percentage number. It does not print the colour name under the bar, and it does not show a row of colour explanation boxes.
 
-Raw entries sits in the page. Scroll the page up and down as usual. The table is wider than the window, and there is no sideways scrollbar. Press on the table and drag with the mouse to slide it sideways. A click on Delete still opens the delete question.
+Raw entries sits in the page. Scroll the page up and down as usual with the wheel, trackpad, or the page itself. There is no separate scrollbar on the table. Press on the table and drag with the mouse to slide it sideways and up and down. A click on Delete still opens the delete question.
 
 On a wide screen, each recent row keeps the shop and date on the left, the category in one fixed column, who logged it in the next fixed column, and the amount and card on the right. A narrow window stacks those lines so the phone layout still fits.
 

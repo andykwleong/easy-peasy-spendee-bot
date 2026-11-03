@@ -19,10 +19,10 @@ Delete a row asks for confirmation, can be cancelled, and removes the row only a
 Preconditions:
 
 - A fresh `launch` and a passing `doctor`.
-- The browser is open and signed in as Alex. Recent may be showing both people. This recipe chooses `Alex only` before it deletes.
+- The browser is open and signed in as Alex. Recent may be showing both people. This recipe chooses `Andy` before it deletes.
 - `Sample cafe` is still present. A previous confirmed delete in this process makes this recipe fail. Launch again.
 
-- **Show Alex only.** Choose `Alex only`. Run `python3 .cursor/skills/verify-getrichbot/scripts/verify_dashboard.py browser-click --role button --name "Alex only" --wait-text "Sample cafe"`. Then run `python3 .cursor/skills/verify-getrichbot/scripts/verify_dashboard.py browser-expect --contains "Sample cafe" --absent "Sample market"`.
+- **Show Alex only.** Choose `Andy`. Run `python3 .cursor/skills/verify-getrichbot/scripts/verify_dashboard.py browser-click --role button --name "Andy" --wait-text "Sample cafe"`. Then run `python3 .cursor/skills/verify-getrichbot/scripts/verify_dashboard.py browser-expect --contains "Sample cafe" --absent "Sample market"`.
 - **Ask.** Choose `Delete Sample cafe`. Run `python3 .cursor/skills/verify-getrichbot/scripts/verify_dashboard.py browser-click --role button --name "Delete Sample cafe" --wait-text "Delete this row?"`. Then run `python3 .cursor/skills/verify-getrichbot/scripts/verify_dashboard.py browser-expect --contains "Delete this row?" --contains "Sample cafe" --contains "$18.50"`. The dialog names the shop and the amount.
 - **Capture the question.** Run `python3 .cursor/skills/verify-getrichbot/scripts/verify_dashboard.py browser-screenshot --path .cursor/skills/verify-getrichbot/artifacts/delete/ask.png` and `python3 .cursor/skills/verify-getrichbot/scripts/verify_dashboard.py browser-snapshot --aria --path .cursor/skills/verify-getrichbot/artifacts/delete/ask.aria.txt`. The snapshot includes a dialog named `Delete this row?`.
 - **Cancel.** Choose `Cancel`. Run `python3 .cursor/skills/verify-getrichbot/scripts/verify_dashboard.py browser-click --role button --name "Cancel" --wait-text "Sample cafe"`. Then run `python3 .cursor/skills/verify-getrichbot/scripts/verify_dashboard.py browser-expect --contains "Sample cafe" --absent "Delete this row?"`. The row is still listed.

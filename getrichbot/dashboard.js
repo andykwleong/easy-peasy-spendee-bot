@@ -5,7 +5,7 @@ const ERROR_TEXT = {
   locked: "This page is locked.",
   sheet: "I could not read the Google Sheet just now. Nothing was changed. Try again in a moment.",
   scope: "Choose one person, or both.",
-  cards: "Choose your own cards, or the other person's."
+  cards: "Choose Andy or FX."
 };
 
 const state = {
@@ -283,7 +283,8 @@ function render() {
   else if (state.view === "cards") wrap.append(renderCards());
   else if (state.view === "month") wrap.append(renderMonth());
   else if (state.view === "raw") wrap.append(renderRaw());
-  else wrap.append(renderLater());
+  else if (state.view === "eval") wrap.append(renderEval());
+  else wrap.append(renderRecent());
   main.append(wrap);
   shell.append(main);
   if (state.pendingDelete) shell.append(renderDeletePopup());
@@ -308,7 +309,8 @@ function renderTop() {
     ["recent", "Recent"],
     ["cards", "Cards"],
     ["month", "Month"],
-    ["raw", "Raw entries"]
+    ["raw", "Raw entries"],
+    ["eval", "Eval"]
   ].forEach(([id, label]) => {
     const button = el("button", "nav-btn" + (id === "later" ? " later" : ""), label);
     button.type = "button";
@@ -342,8 +344,7 @@ function renderRecent() {
   const head = el("div", "page-head");
   head.append(el("h2", "", "Recent transactions"));
   const filters = el("div", "filters");
-  const labels = Array.isArray(state.payload.household_labels) ? state.payload.household_labels : [];
-  labels.forEach((name) => filters.append(scopeChip(name, name + " only")));
+  personFilters().forEach((person) => filters.append(scopeChip(person.scope, person.label)));
   filters.append(scopeChip("both", "Both"));
   const missing = el("button", "chip", "No category");
   missing.type = "button";
@@ -372,6 +373,8 @@ function renderTransaction(row) {
   const shop = el("div", "tx-shop");
   shop.append(el("div", "merchant", row.description || "No description"));
   shop.append(el("div", "tx-date", prettyDate(row.date)));
+  const mark = messageMark(row);
+  if (mark) shop.append(mark);
   const category = el("div", "tx-category");
   const tag = el("span", pending ? "tag needs-category" : "tag", categoryLabel(row));
   category.append(tag);
@@ -693,18 +696,16 @@ function renderCards() {
   const cards = state.payload.cards;
   const head = el("div", "page-head");
   head.append(el("h2", "", "Card summary"));
-  if (cards.other_label) {
+  const people = personFilters();
+  if (people.length > 1) {
     const filters = el("div", "filters");
-    [
-      ["mine", cards.viewer_label],
-      ["other", cards.other_label]
-    ].forEach(([id, label]) => {
-      const chip = el("button", "chip", label);
+    people.forEach((person) => {
+      const chip = el("button", "chip", person.label);
       chip.type = "button";
-      chip.setAttribute("aria-pressed", String(state.cards === id));
+      chip.setAttribute("aria-pressed", String(cardsPersonPressed(person)));
       chip.addEventListener("click", () => {
-        if (state.cards === id) return;
-        state.cards = id;
+        if (cardsPersonPressed(person)) return;
+        state.cards = person.scope;
         loadDashboard();
       });
       filters.append(chip);
@@ -853,12 +854,37 @@ function renderRaw() {
   return section;
 }
 
-function renderLater() {
+function personFilters() {
+  const people = state.payload && state.payload.person_filters;
+  return Array.isArray(people) ? people : [];
+}
+
+function cardsPersonPressed(person) {
+  if (state.cards === person.scope) return true;
+  if (state.cards === "mine" && person.scope === state.payload.viewer_label) return true;
+  const other = state.payload.cards && state.payload.cards.other_label;
+  return state.cards === "other" && person.scope === other;
+}
+
+function messageMark(row) {
+  if (row.message_status !== "Message sent" && row.message_status !== "message fail") return null;
+  const mark = el("div", "msg-mark");
+  const dot = el("i", row.message_status === "Message sent" ? "dot dot-green" : "dot dot-red");
+  dot.setAttribute("aria-hidden", "true");
+  mark.append(dot, document.createTextNode(row.message_status));
+  return mark;
+}
+
+function renderEval() {
   const section = el("section");
+  const info = (state.payload && state.payload.agent_eval) || {};
+  const head = el("div", "page-head");
+  head.append(el("h2", "", "Eval"));
+  section.append(head);
   const box = el("div", "later-box");
-  box.append(el("p", "kicker", "Later · not built"));
-  box.append(el("h2", "", "Agent eval"));
-  box.append(el("p", "sub", "This is a space for later. It would eventually show whether guesses were right or wrong. There is no score, and there is nothing to turn on."));
+  box.append(el("p", "eval-count", String(info.messages_sent || 0)));
+  box.append(el("p", "", "Messages sent"));
+  box.append(el("p", "sub", info.description || "Telegram accepted the group post."));
   section.append(box);
   return section;
 }

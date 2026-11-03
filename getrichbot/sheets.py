@@ -478,6 +478,10 @@ class SheetsClient:
             timeout_seconds,
         )
 
+    def get_state_rows(self, sheet_name: str) -> list[list[str]]:
+        """Bot State rows already cached after the first read. The dashboard uses this for message marks."""
+        return self._state_snapshot(sheet_name)
+
     def get_state_value(self, sheet_name: str, key: str) -> str | None:
         for row in self._state_snapshot(sheet_name):
             if _cell(row, 0) == key:

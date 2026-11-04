@@ -168,6 +168,10 @@ tr.needs-category td {
 .dot-green { background: var(--green); }
 .dot-red { background: var(--red); }
 .eval-count { font-size: 2.4rem; font-weight: 750; letter-spacing: -0.04em; line-height: 1.1; }
+.eval-count.tone-green { color: #1b6b45; }
+.eval-count.tone-yellow { color: #c4a035; }
+.eval-count.tone-orange { color: #e07a2f; }
+.eval-count.tone-red { color: #c44747; }
 .eval-periods { margin-bottom: 18px; }
 .eval-block {
   background: var(--card);
@@ -179,10 +183,22 @@ tr.needs-category td {
 }
 .eval-block h3 { font-size: 1.15rem; margin-bottom: 8px; }
 .eval-list { margin-top: 12px; display: grid; gap: 8px; }
-.eval-row {
-  border-top: 1px solid var(--line);
-  padding-top: 8px;
+.eval-card {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px;
+  color: inherit;
 }
+button.eval-card { font: inherit; cursor: pointer; }
+.eval-card.open { background: white; border-color: #b7a990; }
+.eval-card-top { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
+.eval-card-title { font-weight: 700; }
+.eval-card-aside { flex: none; text-align: right; }
+.eval-note { margin-top: 8px; }
 .eval-mail {
   white-space: pre-wrap;
   overflow-wrap: anywhere;

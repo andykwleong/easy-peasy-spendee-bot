@@ -34,7 +34,8 @@ const state = {
   evalPeriod: "",
   evalOpenId: "",
   evalOpenText: "",
-  evalOpenError: ""
+  evalOpenError: "",
+  evalOpenGroup: ""
 };
 
 const app = document.querySelector("#app");
@@ -921,6 +922,7 @@ function evalPeriodChip(id, label, period) {
     state.evalOpenId = "";
     state.evalOpenText = "";
     state.evalOpenError = "";
+    state.evalOpenGroup = "";
     render();
   });
   return chip;
@@ -961,9 +963,20 @@ function wholePercent(part, whole) {
   return Math.floor((part * 100 + Math.floor(whole / 2)) / whole);
 }
 
+function evalHealthBand(percent) {
+  if (percent >= 95) return "green";
+  if (percent >= 80) return "orange";
+  if (percent >= 60) return "yellow";
+  return "red";
+}
+
+function evalCount(percent) {
+  return el("p", "eval-count tone-" + evalHealthBand(percent), percent + "%");
+}
+
 function renderEmailEval(info, period) {
   const block = el("div", "eval-block");
-  block.append(el("h3", "", "Email logging"));
+  block.append(el("h3", "", "Email successfully logged"));
   const rows = (info.emails || []).filter((row) => inEvalPeriod(row.date, period));
   const logged = rows.filter((row) => row.result === "pass");
   const missed = rows.filter((row) => row.result !== "pass");
@@ -972,7 +985,7 @@ function renderEmailEval(info, period) {
     block.append(el("p", "", "No mail for " + periodPhrase(period) + "."));
     return block;
   }
-  block.append(el("p", "eval-count", percent + "%"));
+  block.append(evalCount(percent));
   block.append(el("p", "", "logged"));
   block.append(el("p", "", logged.length + " logged"));
   block.append(el("p", "", missed.length + " not logged"));
@@ -987,22 +1000,28 @@ function renderEmailEval(info, period) {
 }
 
 function renderFailedMail(row) {
-  const item = el("div", "eval-row");
-  const button = el("button", "text-btn", "Show this mail");
-  button.type = "button";
-  button.addEventListener("click", () => toggleFailedMail(row.message_id));
-  item.append(el("p", "", shortDate(row.date) + " · " + (row.sender || "Unknown sender")));
-  item.append(el("p", "", row.subject || "(no subject)"));
-  item.append(el("p", "sub", row.reason || "Not logged"));
-  item.append(button);
-  if (state.evalOpenId === row.message_id) {
-    const note = el("pre", "eval-mail");
-    if (state.evalOpenError) note.textContent = state.evalOpenError;
-    else if (state.evalOpenText) note.textContent = state.evalOpenText;
-    else note.textContent = "Reading that mail...";
-    item.append(note);
-  }
+  const open = state.evalOpenId === row.message_id;
+  const item = el("button", "eval-card" + (open ? " open" : ""));
+  item.type = "button";
+  item.setAttribute("aria-expanded", String(open));
+  item.addEventListener("click", () => toggleFailedMail(row.message_id));
+  const top = el("div", "eval-card-top");
+  const titles = el("div");
+  titles.append(el("p", "eval-card-title", row.subject || "(no subject)"));
+  titles.append(el("p", "sub", shortDate(row.date) + " · " + (row.sender || "Unknown sender")));
+  top.append(titles);
+  top.append(el("p", "sub eval-card-aside", row.reason || "Not logged"));
+  item.append(top);
+  if (open) item.append(failedMailBody());
   return item;
+}
+
+function failedMailBody() {
+  const note = el("pre", "eval-mail");
+  if (state.evalOpenError) note.textContent = state.evalOpenError;
+  else if (state.evalOpenText) note.textContent = state.evalOpenText;
+  else note.textContent = "Reading that mail...";
+  return note;
 }
 
 function toggleFailedMail(messageId) {
@@ -1035,7 +1054,7 @@ function toggleFailedMail(messageId) {
 
 function renderCategoryEval(info, period) {
   const block = el("div", "eval-block");
-  block.append(el("h3", "", "Categories"));
+  block.append(el("h3", "", "Categories successfully matched"));
   const rows = (info.purchases || []).filter((row) => inEvalPeriod(row.date, period));
   const changed = rows.filter((row) => row.changed);
   const kept = rows.length - changed.length;
@@ -1044,7 +1063,7 @@ function renderCategoryEval(info, period) {
     block.append(el("p", "", "No email purchases for " + periodPhrase(period) + "."));
     return block;
   }
-  block.append(el("p", "eval-count", percent + "%"));
+  block.append(evalCount(percent));
   block.append(el("p", "", "unchanged after logging"));
   block.append(el("p", "", kept + " left as logged"));
   block.append(el("p", "", changed.length + " changed later"));
@@ -1054,9 +1073,9 @@ function renderCategoryEval(info, period) {
   }
   const list = el("div", "eval-list");
   changed.forEach((row) => {
-    const item = el("div", "eval-row");
+    const item = el("div", "eval-card");
     const shop = row.shop ? row.shop + ": " : "";
-    item.append(el("p", "", shop + (row.first_category || "blank") + ", then " + (row.final_category || "blank")));
+    item.append(el("p", "eval-card-title", shop + (row.first_category || "blank") + ", then " + (row.final_category || "blank")));
     item.append(el("p", "sub", shortDate(row.date)));
     list.append(item);
   });
@@ -1066,7 +1085,7 @@ function renderCategoryEval(info, period) {
 
 function renderGroupEval(info, period) {
   const block = el("div", "eval-block");
-  block.append(el("h3", "", "Group messages"));
+  block.append(el("h3", "", "Telegram message successfully sent"));
   const rows = (info.group_messages || []).filter((row) => inEvalPeriod(row.date, period));
   const sent = rows.filter((row) => row.sent);
   const missed = rows.filter((row) => !row.sent);
@@ -1075,7 +1094,7 @@ function renderGroupEval(info, period) {
     block.append(el("p", "", "No group notes for " + periodPhrase(period) + "."));
     return block;
   }
-  block.append(el("p", "eval-count", percent + "%"));
+  block.append(evalCount(percent));
   block.append(el("p", "", "sent"));
   block.append(el("p", "", sent.length + " sent"));
   block.append(el("p", "", missed.length + " not sent"));
@@ -1084,14 +1103,32 @@ function renderGroupEval(info, period) {
     return block;
   }
   const list = el("div", "eval-list");
-  missed.forEach((row) => {
-    const item = el("div", "eval-row");
-    item.append(el("p", "", (row.shop || "Unknown shop") + " · $" + row.amount));
-    item.append(el("p", "sub", shortDate(row.date) + " · logged by " + (row.logged_by || "unknown")));
-    list.append(item);
-  });
+  missed.forEach((row, index) => list.append(renderFailedGroup(row, index)));
   block.append(list);
   return block;
+}
+
+function renderFailedGroup(row, index) {
+  const key = [index, row.date, row.shop, row.amount, row.logged_by].join("|");
+  const open = state.evalOpenGroup === key;
+  const item = el("button", "eval-card" + (open ? " open" : ""));
+  item.type = "button";
+  item.setAttribute("aria-expanded", String(open));
+  item.addEventListener("click", () => {
+    state.evalOpenGroup = open ? "" : key;
+    render();
+  });
+  const top = el("div", "eval-card-top");
+  const titles = el("div");
+  titles.append(el("p", "eval-card-title", (row.shop || "Unknown shop") + " · $" + row.amount));
+  titles.append(el("p", "sub", shortDate(row.date) + " · logged by " + (row.logged_by || "unknown")));
+  top.append(titles);
+  top.append(el("p", "sub eval-card-aside", "message fail"));
+  item.append(top);
+  if (open) {
+    item.append(el("p", "eval-note", "The purchase is on the sheet. Telegram did not accept the group note."));
+  }
+  return item;
 }
 
 function shortDate(iso) {

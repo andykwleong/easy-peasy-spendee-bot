@@ -47,6 +47,23 @@ def load_category_config_until_ready(
             pause(retry_seconds)
 
 
+def correct_saved_reversal_rows(sheets) -> None:
+    """One Eval Log read at startup. A failure does not stop the page.
+
+    Rows whose reason is already ``reversal`` have Result set to pass.
+    This is not a timer. Opening Eval tries again if this write does not land.
+    """
+    corrector = getattr(sheets, "mark_handled_reversals", None)
+    if corrector is None:
+        return
+    try:
+        corrector()
+    except Exception:
+        LOGGER.exception(
+            "Could not update an old reversal row on Eval Log. The page stays up. Opening Eval will try again."
+        )
+
+
 def start_page_and_mail(
     settings,
     sheets: SheetsClient,
@@ -65,6 +82,12 @@ def start_page_and_mail(
     if dashboard_server is not None and mail_reader is not None:
         dashboard_server.dashboard_app.read_mail = mail_reader
     email_service.start_tap()
+    threading.Thread(
+        target=correct_saved_reversal_rows,
+        args=(sheets,),
+        name="eval-reversal-rows",
+        daemon=True,
+    ).start()
     reader = category_sheets
     if reader is None:
         reader = SheetsClient(

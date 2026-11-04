@@ -185,6 +185,20 @@ def eval_sheet_row(
     ]
 
 
+def handled_reversal_row_numbers(raw_rows: list[list[str]] | None) -> list[int]:
+    """Rows whose charge was removed, saved before that counted as handled.
+
+    Reason ``reversal`` is stored only when the original charge was removed.
+    Reason ``reversal_missing`` means that charge was not found, so it stays
+    a fail. The subject is not used.
+    """
+    return [
+        row.row_number
+        for row in parse_eval_rows(raw_rows)
+        if row.reason == REASON_REVERSAL and row.result != "pass"
+    ]
+
+
 def parse_eval_rows(raw_rows: list[list[str]] | None) -> list[EvalRow]:
     parsed: list[EvalRow] = []
     for index, raw in enumerate(raw_rows or [], start=2):

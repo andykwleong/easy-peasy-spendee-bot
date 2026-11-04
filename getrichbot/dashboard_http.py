@@ -592,7 +592,13 @@ class DashboardApp:
         return _json(200, {"ok": True, "body": limit_mail_text(str(body or ""))})
 
     def _eval_rows(self) -> list[list[str]]:
-        reader = getattr(self.context.sheets, "get_eval_log_rows", None)
+        sheets = self.context.sheets
+        # Prefer the corrector. It reads the same tab and rewrites only an old
+        # reversal whose charge was removed. A sheet without that method keeps
+        # the plain read.
+        reader = getattr(sheets, "mark_handled_reversals", None)
+        if reader is None:
+            reader = getattr(sheets, "get_eval_log_rows", None)
         if reader is None:
             return []
         try:

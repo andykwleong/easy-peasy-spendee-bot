@@ -13,6 +13,7 @@ from getrichbot.eval_log import CATEGORY_SOURCES
 from getrichbot.eval_log import EVAL_HEADERS
 from getrichbot.eval_log import EVAL_LOG_SHEET
 from getrichbot.eval_log import category_after_choice
+from getrichbot.eval_log import handled_reversal_row_numbers
 from getrichbot.eval_log import parse_eval_rows
 from getrichbot.models import CardUsageRecord, CardUsageRow, ExpenseRecord, ExpenseRow, is_paynow_method
 from getrichbot.sheet_changes import SheetChanges
@@ -166,6 +167,46 @@ class SheetsClient:
             range=f"{EVAL_LOG_SHEET}!A2:J",
         ).execute()
         return result.get("values", [])
+
+    def mark_handled_reversals(self) -> list[list[str]]:
+        """Set Result to pass where the saved reason is already ``reversal``.
+
+        Reads the hidden Eval Log tab. Writes only the Result cell. A reversal
+        that did not find the original charge stays fail. Does not read Gmail
+        and does not write a mail body or card digits. A failed write leaves
+        the rows unchanged so the next read can try again.
+        """
+        if self._sheet_id(EVAL_LOG_SHEET) is None:
+            return []
+        rows = self.get_eval_log_rows()
+        row_numbers = handled_reversal_row_numbers(rows)
+        if not row_numbers:
+            return rows
+        updates = [
+            {"range": f"{EVAL_LOG_SHEET}!E{row_number}", "values": [["pass"]]}
+            for row_number in row_numbers
+        ]
+        try:
+            self._service().spreadsheets().values().batchUpdate(
+                spreadsheetId=self.sheet_id,
+                body={"valueInputOption": "RAW", "data": updates},
+            ).execute()
+        except Exception:
+            LOGGER.exception(
+                "Could not mark an old reversal as handled. The Eval Log row is unchanged."
+            )
+            return rows
+        self._note_sheet_write(EVAL_LOG_SHEET)
+        wanted = set(row_numbers)
+        updated: list[list[str]] = []
+        for index, row in enumerate(rows):
+            copied = list(row)
+            if index + 2 in wanted:
+                while len(copied) <= 4:
+                    copied.append("")
+                copied[4] = "pass"
+            updated.append(copied)
+        return updated
 
     def update_eval_category(self, entry_id: str, category: str) -> None:
         """First choice fills both category columns. A later choice updates the final one."""

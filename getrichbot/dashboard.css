@@ -168,6 +168,10 @@ tr.needs-category td {
 .dot-green { background: var(--green); }
 .dot-red { background: var(--red); }
 .eval-count { font-size: 2.4rem; font-weight: 750; letter-spacing: -0.04em; line-height: 1.1; }
+.eval-count.tone-green { color: #1b6b45; }
+.eval-count.tone-yellow { color: #c4a035; }
+.eval-count.tone-orange { color: #e07a2f; }
+.eval-count.tone-red { color: #c44747; }
 .eval-periods { margin-bottom: 18px; }
 .eval-block {
   background: var(--card);

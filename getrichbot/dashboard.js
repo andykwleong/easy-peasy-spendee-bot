@@ -961,6 +961,17 @@ function wholePercent(part, whole) {
   return Math.floor((part * 100 + Math.floor(whole / 2)) / whole);
 }
 
+function evalHealthBand(percent) {
+  if (percent >= 95) return "green";
+  if (percent >= 80) return "orange";
+  if (percent >= 60) return "yellow";
+  return "red";
+}
+
+function evalCount(percent) {
+  return el("p", "eval-count tone-" + evalHealthBand(percent), percent + "%");
+}
+
 function renderEmailEval(info, period) {
   const block = el("div", "eval-block");
   block.append(el("h3", "", "Email logging"));
@@ -972,7 +983,7 @@ function renderEmailEval(info, period) {
     block.append(el("p", "", "No mail for " + periodPhrase(period) + "."));
     return block;
   }
-  block.append(el("p", "eval-count", percent + "%"));
+  block.append(evalCount(percent));
   block.append(el("p", "", "logged"));
   block.append(el("p", "", logged.length + " logged"));
   block.append(el("p", "", missed.length + " not logged"));
@@ -1044,7 +1055,7 @@ function renderCategoryEval(info, period) {
     block.append(el("p", "", "No email purchases for " + periodPhrase(period) + "."));
     return block;
   }
-  block.append(el("p", "eval-count", percent + "%"));
+  block.append(evalCount(percent));
   block.append(el("p", "", "unchanged after logging"));
   block.append(el("p", "", kept + " left as logged"));
   block.append(el("p", "", changed.length + " changed later"));
@@ -1075,7 +1086,7 @@ function renderGroupEval(info, period) {
     block.append(el("p", "", "No group notes for " + periodPhrase(period) + "."));
     return block;
   }
-  block.append(el("p", "eval-count", percent + "%"));
+  block.append(evalCount(percent));
   block.append(el("p", "", "sent"));
   block.append(el("p", "", sent.length + " sent"));
   block.append(el("p", "", missed.length + " not sent"));

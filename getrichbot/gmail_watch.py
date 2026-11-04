@@ -525,13 +525,17 @@ class EmailService:
             self.state.set(_message_key(message_id), "logged" if removed else "asked")
             if removed:
                 reason = REASON_REVERSAL
+                result = "pass"
             elif text == REVERSAL_MISSING_TEXT:
                 reason = REASON_REVERSAL_MISSING
+                result = "fail"
             elif "could not read" in (text or "").casefold():
                 reason = REASON_SHEET_UNREADABLE
+                result = "fail"
             else:
                 reason = REASON_NOT_WRITTEN
-            self._record_eval(message_id, sender, subject, result="fail", reason=reason)
+                result = "fail"
+            self._record_eval(message_id, sender, subject, result=result, reason=reason)
             return [text] if text else []
         if decision.action == "log":
             text = self._write(decision, message_id, subject, sender)

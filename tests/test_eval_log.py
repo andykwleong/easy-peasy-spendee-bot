@@ -21,6 +21,7 @@ from getrichbot.email_mail import REASON_STATEMENT
 from getrichbot.email_mail import decide_mail
 from getrichbot.eval_log import category_after_choice
 from getrichbot.eval_log import eval_sheet_row
+from getrichbot.eval_log import eval_view
 from getrichbot.eval_log import group_message_rows
 from getrichbot.eval_log import is_category_miss
 from getrichbot.eval_log import limit_mail_text
@@ -249,6 +250,91 @@ class EvalWriteTests(unittest.TestCase):
         blocked_service.process_notification("999")
         self.assertEqual(len(blocked_writer.rows), 1)
 
+    def test_a_reversal_that_removes_the_charge_is_not_counted_as_not_logged(self):
+        config = config_with(last4="1111")
+        context = Context(config, ("Food", INCOME_MISC))
+        original = ExpenseRecord(
+            row_number=2,
+            entry_id="ab12cd",
+            timestamp="09:00:00",
+            expense_date="2026-10-12",
+            month="2026-10",
+            logged_by="Me",
+            raw_input="email: SAMPLE SHOP",
+            amount=Decimal("165.00"),
+            category="Food",
+            description="SAMPLE SHOP",
+            input_type="Email",
+            status="Confirmed",
+            transaction_type="Expense",
+            payment_method="UOB Sample Visa",
+            payment_owner="Me",
+            payment_channel="PayWave",
+        )
+        context.records = [original]
+        context.deleted = []
+
+        def expense_records():
+            return list(context.records)
+
+        def delete_expense(entry_id):
+            context.deleted.append(entry_id)
+            context.records = [record for record in context.records if record.entry_id != entry_id]
+            return True
+
+        context.expense_records = expense_records
+        context.delete_expense = delete_expense
+        service, mailbox, state, writer = service_for(config)
+        service.context = context
+        recorded = []
+        service.eval_log = recorded.append
+        sent = []
+        service._notify = sent.append
+        service._notifier_bound = True
+        state.set(HISTORY_KEY, "100")
+        body = "\n".join(
+            (
+                "This is a reversal.",
+                "Account number XXXX-XXXX-XXXX-1111",
+                "Transaction date 12/10/26",
+                "Transaction amount SGD165.00",
+                "Transaction details SAMPLE SHOP",
+            )
+        )
+        mailbox.added = ["reverse"]
+        mailbox.messages["reverse"] = ("Card 4111111111111111", body, ("person-a@example.com",))
+        service.process_notification("999")
+
+        self.assertEqual(writer.rows, [])
+        self.assertEqual(context.deleted, ["ab12cd"])
+        self.assertEqual(len(sent), 1)
+        self.assertIn("The original charge was reversed and removed.", sent[0])
+        self.assertEqual(len(recorded), 1)
+        row = recorded[0]
+        self.assertEqual(row[4], "pass")
+        self.assertEqual(row[5], REASON_REVERSAL)
+        self.assertEqual(row[6], "")
+        joined = " ".join(row)
+        self.assertNotIn("4111111111111111", joined)
+        self.assertNotIn("XXXX-XXXX-XXXX-1111", joined)
+        self.assertNotIn("This is a reversal", joined)
+        self.assertNotIn("SGD165.00", joined)
+        view = eval_view([row], [], [], {}, date(2026, 10, 5))
+        self.assertEqual(view["emails"][0]["result"], "pass")
+        self.assertEqual([item for item in view["emails"] if item["result"] != "pass"], [])
+        self.assertEqual(view["purchases"], [])
+
+        def boom(_row):
+            raise RuntimeError("eval sheet down")
+
+        context.records = [original]
+        service.eval_log = boom
+        mailbox.added = ["reverse-again"]
+        mailbox.messages["reverse-again"] = ("Card transaction", body, ("person-a@example.com",))
+        service.process_notification("1000")
+        self.assertEqual(context.deleted, ["ab12cd", "ab12cd"])
+        self.assertEqual(writer.rows, [])
+
     def test_a_reversal_with_no_original_charge_is_reversal_missing(self):
         context = Context(config_with(last4="1111"), ("Food", INCOME_MISC))
         context.expense_records = lambda: []
@@ -347,6 +433,24 @@ class EvalDashboardTests(unittest.TestCase):
         self.assertIn("unchanged after logging", script)
         self.assertIn("not sent", script)
         self.assertNotIn("no mark yet", script)
+        self.assertIn("function evalHealthBand(percent)", script)
+        self.assertIn('if (percent >= 95) return "green"', script)
+        self.assertIn('if (percent >= 80) return "orange"', script)
+        self.assertIn('if (percent >= 60) return "yellow"', script)
+        self.assertEqual(script.count("block.append(evalCount(percent))"), 3)
+        self.assertIn('["green", "Green", "Under 60%"]', script)
+        self.assertIn('["red", "Red", "95% or more"]', script)
+        self.assertIn('"fill-" + limit.band', script)
+
+        css_status, _, css_payload = app.handle("GET", "/dashboard.css", {}, b"", secure=False)
+        style = css_payload.decode()
+        self.assertEqual(css_status, 200)
+        self.assertIn(".eval-count.tone-green { color: #1b6b45; }", style)
+        self.assertIn(".eval-count.tone-yellow { color: #c4a035; }", style)
+        self.assertIn(".eval-count.tone-orange { color: #e07a2f; }", style)
+        self.assertIn(".eval-count.tone-red { color: #c44747; }", style)
+        self.assertIn(".fill-green { background: #1b6b45; }", style)
+        self.assertIn(".fill-red { background: #c44747; }", style)
 
 
 def _expense(entry_id: str, expense_date: str) -> ExpenseRecord:

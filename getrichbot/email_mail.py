@@ -85,6 +85,11 @@ _SHOP_AFTER_MONTH_RE = re.compile(
     rf"\bon\s+({_MONTH_DATE}){_OPTIONAL_CLOCK}\s+at\s+(.+?)(?=\.|\n|$)",
     re.IGNORECASE,
 )
+_SHOP_AFTER_CARD_RE = re.compile(
+    r"\bcard\s*\(\s*-\s*\d{4}\s*\)\s+at\s+(.+?)(?=\.|\n|$)",
+    re.IGNORECASE,
+)
+_CUT_OFF_PAREN_RE = re.compile(r"\s*\([^)]*$")
 _SHOP_LABEL_RE = re.compile(
     r"^(?:transaction\s+details|description|merchant|shop|to)\b\s*:?\s*(.*)$",
     re.IGNORECASE,
@@ -330,7 +335,7 @@ def _purchase_decision(
 ) -> EmailDecision:
     clause = _first_purchase_clause(body)
     if clause is None:
-        shop = _labeled_shop(body) or ""
+        shop = _labeled_shop(body) or _shop_after_card(body) or ""
         expense_date = _mail_date(body, today)
         sentence = None
     else:
@@ -473,7 +478,7 @@ def _bank_account_decision(
 def _reversal_decision(body: str, today: date) -> EmailDecision:
     clause = _first_purchase_clause(body)
     if clause is None:
-        shop = _labeled_shop(body) or ""
+        shop = _labeled_shop(body) or _shop_after_card(body) or ""
         sentence = None
     else:
         shop = clause.shop
@@ -658,6 +663,17 @@ def _first_purchase_clause(body: str) -> _PurchaseClause | None:
         expense_date=_parse_date_text(found.group(1)),
         sentence=_sentence_around(text, found.start(), found.end()),
     )
+
+
+def _shop_after_card(body: str) -> str | None:
+    """Shop written after the card, as in `card (-1111) at SAMPLE SHOP`.
+
+    A parenthesis cut off at the end, with no closing mark, is not part of the name.
+    """
+    match = _SHOP_AFTER_CARD_RE.search(body or "")
+    if match is None:
+        return None
+    return _clean_shop(_CUT_OFF_PAREN_RE.sub("", match.group(1)))
 
 
 def _labeled_shop(body: str) -> str | None:

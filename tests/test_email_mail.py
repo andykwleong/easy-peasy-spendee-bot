@@ -708,6 +708,7 @@ class EmailMailTests(unittest.TestCase):
         self.assertEqual(decision.expense_date, date(2026, 11, 5))
         self.assertEqual(decision.payment_method, "UOB Sample Visa")
         self.assertEqual(decision.payment_owner, "Me")
+        self.assertEqual(decision.shop, "SAMPLE SHOP")
         unmatched = decide("Fwd: Card Transaction Alert", body, config_with(last4="2222"))
         self.assertEqual(unmatched.action, "ask")
         self.assertEqual(unmatched.reason, REASON_NO_CARD_MATCH)
@@ -720,6 +721,74 @@ class EmailMailTests(unittest.TestCase):
         self.assertEqual(not_a_card.action, "ask")
         self.assertEqual(not_a_card.reason, REASON_NO_CARD)
         self.assertIn("the card was missing", not_a_card.text)
+
+    def test_shop_after_the_card_reuses_the_category_already_used_for_that_shop(self):
+        body = "\n".join(
+            (
+                "Date: Thu, Nov 5, 2026 at 10:20 AM",
+                "We wish to inform you that SGD12.30 was charged at 10:20 on 05-Nov-26 to",
+                "your card (-1111) at SAMPLE MARKET (Paym SI.",
+            )
+        )
+        records = (
+            ExpenseRecord(
+                row_number=2,
+                entry_id="aaa111",
+                timestamp="09:00:00",
+                expense_date="2026-10-01",
+                month="2026-10",
+                logged_by="Me",
+                raw_input="email: SAMPLE MARKET",
+                amount=Decimal("4.00"),
+                category="Food",
+                description="SAMPLE MARKET",
+                input_type="Email",
+                status="Confirmed",
+            ),
+        )
+        looked_up = []
+        decision = decide_mail(
+            "Fwd: Card Transaction Alert",
+            body,
+            ("person-a@example.com",),
+            forwarders={"person-a@example.com": "Me"},
+            methods=config_with(last4="1111").payment_methods,
+            categories=("Food", "Groceries", INCOME_MISC),
+            channels_for=config_with(last4="1111").channel_options_for,
+            category_for=lambda *args, **kwargs: looked_up.append(args),
+            today=TODAY,
+            expense_records=records,
+        )
+        self.assertEqual(decision.action, "log", decision.text)
+        self.assertEqual(decision.shop, "SAMPLE MARKET")
+        self.assertNotIn("Paym", decision.shop)
+        self.assertEqual(decision.category, "Food")
+        self.assertEqual(decision.last4, "1111")
+        self.assertEqual(decision.amount, Decimal("12.30"))
+        self.assertEqual(decision.expense_date, date(2026, 11, 5))
+        self.assertEqual(looked_up, [])
+
+    def test_shop_after_the_card_uses_a_keyword_and_does_not_invent_one(self):
+        body = "\n".join(
+            (
+                "Date: Thu, Nov 5, 2026 at 10:20 AM",
+                "We wish to inform you that SGD12.30 was charged at 10:20 on 05-Nov-26 to",
+                "your card (-1111) at SAMPLE FOOD.",
+            )
+        )
+        known = decide("Fwd: Card Transaction Alert", body, config_with(last4="1111"))
+        self.assertEqual(known.action, "log", known.text)
+        self.assertEqual(known.shop, "SAMPLE FOOD")
+        self.assertEqual(known.category, "Food")
+        self.assertEqual(known.last4, "1111")
+        self.assertEqual(known.expense_date, date(2026, 11, 5))
+        unknown = decide(
+            "Fwd: Card Transaction Alert",
+            body.replace("SAMPLE FOOD", "Zzzqq Plug"),
+            config_with(last4="1111"),
+        )
+        self.assertEqual(unknown.shop, "Zzzqq Plug")
+        self.assertEqual(unknown.category, "")
 
     def test_month_without_a_year_uses_another_date_in_the_same_mail(self):
         body = (

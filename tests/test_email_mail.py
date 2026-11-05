@@ -15,6 +15,9 @@ from getrichbot.dashboard_http import DashboardApp
 from getrichbot.dashboard_http import DashboardContext
 from getrichbot.categories import configure_category_config
 from getrichbot.email_mail import INCOME_MISC
+from getrichbot.email_mail import REASON_LOGGED
+from getrichbot.email_mail import REASON_NO_CARD
+from getrichbot.email_mail import REASON_NO_CARD_MATCH
 from getrichbot.email_mail import MIXED_SHOP_ASK
 from getrichbot.email_mail import REVERSAL_MISSING_TEXT
 from getrichbot.email_mail import build_expense_row
@@ -688,6 +691,35 @@ class EmailMailTests(unittest.TestCase):
         for decision in (uen, reference):
             self.assertEqual(decision.action, "ask")
             self.assertIn("the card was missing", decision.text)
+
+    def test_card_in_parentheses_matches_the_payment_methods_last4(self):
+        body = "\n".join(
+            (
+                "Date: Thu, Nov 5, 2026 at 10:20 AM",
+                "We wish to inform you that SGD12.30 was charged at 10:20 on 05-Nov-26 to",
+                "your card (-1111) at SAMPLE SHOP.",
+            )
+        )
+        decision = decide("Fwd: Card Transaction Alert", body, config_with(last4="1111"))
+        self.assertEqual(decision.action, "log")
+        self.assertEqual(decision.reason, REASON_LOGGED)
+        self.assertEqual(decision.last4, "1111")
+        self.assertEqual(decision.amount, Decimal("12.30"))
+        self.assertEqual(decision.expense_date, date(2026, 11, 5))
+        self.assertEqual(decision.payment_method, "UOB Sample Visa")
+        self.assertEqual(decision.payment_owner, "Me")
+        unmatched = decide("Fwd: Card Transaction Alert", body, config_with(last4="2222"))
+        self.assertEqual(unmatched.action, "ask")
+        self.assertEqual(unmatched.reason, REASON_NO_CARD_MATCH)
+        self.assertIn("could not match one card", unmatched.text)
+        not_a_card = decide(
+            "Card transaction",
+            "Amount: SGD12.30\ndated 05/11/2026\nnote (-1111)\nTo: SAMPLE SHOP\n",
+            config_with(last4="1111"),
+        )
+        self.assertEqual(not_a_card.action, "ask")
+        self.assertEqual(not_a_card.reason, REASON_NO_CARD)
+        self.assertIn("the card was missing", not_a_card.text)
 
     def test_month_without_a_year_uses_another_date_in_the_same_mail(self):
         body = (

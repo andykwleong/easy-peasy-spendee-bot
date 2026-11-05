@@ -35,7 +35,8 @@ const state = {
   evalOpenId: "",
   evalOpenText: "",
   evalOpenError: "",
-  evalOpenGroup: ""
+  evalOpenGroup: "",
+  recentQuery: ""
 };
 
 const app = document.querySelector("#app");
@@ -161,6 +162,7 @@ async function loginWithWidget(user) {
   state.scope = "both";
   state.cards = "mine";
   state.missingCategory = false;
+  state.recentQuery = "";
   state.editingId = "";
   state.pendingDelete = null;
   state.deleteError = "";
@@ -182,6 +184,7 @@ async function logout() {
   state.saving = false;
   state.loading = false;
   state.refreshNote = "";
+  state.recentQuery = "";
   state.view = "recent";
   state.message = "Logged out. This browser has forgotten you.";
   renderLogin();
@@ -345,8 +348,9 @@ function scopeChip(id, label) {
 
 function renderRecent() {
   const section = el("section");
-  const head = el("div", "page-head");
+  const head = el("div", "page-head recent-head");
   head.append(el("h2", "", "Recent transactions"));
+  const tools = el("div", "recent-tools");
   const filters = el("div", "filters");
   personFilters().forEach((person) => filters.append(scopeChip(person.scope, person.label)));
   filters.append(scopeChip("both", "Both"));
@@ -358,16 +362,68 @@ function renderRecent() {
     loadDashboard();
   });
   filters.append(missing);
-  head.append(filters);
+  tools.append(filters, recentSearchBox());
+  head.append(tools);
   section.append(head);
-  if (state.payload.recent_truncated) {
-    section.append(el("p", "sub", "Showing the latest " + state.payload.recent_limit + " confirmed rows."));
-  }
-  if (!state.payload.recent.length) {
-    section.append(el("p", "empty", state.missingCategory ? "No rows are missing a category." : "No confirmed rows for this view."));
-  }
-  state.payload.recent.forEach((row) => section.append(renderTransaction(row)));
+  const list = el("div", "recent-list");
+  fillRecentList(list);
+  section.append(list);
   return section;
+}
+
+function recentSearchBox() {
+  const label = el("label", "recent-search");
+  const input = document.createElement("input");
+  input.type = "search";
+  input.value = state.recentQuery;
+  input.placeholder = "Search shop, category, or amount";
+  input.setAttribute("aria-label", "Search recent rows");
+  input.autocomplete = "off";
+  input.spellcheck = false;
+  input.addEventListener("input", onRecentSearch);
+  input.addEventListener("search", onRecentSearch);
+  label.append(input);
+  return label;
+}
+
+function onRecentSearch(event) {
+  state.recentQuery = event.target.value;
+  const list = document.querySelector(".recent-list");
+  if (list) fillRecentList(list);
+}
+
+function fillRecentList(list) {
+  list.replaceChildren();
+  const recent = state.payload && state.payload.recent ? state.payload.recent : [];
+  const query = recentQueryText();
+  const rows = recent.filter((row) => recentRowMatches(row, query));
+  if (state.payload && state.payload.recent_truncated) {
+    list.append(el("p", "sub", "Showing the latest " + state.payload.recent_limit + " confirmed rows."));
+  }
+  if (!rows.length) {
+    const empty = query
+      ? "No rows match that search."
+      : (state.missingCategory ? "No rows are missing a category." : "No confirmed rows for this view.");
+    list.append(el("p", "empty", empty));
+    return;
+  }
+  rows.forEach((row) => list.append(renderTransaction(row)));
+}
+
+function recentQueryText() {
+  return state.recentQuery.trim().toLowerCase();
+}
+
+function recentRowMatches(row, query) {
+  if (!query) return true;
+  const shop = String(row.description || "No description").toLowerCase();
+  const category = categoryLabel(row).toLowerCase();
+  const shown = money(row.amount).toLowerCase();
+  const raw = String(row.amount == null ? "" : row.amount).toLowerCase();
+  if (shop.includes(query) || category.includes(query) || shown.includes(query) || raw.includes(query)) return true;
+  const compact = query.replace(/[$,]/g, "");
+  if (!compact || compact === query) return false;
+  return shown.replace(/[$,]/g, "").includes(compact) || raw.replace(/[$,]/g, "").includes(compact);
 }
 
 function renderTransaction(row) {

@@ -475,6 +475,17 @@ class DashboardHttpTests(unittest.TestCase):
         self.assertIn("No category", script)
         self.assertNotIn('["mine", cards.viewer_label]', script)
         self.assertIn('["eval", "Eval"]', script)
+        self.assertIn('aria-label", "Search recent rows"', script)
+        self.assertIn("Search shop, category, or amount", script)
+        search = script.split("function onRecentSearch", 1)[1].split("function ", 1)[0]
+        self.assertNotIn("loadDashboard", search)
+        self.assertNotIn("fetch(", search)
+        path = script.split("function dashboardPath()", 1)[1].split("function ", 1)[0]
+        self.assertNotIn("recentQuery", path)
+        for name in ("renderCards", "renderMonth", "renderRaw", "renderEval"):
+            body = script.split(f"function {name}()", 1)[1].split("function ", 1)[0]
+            self.assertNotIn("recentSearchBox", body)
+            self.assertNotIn("Search recent rows", body)
         self.assertIn('row.message_status === "Message sent"', script)
         self.assertIn('row.message_status !== "message fail"', script)
         self.assertNotIn("guesses were right or wrong", script)

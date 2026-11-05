@@ -1497,7 +1497,9 @@ class DashboardPromptTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(status, 200)
         script = payload.decode()
         confirm = script.split("async function confirmDelete()", 1)[1].split("function renderEditor", 1)[0]
-        self.assertIn('state.deleting ? "Deleting..." : "Delete"', script)
+        self.assertNotIn("Deleting...", script)
+        self.assertIn('el("button", "primary danger", "Delete")', script)
+        self.assertIn('el("div", "delete-spin")', script)
         self.assertLess(confirm.index("await fetch"), confirm.index("state.payload = body"))
         self.assertIn("if (!response.ok || !body.ok)", confirm[: confirm.index("state.payload = body")])
         self.assertIn("state.deleteError = body.message", confirm)

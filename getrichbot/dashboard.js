@@ -372,12 +372,7 @@ function renderRecent() {
 
 function renderTransaction(row) {
   const pending = expenseCategoryIsBlank(row);
-  const busy = rowDeleteBusy(row);
-  const classes = ["tx"];
-  if (pending) classes.push("needs-category");
-  if (busy) classes.push("is-deleting");
-  const article = el("article", classes.join(" "));
-  if (busy) article.setAttribute("aria-busy", "true");
+  const article = el("article", pending ? "tx needs-category" : "tx");
   const line = el("div", "tx-line");
   const shop = el("div", "tx-shop");
   shop.append(el("div", "merchant", row.description || "No description"));
@@ -395,12 +390,10 @@ function renderTransaction(row) {
   line.append(shop, category, logged, moneySide);
   article.append(line);
   const actions = el("div", "tx-actions");
-  if (busy) actions.append(deleteStatus());
   actions.append(deleteButton(row));
   const open = state.editingId === row.id;
   const fix = el("button", "text-btn", open ? "Save" : "Fix tagging");
   fix.type = "button";
-  fix.disabled = busy;
   fix.setAttribute("aria-expanded", String(open));
   fix.addEventListener("click", () => {
     if (!open) {
@@ -425,24 +418,18 @@ function renderTransaction(row) {
   return article;
 }
 
-function rowDeleteBusy(row) {
-  const pending = state.pendingDelete;
-  return Boolean(state.deleting && pending && row && pending.id === row.id && pending.source === row.source);
-}
-
-function deleteStatus() {
-  const status = el("p", "tx-status", "Deleting...");
-  status.setAttribute("role", "status");
-  return status;
-}
-
 function deleteButton(row) {
   const button = el("button", "text-btn danger-text", "Delete");
   button.type = "button";
   button.setAttribute("aria-label", "Delete " + (row.description || "this row"));
-  if (rowDeleteBusy(row)) button.disabled = true;
   button.addEventListener("click", () => askDelete(row));
   return button;
+}
+
+function deleteSpinner() {
+  const spin = el("div", "delete-spin");
+  spin.setAttribute("aria-hidden", "true");
+  return spin;
 }
 
 function askDelete(row) {
@@ -480,19 +467,20 @@ function renderDeletePopup() {
   dialog.append(el("div", "modal-shop", pending.shop));
   dialog.append(el("div", "modal-amount", money(pending.amount)));
   dialog.append(el("div", "modal-date", prettyDate(pending.date)));
-  if (state.deleting) dialog.append(deleteStatus());
   if (state.deleteError) dialog.append(el("p", "banner", state.deleteError));
   const actions = el("div", "modal-actions");
   const cancel = el("button", "text-btn", "Cancel");
   cancel.type = "button";
-  cancel.disabled = state.deleting;
   cancel.addEventListener("click", cancelDelete);
-  const confirm = el("button", "primary danger", state.deleting ? "Deleting..." : "Delete");
-  confirm.type = "button";
-  confirm.disabled = state.deleting;
-  if (state.deleting) confirm.setAttribute("aria-busy", "true");
-  confirm.addEventListener("click", confirmDelete);
-  actions.append(cancel, confirm);
+  actions.append(cancel);
+  if (state.deleting) {
+    actions.append(deleteSpinner());
+  } else {
+    const confirm = el("button", "primary danger", "Delete");
+    confirm.type = "button";
+    confirm.addEventListener("click", confirmDelete);
+    actions.append(confirm);
+  }
   dialog.append(actions);
   back.addEventListener("click", (event) => {
     if (event.target === back) cancelDelete();
@@ -1221,13 +1209,9 @@ function rawTable(title, headers, records) {
   table.append(thead);
   const body = el("tbody");
   records.forEach((record) => {
-    const busy = record.deleteTarget && rowDeleteBusy(record.deleteTarget);
-    const rowClass = [record.needsCategory ? "needs-category" : "", busy ? "is-deleting" : ""].filter(Boolean).join(" ");
-    const row = el("tr", rowClass);
-    if (busy) row.setAttribute("aria-busy", "true");
+    const row = el("tr", record.needsCategory ? "needs-category" : "");
     record.cells.forEach((value, index) => row.append(el("td", index === 3 ? "num" : "", value)));
     const action = el("td");
-    if (busy) action.append(deleteStatus());
     if (record.deleteTarget) action.append(deleteButton(record.deleteTarget));
     row.append(action);
     body.append(row);

@@ -72,6 +72,7 @@ _ACCOUNT_ENDING_RE = re.compile(
 )
 _MASKED_GROUP_LAST4_RE = re.compile(r"(?:[*xX]{2,4}(?:[-\s]+[*xX]{2,4}){2,}[-\s]+)(\d{4})\b")
 _MASKED_LAST4_RE = re.compile(r"(?:[*xX]{2,}|•{2,})\s*(\d{4})(?!\d)")
+_PAREN_LAST4_RE = re.compile(r"\bcard\s*\(\s*-\s*(\d{4})\s*\)", re.IGNORECASE)
 _SLASH_DATE = r"\d{1,2}/\d{1,2}/(?:\d{4}|\d{2})"
 _MONTH_DATE = r"\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4}"
 _CLOCK = r"\d{1,2}:\d{2}(?:\s*[AP]M)?"
@@ -584,7 +585,7 @@ def _overlaps_account_ending(start: int, end: int, spans: tuple[tuple[int, int],
 def _last4s(body: str) -> tuple[str, ...]:
     spans = _account_ending_spans(body)
     found: list[str] = []
-    for regex in (_MASKED_GROUP_LAST4_RE, _MASKED_LAST4_RE, _LAST4_RE):
+    for regex in (_MASKED_GROUP_LAST4_RE, _MASKED_LAST4_RE, _LAST4_RE, _PAREN_LAST4_RE):
         for match in regex.finditer(body or ""):
             if _overlaps_account_ending(match.start(), match.end(), spans):
                 continue

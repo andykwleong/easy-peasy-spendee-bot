@@ -225,6 +225,8 @@ button.eval-card { font: inherit; cursor: pointer; }
   overflow-wrap: anywhere;
 }
 .tx-actions { margin-top: 10px; display: flex; justify-content: flex-end; align-items: center; gap: 10px; flex-wrap: wrap; }
+.tx.is-deleting { box-shadow: inset 4px 0 0 var(--red), var(--shadow); }
+.tx-status { margin: 0 auto 0 0; color: var(--red); font-weight: 650; font-size: 0.92rem; }
 .danger-text { color: var(--red); border-color: #e3c8c4; }
 .modal-back {
   position: fixed;
@@ -248,8 +250,11 @@ button.eval-card { font: inherit; cursor: pointer; }
 .modal-amount { font-variant-numeric: tabular-nums; font-weight: 750; font-size: 1.2rem; margin-top: 4px; }
 .modal-date { color: var(--muted); margin-top: 2px; }
 .modal-actions { display: flex; justify-content: center; gap: 8px; margin-top: 18px; flex-wrap: wrap; }
+.modal .tx-status { margin: 14px 0 0; }
 .danger { background: var(--red); color: white; border-color: var(--red); }
+.danger:disabled { cursor: wait; opacity: 0.72; }
 .text-btn:disabled { cursor: not-allowed; opacity: 0.55; }
+tr.is-deleting td { background: var(--red-soft); }
 .later-note { color: var(--muted); font-size: 0.82rem; }
 .edit-box {
   margin-top: 12px;

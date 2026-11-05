@@ -482,7 +482,14 @@ function deleteButton(row) {
   return button;
 }
 
+function deleteSpinner() {
+  const spin = el("div", "delete-spin");
+  spin.setAttribute("aria-hidden", "true");
+  return spin;
+}
+
 function askDelete(row) {
+  if (state.deleting) return;
   state.pendingDelete = {
     id: row.id,
     source: row.source,
@@ -509,6 +516,7 @@ function renderDeletePopup() {
   dialog.setAttribute("role", "dialog");
   dialog.setAttribute("aria-modal", "true");
   dialog.setAttribute("aria-labelledby", "delete-title");
+  if (state.deleting) dialog.setAttribute("aria-busy", "true");
   const title = el("h3", "", "Delete this row?");
   title.id = "delete-title";
   dialog.append(title);
@@ -519,13 +527,16 @@ function renderDeletePopup() {
   const actions = el("div", "modal-actions");
   const cancel = el("button", "text-btn", "Cancel");
   cancel.type = "button";
-  cancel.disabled = state.deleting;
   cancel.addEventListener("click", cancelDelete);
-  const confirm = el("button", "primary danger", "Delete");
-  confirm.type = "button";
-  confirm.disabled = state.deleting;
-  confirm.addEventListener("click", confirmDelete);
-  actions.append(cancel, confirm);
+  actions.append(cancel);
+  if (state.deleting) {
+    actions.append(deleteSpinner());
+  } else {
+    const confirm = el("button", "primary danger", "Delete");
+    confirm.type = "button";
+    confirm.addEventListener("click", confirmDelete);
+    actions.append(confirm);
+  }
   dialog.append(actions);
   back.addEventListener("click", (event) => {
     if (event.target === back) cancelDelete();

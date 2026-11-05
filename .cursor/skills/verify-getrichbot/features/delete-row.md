@@ -6,7 +6,7 @@ Delete a row asks for confirmation, can be cancelled, and removes the row only a
 
 - `delete-ask` opens a dialog named `Delete this row?` for one shop.
 - `delete-cancel` closes the dialog and leaves the row in place.
-- `delete-confirm` removes that row from Recent and from the sheet read.
+- `delete-confirm` removes that row from Recent and from the sheet read only after the delete finishes. While it is working, the Delete button is replaced by a spinning circle. Cancel stays. The words `Deleting...` are not shown. The row stays listed until then. If the delete fails, the circle goes away, Delete comes back, the existing error stays in the popup, and the row stays.
 
 ## How to get to it (user POV)
 
@@ -37,5 +37,6 @@ Preconditions:
 - The row control is `Delete Sample cafe`. The dialog's confirm control is `Delete`. Clicking the wrong one either does nothing useful or deletes before the dialog is checked.
 - Cancel must be proved with `after-cancel.json` still containing `aa1001`. A closed dialog is not enough.
 - Confirm deletes only inside this server's memory. The household Google Sheet is not changed. Launch again to restore `Sample cafe`.
+- The fake sheet answers at once, so the spinning circle is gone by the time the empty list appears. A screenshot after that wait does not show it.
 - `sheet-show --scope Alex` after confirm can be an empty recent list. Use `--scope both` to see that Sam's row survived.
 - Do not confirm a delete on a server you did not launch.

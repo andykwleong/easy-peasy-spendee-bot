@@ -1500,6 +1500,22 @@ class DashboardPromptTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([item["label"] for item in deleted["person_filters"]], ["Andy", "FX"])
         self.assertEqual([item["scope"] for item in deleted["person_filters"]], ["Alex", "Sam"])
 
+    def test_delete_loading_copy_keeps_the_row_until_the_sheet_answers(self):
+        app, _sheets = app_for()
+
+        status, _, payload = app.handle("GET", "/dashboard.js", {}, b"", secure=False)
+
+        self.assertEqual(status, 200)
+        script = payload.decode()
+        confirm = script.split("async function confirmDelete()", 1)[1].split("function renderEditor", 1)[0]
+        self.assertNotIn("Deleting...", script)
+        self.assertIn('el("button", "primary danger", "Delete")', script)
+        self.assertIn('el("div", "delete-spin")', script)
+        self.assertLess(confirm.index("await fetch"), confirm.index("state.payload = body"))
+        self.assertIn("if (!response.ok || !body.ok)", confirm[: confirm.index("state.payload = body")])
+        self.assertIn("state.deleteError = body.message", confirm)
+        self.assertNotIn("state.payload = null", confirm)
+
     async def test_menu_button_failure_does_not_stop_startup(self):
         class Bot:
             async def set_chat_menu_button(self, menu_button=None):

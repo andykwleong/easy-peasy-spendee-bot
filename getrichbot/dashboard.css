@@ -270,8 +270,18 @@ button.eval-card { font: inherit; cursor: pointer; }
 .modal-shop { font-weight: 700; font-size: 1.05rem; overflow-wrap: anywhere; }
 .modal-amount { font-variant-numeric: tabular-nums; font-weight: 750; font-size: 1.2rem; margin-top: 4px; }
 .modal-date { color: var(--muted); margin-top: 2px; }
-.modal-actions { display: flex; justify-content: center; gap: 8px; margin-top: 18px; flex-wrap: wrap; }
+.modal-actions { display: flex; justify-content: center; gap: 8px; margin-top: 18px; flex-wrap: wrap; align-items: center; }
 .danger { background: var(--red); color: white; border-color: var(--red); }
+.delete-spin {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 3px solid #f0d2d0;
+  border-top-color: var(--red);
+  animation: delete-spin 0.7s linear infinite;
+  flex: none;
+}
+@keyframes delete-spin { to { transform: rotate(360deg); } }
 .text-btn:disabled { cursor: not-allowed; opacity: 0.55; }
 .later-note { color: var(--muted); font-size: 0.82rem; }
 .edit-box {

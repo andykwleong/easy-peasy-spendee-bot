@@ -23,6 +23,7 @@ from getrichbot.eval_log import category_after_choice
 from getrichbot.eval_log import eval_sheet_row
 from getrichbot.eval_log import eval_view
 from getrichbot.eval_log import group_message_rows
+from getrichbot.eval_log import handled_reversal_row_numbers
 from getrichbot.eval_log import is_category_miss
 from getrichbot.eval_log import limit_mail_text
 from getrichbot.eval_log import mask_card_digits
@@ -33,6 +34,8 @@ from getrichbot.gmail_watch import HISTORY_KEY
 from getrichbot.group_post import MESSAGE_FAIL
 from getrichbot.group_post import MESSAGE_SENT
 from getrichbot.models import ExpenseRecord
+from getrichbot.sheet_changes import SheetChanges
+from getrichbot.sheets import SheetsClient
 from test_dashboard_http import FakeSheets
 from test_dashboard_http import app_for
 from test_dashboard_http import body_json
@@ -370,6 +373,213 @@ class EvalWriteTests(unittest.TestCase):
                 raise RuntimeError("eval sheet down")
 
         remember_category_choice(Sheets(), "abc123", "Food")
+
+
+class OldReversalRowTests(unittest.TestCase):
+    def test_a_saved_removal_is_marked_handled_and_a_missing_charge_stays_not_logged(self):
+        card = "4111111111111111"
+        removed = [
+            "2026-10-12",
+            "mail-old",
+            "Sample Bank",
+            "Card " + card + " reversal notice",
+            "fail",
+            REASON_REVERSAL,
+            "",
+            "",
+            "",
+            "",
+        ]
+        missing = [
+            "2026-10-12",
+            "mail-miss",
+            "Sample Bank",
+            "A reversal notice",
+            "fail",
+            REASON_REVERSAL_MISSING,
+            "",
+            "",
+            "",
+            "",
+        ]
+        other = [
+            "2026-10-12",
+            "mail-quiet",
+            "Sample Bank",
+            "This is a reversal.",
+            "fail",
+            REASON_NO_AMOUNT,
+            "",
+            "",
+            "",
+            "",
+        ]
+        already = [
+            "2026-10-13",
+            "mail-new",
+            "Sample Bank",
+            "Later reversal",
+            "pass",
+            REASON_REVERSAL,
+            "",
+            "",
+            "",
+            "",
+        ]
+        rows = [removed, [], missing, other, already]
+        self.assertEqual(handled_reversal_row_numbers(rows), [2])
+
+        service = _EvalSheet(rows)
+        changes = SheetChanges(watched_sheets=frozenset({"Eval Log"}))
+        client = SheetsClient("sheet-id", changes=changes)
+        client.service = service
+        before = changes.mark()
+
+        updated = client.mark_handled_reversals()
+
+        self.assertEqual(len(service.writes), 1)
+        written = service.writes[0]["body"]["data"]
+        self.assertEqual(written, [{"range": "Eval Log!E2", "values": [["pass"]]}])
+        dumped = json.dumps(service.writes)
+        self.assertNotIn(card, dumped)
+        self.assertNotIn("This is a reversal", dumped)
+        self.assertNotIn("SGD", dumped)
+        self.assertNotEqual(changes.mark(), before)
+        self.assertEqual(updated[0][4], "pass")
+        self.assertEqual(updated[0][5], REASON_REVERSAL)
+        self.assertEqual(updated[0][3], removed[3])
+        self.assertEqual(updated[2][4], "fail")
+        self.assertEqual(updated[2][5], REASON_REVERSAL_MISSING)
+        self.assertEqual(updated[3][4], "fail")
+        self.assertEqual(updated[3][5], REASON_NO_AMOUNT)
+        self.assertEqual(updated[4][4], "pass")
+        view = eval_view(updated, [], [], {}, date(2026, 10, 14))
+        not_logged = [item for item in view["emails"] if item["result"] != "pass"]
+        self.assertEqual([item["subject"] for item in not_logged], ["A reversal notice", "This is a reversal."])
+        self.assertEqual(view["purchases"], [])
+
+        again = client.mark_handled_reversals()
+        self.assertEqual(len(service.writes), 1)
+        self.assertEqual(again[0][4], "pass")
+        self.assertEqual([item for item in eval_view(again, [], [], {}, date(2026, 10, 14))["emails"] if item["result"] != "pass"], not_logged)
+
+    def test_a_failed_result_update_leaves_the_old_reversal_not_logged(self):
+        rows = [[
+            "2026-10-12",
+            "mail-old",
+            "Sample Bank",
+            "A reversal notice",
+            "fail",
+            REASON_REVERSAL,
+            "",
+            "",
+            "",
+            "",
+        ]]
+        service = _EvalSheet(rows, fail_write=True)
+        changes = SheetChanges(watched_sheets=frozenset({"Eval Log"}))
+        client = SheetsClient("sheet-id", changes=changes)
+        client.service = service
+        before = changes.mark()
+
+        updated = client.mark_handled_reversals()
+
+        self.assertEqual(updated[0][4], "fail")
+        self.assertEqual(updated[0][5], REASON_REVERSAL)
+        self.assertEqual(changes.mark(), before)
+        self.assertEqual(service.rows[0][4], "fail")
+        view = eval_view(updated, [], [], {}, date(2026, 10, 14))
+        self.assertEqual([item["result"] for item in view["emails"]], ["fail"])
+
+    def test_the_eval_page_uses_the_corrected_reversal_row(self):
+        sheets = FakeSheets()
+        calls = {"plain": 0, "correct": 0}
+
+        def plain():
+            calls["plain"] += 1
+            return [[
+                "2026-10-12",
+                "mail-old",
+                "Sample Bank",
+                "A reversal notice",
+                "fail",
+                REASON_REVERSAL,
+                "",
+                "",
+                "",
+                "",
+            ]]
+
+        def correct():
+            calls["correct"] += 1
+            return [[
+                "2026-10-12",
+                "mail-old",
+                "Sample Bank",
+                "A reversal notice",
+                "pass",
+                REASON_REVERSAL,
+                "",
+                "",
+                "",
+                "",
+            ]]
+
+        sheets.get_eval_log_rows = plain
+        sheets.mark_handled_reversals = correct
+        app, _sheets = app_for(sheets)
+        headers = {"X-Telegram-Init-Data": sign_webapp(111)}
+        status, _, payload = app.handle("GET", "/api/dashboard?scope=both", headers, b"", secure=True)
+        body = body_json(payload)
+        self.assertEqual(status, 200)
+        emails = body["agent_eval"]["emails"]
+        self.assertEqual(emails[0]["result"], "pass")
+        self.assertEqual(emails[0]["reason"], "Original charge was removed")
+        self.assertEqual([item for item in emails if item["result"] != "pass"], [])
+        self.assertEqual(calls["correct"], 1)
+        self.assertEqual(calls["plain"], 0)
+
+
+class _EvalResult:
+    def __init__(self, payload=None, error: Exception | None = None):
+        self._payload = {} if payload is None else payload
+        self._error = error
+
+    def execute(self):
+        if self._error is not None:
+            raise self._error
+        return self._payload
+
+
+class _EvalSheet:
+    def __init__(self, rows: list[list[str]], fail_write: bool = False):
+        self.rows = [list(row) for row in rows]
+        self.fail_write = fail_write
+        self.writes = []
+
+    def spreadsheets(self):
+        return self
+
+    def values(self):
+        return self
+
+    def get(self, **kwargs):
+        if "range" in kwargs:
+            return _EvalResult({"values": [list(row) for row in self.rows]})
+        return _EvalResult({"sheets": [{"properties": {"title": "Eval Log", "sheetId": 9}}]})
+
+    def batchUpdate(self, **kwargs):
+        self.writes.append(kwargs)
+        if self.fail_write:
+            return _EvalResult(error=RuntimeError("sheet down"))
+        for item in kwargs["body"]["data"]:
+            cell = item["range"].split("!")[-1]
+            row_number = int(cell[1:])
+            value = item["values"][0][0]
+            while len(self.rows[row_number - 2]) <= 4:
+                self.rows[row_number - 2].append("")
+            self.rows[row_number - 2][4] = value
+        return _EvalResult({})
 
 
 class EvalDashboardTests(unittest.TestCase):

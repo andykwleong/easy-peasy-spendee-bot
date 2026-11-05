@@ -8,6 +8,7 @@ from getrichbot import dashboard_http
 from getrichbot.categories import category_config_status
 from getrichbot.sheets import SheetsClient
 from getrichbot.sheets import authorized_sheets_http
+from getrichbot.startup import correct_saved_reversal_rows
 from getrichbot.startup import load_category_config_from_sheets
 from getrichbot.startup import load_category_config_until_ready
 from getrichbot.startup import start_page_and_mail
@@ -302,6 +303,53 @@ class TestStartupListen(unittest.TestCase):
         self.assertEqual(push_status, 200)
         self.assertEqual(email.pushes, [b"{}"])
         self.assertEqual(sheets.category_calls, 0)
+
+    def test_startup_marks_old_reversal_rows_after_the_page_is_listening(self):
+        done = threading.Event()
+
+        class _Sheets:
+            def mark_handled_reversals(self):
+                done.set()
+                return []
+
+        class _Categories:
+            def get_category_config(self, categories_sheet, keywords_sheet, timeout_seconds=20):
+                raise RuntimeError("No active categories found in Google Sheets.")
+
+        email = _Email()
+        original = dashboard_http.start_dashboard_server
+
+        def start(settings, sheets_arg, *, host="0.0.0.0", port=None, gmail_push=None):
+            return original(settings, sheets_arg, host="127.0.0.1", port=0, gmail_push=gmail_push)
+
+        dashboard_http.start_dashboard_server = start
+        server = None
+        try:
+            server = start_page_and_mail(_Settings(), _Sheets(), email, category_sheets=_Categories())
+            self.assertTrue(email.started)
+            host, port = server.server_address
+            connection = HTTPConnection(host, port, timeout=2)
+            connection.request("GET", "/")
+            response = connection.getresponse()
+            page_status = response.status
+            response.read()
+            connection.close()
+            self.assertTrue(done.wait(2))
+        finally:
+            dashboard_http.start_dashboard_server = original
+            if server is not None:
+                server.shutdown()
+                server.server_close()
+
+        self.assertEqual(page_status, 200)
+
+    def test_a_failed_startup_reversal_update_does_not_raise(self):
+        class _Sheets:
+            def mark_handled_reversals(self):
+                raise RuntimeError("sheet down")
+
+        correct_saved_reversal_rows(_Sheets())
+        correct_saved_reversal_rows(object())
 
 
 if __name__ == "__main__":

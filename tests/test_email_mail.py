@@ -722,6 +722,19 @@ class EmailMailTests(unittest.TestCase):
         self.assertEqual(not_a_card.reason, REASON_NO_CARD)
         self.assertIn("the card was missing", not_a_card.text)
 
+    def test_hyphen_day_month_year_is_the_purchase_date(self):
+        body = (
+            "We wish to inform you that SGD12.30 was charged at 16:52 on 05-Nov-26 to "
+            "your card (-1111) at SAMPLE SHOP."
+        )
+        decision = decide("Card Transaction Alert", body, config_with(last4="1111"))
+        self.assertEqual(decision.action, "log")
+        self.assertEqual(decision.reason, REASON_LOGGED)
+        self.assertEqual(decision.expense_date, date(2026, 11, 5))
+        self.assertEqual(decision.amount, Decimal("12.30"))
+        self.assertEqual(decision.last4, "1111")
+        self.assertNotIn("date was missing", decision.text)
+
     def test_shop_after_the_card_reuses_the_category_already_used_for_that_shop(self):
         body = "\n".join(
             (

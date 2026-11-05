@@ -27,6 +27,7 @@ MONTH_DAY_RE = re.compile(
 )
 _NUMERIC_DAY_FIRST_RE = re.compile(r"\b(\d{1,2})/(\d{1,2})/(\d{4}|\d{2})\b")
 _SLASH_MONTH_RE = re.compile(r"\b(\d{1,2})/([A-Za-z]{3,9})/(\d{4}|\d{2})\b", re.IGNORECASE)
+_HYPHEN_MONTH_RE = re.compile(r"\b(\d{1,2})-([A-Za-z]{3,9})-(\d{4}|\d{2})\b", re.IGNORECASE)
 _DATE_LABEL_RE = re.compile(
     r"(?:transaction\s+date|date\s*(?:&(?:amp;)?|and)\s*time|\bdated\b)",
     re.IGNORECASE,
@@ -82,6 +83,11 @@ def found_dates(text: str, *, include_numeric: bool = False) -> list[FoundDate]:
         for match in _NUMERIC_DAY_FIRST_RE.finditer(raw):
             add(match.start(), match.end(), int(match.group(1)), int(match.group(2)), _year_or_none(match.group(3)))
         for match in _SLASH_MONTH_RE.finditer(raw):
+            month = MONTHS.get(match.group(2).lower())
+            if month is None:
+                continue
+            add(match.start(), match.end(), int(match.group(1)), month, _year_or_none(match.group(3)))
+        for match in _HYPHEN_MONTH_RE.finditer(raw):
             month = MONTHS.get(match.group(2).lower())
             if month is None:
                 continue

@@ -1,6 +1,6 @@
 # Recent transactions
 
-Recent transactions shows the household's latest confirmed rows, can narrow to one person, and can correct a row's category from the same list.
+Recent transactions shows the household's latest confirmed rows, can narrow to one person, can filter the rows already on the page, and can correct a row's category from the same list.
 
 ## Sub-features
 
@@ -10,12 +10,14 @@ Recent transactions shows the household's latest confirmed rows, can narrow to o
 - `recent-sam` shows only rows logged by Sam.
 - `recent-dots` shows `Message sent` on Sample cafe and `message fail` on Sample market.
 - `recent-fix` opens Fix tagging and saves a new category immediately.
+- `recent-search` filters the loaded rows by shop, category, or amount. An empty box shows the loaded list.
 
 ## How to get to it (user POV)
 
 - Open the dashboard web page. Before login the page is locked. After login the first screen is Recent.
 - In Telegram, send `/dashboard` in a private chat or the household group. The bot replies with a button named `Open dashboard`. This harness does not open that chat.
 - On Recent, choose `Andy`, `FX`, or `Both`. The page opens on `Both`. Andy is Alex's rows. FX is Sam's rows.
+- Under those chips, type in `Search recent rows`. The placeholder says `Search shop, category, or amount`.
 - On a row, choose `Fix tagging`.
 
 ## Driving it with verify-dashboard
@@ -44,6 +46,7 @@ Preconditions:
 ## Gotchas
 
 - The chips are `Andy`, `FX`, `Both`, and `No category`, in that order, for either signed-in person. `Andy` asks for scope `Alex`. `FX` asks for scope `Sam`. `Both` is the scope when the page opens. Sample cafe shows `Message sent`. Sample market shows `message fail`. A row with no group-note mark shows neither word. This seed has a mark on both rows.
+- A search box sits under those four chips. Its accessible name is `Search recent rows`. These steps leave it empty, so both seed rows stay visible. Typing filters shop, category, and amount on the rows already loaded. It does not request the sheet again. Cards, Month, Raw entries, and Eval do not show the box.
 - The row's delete control is named `Delete Sample cafe`, not `Delete`. `Delete` is the confirm button inside the dialog.
 - Sample Visa has no channel other than All, so Fix tagging does not show a channel chooser. Do not invent one.
 - Choosing a category saves immediately. There is no separate Save button. After this recipe, Month shows Groceries instead of Food until a fresh launch.

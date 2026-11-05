@@ -119,6 +119,29 @@ h2 { font-size: 1.7rem; letter-spacing: -0.03em; }
 .sub { color: var(--muted); max-width: 62ch; margin-top: 4px; }
 .filters { display: flex; gap: 8px; flex-wrap: wrap; }
 .chip[aria-pressed="true"] { background: var(--green); color: white; border-color: var(--green); }
+.page-head.recent-head { align-items: flex-start; }
+.recent-tools {
+  display: grid;
+  gap: 8px;
+  justify-items: stretch;
+}
+.recent-search { display: block; margin: 0; }
+.recent-search input {
+  width: 100%;
+  min-height: 40px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: white;
+  color: var(--ink);
+  font: inherit;
+  padding: 8px 14px;
+}
+.recent-search input::placeholder { color: var(--muted); }
+.recent-search input:focus {
+  outline: 2px solid var(--green);
+  outline-offset: 1px;
+  border-color: var(--green);
+}
 
 .tx {
   background: var(--card);
@@ -369,6 +392,7 @@ th { color: var(--muted); font-size: 0.82rem; font-weight: 700; }
     border-top: 1px solid var(--line);
     padding: 8px 0 10px;
   }
+  .recent-tools { width: 100%; }
   .tx-top { align-items: flex-start; }
   .tx-line {
     grid-template-columns: minmax(0, 1fr) auto;

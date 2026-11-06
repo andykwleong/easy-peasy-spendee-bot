@@ -467,6 +467,13 @@ class DashboardHttpTests(unittest.TestCase):
         self.assertEqual(status, 200)
         script = payload.decode()
         self.assertIn("person_filters", script)
+        recent = script.split("function renderTransaction", 1)[1].split("function deleteButton", 1)[0]
+        self.assertIn("displayLoggedBy(row.logged_by)", recent)
+        self.assertNotIn('"Logged by " + row.logged_by', recent)
+        helper = script.split("function displayLoggedBy", 1)[1].split("function ", 1)[0]
+        self.assertIn("personFilters()", helper)
+        self.assertIn("item.scope === name", helper)
+        self.assertIn("item.label", helper)
         self.assertNotIn("household_labels", script)
         self.assertNotIn('viewer_label + " only"', script)
         self.assertNotIn('name + " only"', script)

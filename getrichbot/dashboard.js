@@ -438,7 +438,7 @@ function renderTransaction(row) {
   const category = el("div", "tx-category");
   const tag = el("span", pending ? "tag needs-category" : "tag", categoryLabel(row));
   category.append(tag);
-  const logged = el("div", "tx-logged", "Logged by " + row.logged_by);
+  const logged = el("div", "tx-logged", "Logged by " + displayLoggedBy(row.logged_by));
   const moneySide = el("div", "tx-money");
   moneySide.append(el("div", "amount", money(row.amount)));
   if (row.kind === "income") moneySide.append(el("div", "tx-card", "No card · income is household"));
@@ -929,6 +929,11 @@ function renderRaw() {
 function personFilters() {
   const people = state.payload && state.payload.person_filters;
   return Array.isArray(people) ? people : [];
+}
+
+function displayLoggedBy(name) {
+  const person = personFilters().find((item) => item && item.scope === name && item.label);
+  return person ? person.label : name;
 }
 
 function cardsPersonPressed(person) {

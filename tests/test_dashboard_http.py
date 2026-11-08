@@ -19,7 +19,13 @@ from getrichbot.sheet_changes import SheetChanges
 from getrichbot.sheets import SheetsClient
 from getrichbot.dashboard_auth import issue_session_token
 from getrichbot.dashboard_bot import _DASHBOARD_REPLY_TEXT, configure_dashboard_menu, dashboard_prompt, reply_with_dashboard
-from getrichbot.dashboard_http import DashboardApp, DashboardContext, DashboardHTTPServer
+from getrichbot.dashboard_http import (
+    DashboardApp,
+    DashboardContext,
+    DashboardHTTPServer,
+    _expense_record_from_row,
+    _usage_record_from_row,
+)
 from getrichbot.models import ExpenseRecord
 
 TOKEN = "test-bot-token"
@@ -107,6 +113,9 @@ class EditableSheets(FakeSheets):
         self.writes = []
         self.deletes = []
         self.keywords = []
+        self.appends = []
+        self.block_delete = set()
+        self.fail_appends = set()
         self.config = parse_payment_config(
             [
                 ["Payment Method", "Owner", "Type", "Cycle Type", "Cycle Start Day", "Active"],
@@ -139,8 +148,22 @@ class EditableSheets(FakeSheets):
     def update_monthly_summary(self, sheet_name, rows, timeout_seconds=None):
         self.summary_rows = rows
 
+    def append_card_usage(self, sheet_name, row):
+        self.appends.append((sheet_name, row.entry_id))
+        if sheet_name in self.fail_appends:
+            raise RuntimeError("sheet down")
+        self.usage.append(_usage_record_from_row(row))
+
+    def append_expense(self, sheet_name, row):
+        self.appends.append((sheet_name, row.entry_id))
+        if sheet_name in self.fail_appends:
+            raise RuntimeError("sheet down")
+        self.records.append(_expense_record_from_row(row))
+
     def delete_entry_by_id(self, sheet_name, entry_id, logged_by=None):
         self.deletes.append((sheet_name, entry_id))
+        if sheet_name in self.block_delete:
+            return False
         if sheet_name == "Card Usage":
             before = len(self.usage)
             self.usage = [row for row in self.usage if row.entry_id.lower() != entry_id.lower()]
@@ -1540,6 +1563,295 @@ class DashboardPromptTests(unittest.IsolatedAsyncioTestCase):
 
         settings = type("Settings", (), {"dashboard_public_url": "https://your-app.example.com"})()
         await configure_dashboard_menu(Application(), settings, Server(), "sample_bot")
+
+
+class ClaimMoveTests(unittest.TestCase):
+    def _cookie(self, app, user_id=111):
+        _status, headers, _payload = app.handle(
+            "POST",
+            "/api/session/widget",
+            {"Content-Type": "application/json"},
+            json.dumps(sign_widget(user_id)).encode(),
+            secure=True,
+        )
+        return dict(headers)["Set-Cookie"].split(";", 1)[0]
+
+    def _post(self, app, cookie, payload):
+        headers = {"Content-Type": "application/json"}
+        if cookie:
+            headers["Cookie"] = cookie
+        return app.handle("POST", "/api/dashboard/edit", headers, json.dumps(payload).encode(), secure=True)
+
+    def _expense(self):
+        sheets = EditableSheets()
+        sheets.records[0] = replace(
+            sheets.records[0],
+            payment_owner="",
+            payment_channel="Online",
+            input_type="Email",
+            telegram_message_id="4242",
+            telegram_chat_id="-100",
+        )
+        return sheets
+
+    def test_recent_row_itself_has_no_claim_button(self):
+        app, _sheets = app_for()
+        status, _, payload = app.handle("GET", "/dashboard.js", {}, b"", secure=False)
+        self.assertEqual(status, 200)
+        script = payload.decode()
+        row = script.split("function renderTransaction", 1)[1].split("function deleteButton", 1)[0]
+        self.assertNotIn("Claim", row)
+        self.assertNotIn("claimButton", row)
+        self.assertIn("This purchase has no card, so it cannot be a claim.", script)
+        self.assertIn('claimButton(row, "Claim", "claim")', script)
+        self.assertIn('claimButton(row, "Expense", "expense")', script)
+
+    def test_claim_moves_to_card_only_and_expense_moves_back(self):
+        sheets = self._expense()
+        app, _sheets = app_for(sheets)
+        cookie = self._cookie(app)
+        claim_status, _, claim_body = self._post(app, cookie, {
+            "id": "aa1001",
+            "source": "expense",
+            "field": "claim",
+            "value": "claim",
+        })
+
+        self.assertEqual(claim_status, 200)
+        claimed = body_json(claim_body)
+        self.assertTrue(claimed["ok"])
+        self.assertIn("off household expenses", claimed["message"])
+        self.assertIn("Sample Visa", claimed["message"])
+        self.assertNotIn("Claim", claimed["edit_choices"]["expense_categories"])
+        self.assertNotIn("Claim", claimed["edit_choices"]["category_picker"])
+        self.assertEqual([item["label"] for item in claimed["person_filters"]], ["Andy", "FX"])
+        self.assertEqual(sheets.records, [])
+        self.assertEqual(len(sheets.usage), 1)
+        usage = sheets.usage[0]
+        self.assertEqual(usage.entry_id, "aa1001")
+        self.assertEqual(usage.logged_by, "Alex")
+        self.assertEqual(usage.payment_owner, "Alex")
+        self.assertEqual(usage.payment_method, "Sample Visa")
+        self.assertEqual(usage.payment_channel, "Online")
+        self.assertEqual(usage.amount, Decimal("18.50"))
+        self.assertEqual(usage.usage_date, "2026-09-20")
+        self.assertEqual(usage.description, "Sample cafe")
+        self.assertEqual(usage.kept_category, "Food")
+        self.assertEqual(usage.kept_input_type, "Email")
+        self.assertEqual(usage.telegram_message_id, "4242")
+        self.assertEqual(usage.telegram_chat_id, "-100")
+        self.assertEqual(usage.usage_type, "Claimable")
+        shown = next(item for item in claimed["recent"] if item["id"] == "aa1001")
+        self.assertEqual(shown["kind"], "card_only")
+        self.assertEqual(shown["category"], "")
+        self.assertEqual(shown["source"], "card_usage")
+        self.assertEqual(shown["logged_by"], "Alex")
+        september = next(month for month in claimed["months"] if month["label"] == "September 2026")
+        self.assertEqual(september["total_expenses"], "0.00")
+        self.assertFalse(any(item["category"] == "Food" for item in september["expenses"]))
+        visa = next(card for card in claimed["cards"]["capped"] if card["name"] == "Sample Visa")
+        self.assertEqual(visa["spent"], "18.50")
+        self.assertEqual(visa["transactions"][0]["shop"], "Sample cafe")
+        self.assertEqual(sheets.keywords, [])
+        self.assertNotIn("18.50", " ".join(" ".join(row) for row in sheets.summary_rows))
+        self.assertFalse(any(row["id"] == "aa1001" for row in claimed["raw_expenses"]))
+        self.assertTrue(any(row["id"] == "aa1001" for row in claimed["card_usage"]))
+
+        back_status, _, back_body = self._post(app, cookie, {
+            "id": "aa1001",
+            "source": "card_usage",
+            "field": "claim",
+            "value": "expense",
+        })
+
+        self.assertEqual(back_status, 200)
+        restored = body_json(back_body)
+        self.assertIn("back to Food", restored["message"])
+        self.assertEqual(sheets.usage, [])
+        self.assertEqual(len(sheets.records), 1)
+        row = sheets.records[0]
+        self.assertEqual(row.entry_id, "aa1001")
+        self.assertEqual(row.category, "Food")
+        self.assertEqual(row.logged_by, "Alex")
+        self.assertEqual(row.payment_owner, "Alex")
+        self.assertEqual(row.payment_method, "Sample Visa")
+        self.assertEqual(row.payment_channel, "Online")
+        self.assertEqual(row.amount, Decimal("18.50"))
+        self.assertEqual(row.expense_date, "2026-09-20")
+        self.assertEqual(row.input_type, "Email")
+        self.assertEqual(row.transaction_type, "Expense")
+        self.assertEqual(row.telegram_message_id, "4242")
+        self.assertEqual(row.telegram_chat_id, "-100")
+        self.assertEqual(row.description, "Sample cafe")
+        again = next(item for item in restored["recent"] if item["id"] == "aa1001")
+        self.assertEqual(again["kind"], "expense")
+        self.assertEqual(again["category"], "Food")
+        self.assertEqual(again["source"], "expense")
+        september = next(month for month in restored["months"] if month["label"] == "September 2026")
+        self.assertEqual(september["total_expenses"], "18.50")
+        self.assertTrue(any(item["category"] == "Food" and item["amount"] == "18.50" for item in september["expenses"]))
+        visa = next(card for card in restored["cards"]["capped"] if card["name"] == "Sample Visa")
+        self.assertEqual(visa["spent"], "18.50")
+        self.assertEqual(sheets.appends, [("Card Usage", "aa1001"), ("Raw Expenses", "aa1001")])
+        self.assertEqual(sheets.deletes, [("Raw Expenses", "aa1001"), ("Card Usage", "aa1001")])
+        self.assertIn("18.50", " ".join(" ".join(line) for line in sheets.summary_rows))
+
+    def test_blank_kept_category_comes_back_blank(self):
+        from getrichbot.models import CardUsageRecord
+
+        sheets = EditableSheets()
+        sheets.records = []
+        sheets.usage = [
+            CardUsageRecord(
+                row_number=2,
+                entry_id="cc3003",
+                timestamp="12:00:00",
+                usage_date="2026-09-20",
+                month="2026-09",
+                logged_by="Alex",
+                raw_input="card only",
+                amount=Decimal("9.00"),
+                payment_method="Sample Visa",
+                description="Sample clinic",
+                usage_type="Claimable",
+                status="Confirmed",
+                payment_owner="Alex",
+                payment_channel="",
+                kept_category="",
+                kept_input_type="",
+            )
+        ]
+        app, _sheets = app_for(sheets)
+        status, _, payload = self._post(app, self._cookie(app), {
+            "id": "cc3003",
+            "source": "card_usage",
+            "field": "claim",
+            "value": "expense",
+        })
+
+        self.assertEqual(status, 200)
+        body = body_json(payload)
+        self.assertIn("back to a household expense", body["message"])
+        self.assertNotIn("Food", body["message"])
+        self.assertEqual(sheets.usage, [])
+        self.assertEqual(sheets.records[0].category, "")
+        self.assertEqual(sheets.records[0].input_type, "Text")
+        self.assertEqual(sheets.records[0].payment_method, "Sample Visa")
+        self.assertEqual(sheets.records[0].logged_by, "Alex")
+
+    def test_claim_refuses_income_fixed_and_a_row_with_no_card(self):
+        sheets = EditableSheets()
+        sheets.records.append(
+            ExpenseRecord(
+                row_number=3,
+                entry_id="aa1005",
+                timestamp="13:00:00",
+                expense_date="2026-09-20",
+                month="2026-09",
+                logged_by="Alex",
+                raw_input="sample pay",
+                amount=Decimal("100.00"),
+                category="Income - Sample Pay",
+                description="Sample pay",
+                input_type="text",
+                status="Confirmed",
+                transaction_type="Income",
+                payment_method="Sample Visa",
+                payment_owner="Alex",
+            )
+        )
+        sheets.records.append(
+            ExpenseRecord(
+                row_number=4,
+                entry_id="aa1009",
+                timestamp="13:00:00",
+                expense_date="2026-09-30",
+                month="2026-09",
+                logged_by="Alex",
+                raw_input="rent",
+                amount=Decimal("20.00"),
+                category="Rent or mortgage",
+                description="Sample rent",
+                input_type="fixed",
+                status="Confirmed",
+                transaction_type="Fixed",
+            )
+        )
+        app, _sheets = app_for(sheets)
+        cookie = self._cookie(app)
+        income_status, _, income_body = self._post(app, cookie, {
+            "id": "aa1005", "source": "expense", "field": "claim", "value": "claim",
+        })
+        fixed_status, _, fixed_body = self._post(app, cookie, {
+            "id": "aa1009", "source": "expense", "field": "claim", "value": "claim",
+        })
+        sheets.records[0] = replace(sheets.records[0], payment_method="", payment_owner="", payment_channel="")
+        missing_status, _, missing_body = self._post(app, cookie, {
+            "id": "aa1001", "source": "expense", "field": "claim", "value": "claim",
+        })
+        sheets.records[0] = replace(sheets.records[0], payment_method="PayNow", payment_owner="", payment_channel="")
+        paynow_status, _, paynow_body = self._post(app, cookie, {
+            "id": "aa1001", "source": "expense", "field": "claim", "value": "claim",
+        })
+
+        self.assertEqual(income_status, 400)
+        self.assertEqual(body_json(income_body)["message"], "Income cannot be a claim.")
+        self.assertEqual(fixed_status, 400)
+        self.assertEqual(body_json(fixed_body)["message"], "A fixed expense cannot be a claim.")
+        self.assertEqual(missing_status, 400)
+        self.assertEqual(body_json(missing_body)["message"], "This purchase has no card, so it cannot be a claim.")
+        self.assertEqual(paynow_status, 400)
+        self.assertEqual(body_json(paynow_body)["message"], "This purchase has no card, so it cannot be a claim.")
+        self.assertEqual(sheets.appends, [])
+        self.assertEqual(sheets.deletes, [])
+        self.assertEqual(len(sheets.records), 3)
+
+    def test_failed_delete_does_not_leave_both_tabs_changed(self):
+        sheets = self._expense()
+        sheets.block_delete.add("Raw Expenses")
+        app, _sheets = app_for(sheets)
+        status, _, payload = self._post(app, self._cookie(app), {
+            "id": "aa1001", "source": "expense", "field": "claim", "value": "claim",
+        })
+
+        self.assertEqual(status, 500)
+        body = body_json(payload)
+        self.assertFalse(body["ok"])
+        self.assertNotIn("Moved", body["message"])
+        self.assertIn("still a household expense", body["message"])
+        self.assertEqual(len(sheets.records), 1)
+        self.assertEqual(sheets.records[0].entry_id, "aa1001")
+        self.assertEqual(sheets.usage, [])
+        self.assertEqual(sheets.deletes, [("Raw Expenses", "aa1001"), ("Card Usage", "aa1001")])
+
+    def test_failed_insert_leaves_the_expense_in_place(self):
+        sheets = self._expense()
+        sheets.fail_appends.add("Card Usage")
+        app, _sheets = app_for(sheets)
+        status, _, payload = self._post(app, self._cookie(app), {
+            "id": "aa1001", "source": "expense", "field": "claim", "value": "claim",
+        })
+
+        self.assertEqual(status, 500)
+        body = body_json(payload)
+        self.assertFalse(body["ok"])
+        self.assertNotIn("Moved", body["message"])
+        self.assertEqual(len(sheets.records), 1)
+        self.assertEqual(sheets.usage, [])
+        self.assertEqual(sheets.deletes, [])
+
+    def test_locked_visit_cannot_mark_a_claim(self):
+        sheets = self._expense()
+        app, _sheets = app_for(sheets)
+        status, _, payload = self._post(app, "", {
+            "id": "aa1001", "source": "expense", "field": "claim", "value": "claim",
+        })
+
+        self.assertEqual(status, 401)
+        self.assertNotIn(b"Sample cafe", payload)
+        self.assertEqual(sheets.appends, [])
+        self.assertEqual(sheets.deletes, [])
+        self.assertEqual(len(sheets.records), 1)
 
 
 if __name__ == "__main__":

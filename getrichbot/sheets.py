@@ -127,12 +127,25 @@ class SheetsClient:
         self._ensure_sheet(sheet_name)
         include_payment_owner = self.has_payment_owner_column(sheet_name)
         include_payment_channel = self.has_payment_channel_column(sheet_name)
+        values = row.to_sheet_row(
+            include_payment_owner=include_payment_owner,
+            include_payment_channel=include_payment_channel,
+        )
+        if row.kept_category or row.kept_input_type:
+            start = _column_letter(len(values) - 2)
+            end = _column_letter(len(values) - 1)
+            self._service().spreadsheets().values().update(
+                spreadsheetId=self.sheet_id,
+                range=f"{sheet_name}!{start}1:{end}1",
+                valueInputOption="RAW",
+                body={"values": [["Kept Category", "Kept Input Type"]]},
+            ).execute()
         self._service().spreadsheets().values().append(
             spreadsheetId=self.sheet_id,
-            range=f"{sheet_name}!A:O",
+            range=f"{sheet_name}!A:Z",
             valueInputOption="USER_ENTERED",
             insertDataOption="INSERT_ROWS",
-            body={"values": [row.to_sheet_row(include_payment_owner=include_payment_owner, include_payment_channel=include_payment_channel)]},
+            body={"values": [values]},
         ).execute()
         self._note_sheet_write(sheet_name)
 
@@ -491,12 +504,13 @@ class SheetsClient:
                     payment_owner=_record_payment_owner(row),
                     payment_channel=_record_payment_channel(row),
                     telegram_message_id=_record_message_id(row),
+                    telegram_chat_id=_record_chat_id(row),
                 )
             )
         return records
 
     def get_card_usage_records(self, sheet_name: str) -> list[CardUsageRecord]:
-        source, rows = self._get_values_first_available([sheet_name], "A2:O")
+        source, rows = self._get_values_first_available([sheet_name], "A2:Z")
         if source is None:
             return []
         records: list[CardUsageRecord] = []
@@ -508,6 +522,7 @@ class SheetsClient:
             if amount is None:
                 continue
             payment_method, payment_owner, payment_channel, description, usage_type, status = _card_usage_fields(row)
+            chat_id, message_id, kept_category, kept_input_type = _card_usage_tail(row)
             records.append(
                 CardUsageRecord(
                     row_number=index,
@@ -524,6 +539,10 @@ class SheetsClient:
                     status=status,
                     payment_owner=payment_owner,
                     payment_channel=payment_channel,
+                    telegram_chat_id=chat_id,
+                    telegram_message_id=message_id,
+                    kept_category=kept_category,
+                    kept_input_type=kept_input_type,
                 )
             )
         return records
@@ -980,11 +999,25 @@ def _owner_cell_or_logger(row: list[str], owner_index: int, method: str) -> str:
 
 
 def _record_message_id(row: list[str]) -> str:
+    index = _status_index(row, (14, 13, 12, 11))
+    if index is None:
+        return ""
+    return _cell(row, index + 2)
+
+
+def _record_chat_id(row: list[str]) -> str:
+    index = _status_index(row, (14, 13, 12, 11))
+    if index is None:
+        return ""
+    return _cell(row, index + 1)
+
+
+def _status_index(row: list[str], indexes: tuple[int, ...]) -> int | None:
     statuses = {"confirmed", "pending", "cancelled", "canceled"}
-    for index in (14, 13, 12, 11):
+    for index in indexes:
         if _cell(row, index).casefold() in statuses:
-            return _cell(row, index + 2)
-    return ""
+            return index
+    return None
 
 
 def _record_payment_channel(row: list[str]) -> str:
@@ -992,6 +1025,23 @@ def _record_payment_channel(row: list[str]) -> str:
     if _cell(row, 14).casefold() in statuses:
         return _cell(row, 11)
     return ""
+
+
+def _card_usage_tail(row: list[str]) -> tuple[str, str, str, str]:
+    """Chat id, message id, kept category, and kept input type after the status cell."""
+    index = _status_index(row, (12, 11, 10))
+    if index is None:
+        return "", "", "", ""
+    return _cell(row, index + 1), _cell(row, index + 2), _cell(row, index + 3), _cell(row, index + 4)
+
+
+def _column_letter(index: int) -> str:
+    number = index + 1
+    letters = ""
+    while number:
+        number, remainder = divmod(number - 1, 26)
+        letters = chr(65 + remainder) + letters
+    return letters
 
 
 def _card_usage_fields(row: list[str]) -> tuple[str, str, str, str, str, str]:

@@ -608,6 +608,60 @@ class FakeSheets:
     def upsert_category_keyword(self, sheet_name, keyword, category):
         self.keywords.append((sheet_name, keyword, category))
 
+    def append_card_usage(self, sheet_name, row):
+        from getrichbot.models import CardUsageRecord
+
+        stamp = row.timestamp
+        self.usage.append(
+            CardUsageRecord(
+                row_number=2 + len(self.usage),
+                entry_id=row.entry_id,
+                timestamp=stamp.strftime("%H:%M:%S"),
+                usage_date=stamp.strftime("%Y-%m-%d"),
+                month=stamp.strftime("%Y-%m"),
+                logged_by=row.logged_by,
+                raw_input=row.raw_input,
+                amount=row.amount,
+                payment_method=row.payment_method,
+                description=row.description,
+                usage_type=row.usage_type,
+                status=row.status,
+                payment_owner=row.payment_owner,
+                payment_channel=row.payment_channel,
+                telegram_chat_id=str(row.telegram_chat_id),
+                telegram_message_id=str(row.telegram_message_id),
+                kept_category=row.kept_category,
+                kept_input_type=row.kept_input_type,
+            )
+        )
+
+    def append_expense(self, sheet_name, row):
+        from getrichbot.models import ExpenseRecord
+
+        stamp = row.timestamp
+        self.records.append(
+            ExpenseRecord(
+                row_number=2 + len(self.records),
+                entry_id=row.entry_id,
+                timestamp=stamp.strftime("%H:%M:%S"),
+                expense_date=stamp.strftime("%Y-%m-%d"),
+                month=stamp.strftime("%Y-%m"),
+                logged_by=row.logged_by,
+                raw_input=row.raw_input,
+                amount=row.amount,
+                category=row.category,
+                description=row.description,
+                input_type=row.input_type,
+                status=row.status,
+                transaction_type=row.transaction_type,
+                payment_method=row.payment_method,
+                payment_owner=row.payment_owner,
+                payment_channel=row.payment_channel,
+                telegram_message_id=str(row.telegram_message_id),
+                telegram_chat_id=str(row.telegram_chat_id),
+            )
+        )
+
     def delete_entry_by_id(self, sheet_name, entry_id, logged_by=None):
         if sheet_name == "Card Usage":
             before = len(self.usage)

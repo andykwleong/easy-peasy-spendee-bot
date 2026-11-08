@@ -609,10 +609,12 @@ async function confirmDelete() {
 function renderEditor(row) {
   const box = el("div", "edit-box");
   const fields = fieldsFor(row);
-  if (fields.indexOf("category") !== -1) {
-    box.append(editSelect("Category", categoryChoices(row), row.category, (value) => {
-      if (value !== row.category) saveEdit(row, "category", value);
-    }));
+  if (row.kind === "card_only") {
+    const wrap = el("span", "edit-control");
+    wrap.append(claimButton(row, "Expense", "expense"));
+    box.append(editField("Category", wrap));
+  } else if (fields.indexOf("category") !== -1) {
+    box.append(categoryEditor(row));
   }
   if (fields.indexOf("amount") !== -1) box.append(editAmount(row));
   if (fields.indexOf("card") !== -1) box.append(editCard(row));
@@ -628,6 +630,53 @@ function fieldsFor(row) {
   if (row.kind === "card_only") return ["amount", "card", "channel"];
   if (row.kind === "income" || row.kind === "fixed") return ["category", "amount"];
   return ["category", "amount", "card", "channel"];
+}
+
+function categoryEditor(row) {
+  const select = buildSelect("Category", categoryChoices(row), row.category, (value) => {
+    if (value !== row.category) saveEdit(row, "category", value);
+  });
+  if (row.kind !== "expense") return editField("Category", select);
+  if (!expenseHasCard(row)) {
+    const field = el("div", "");
+    field.append(editField("Category", select));
+    field.append(el("p", "claim-note", claimNote(row)));
+    return field;
+  }
+  const wrap = el("span", "edit-control");
+  wrap.append(select, claimButton(row, "Claim", "claim"));
+  return editField("Category", wrap);
+}
+
+function claimButton(row, label, direction) {
+  const button = el("button", "text-btn", label);
+  button.type = "button";
+  button.addEventListener("click", () => saveEdit(row, "claim", direction));
+  return button;
+}
+
+function expenseHasCard(row) {
+  if (!row.payment_method) return false;
+  const choices = (state.payload && state.payload.edit_choices) || {};
+  const cards = choices.cards || [];
+  const owner = row.payment_owner || row.logged_by;
+  return cards.some((card) => (
+    card.credit_card
+    && sameText(card.name, row.payment_method)
+    && sameText(card.owner, owner)
+  ));
+}
+
+function claimNote(row) {
+  const choices = (state.payload && state.payload.edit_choices) || {};
+  if (row.payment_method && choices.cards_loaded === false) {
+    return "I could not read the card list just now. Nothing was changed.";
+  }
+  return "This purchase has no card, so it cannot be a claim.";
+}
+
+function sameText(left, right) {
+  return String(left || "").trim().toLowerCase() === String(right || "").trim().toLowerCase();
 }
 
 function categoryChoices(row) {
@@ -691,6 +740,10 @@ function editAmount(row) {
 }
 
 function editSelect(label, choices, current, onPick) {
+  return editField(label, buildSelect(label, choices, current, onPick));
+}
+
+function buildSelect(label, choices, current, onPick) {
   const select = document.createElement("select");
   select.setAttribute("aria-label", label);
   const items = choices.map((choice) => (typeof choice === "string" ? { value: choice, label: choice } : choice));
@@ -711,11 +764,11 @@ function editSelect(label, choices, current, onPick) {
   select.addEventListener("change", () => {
     if (select.value) onPick(select.value);
   });
-  return editField(label, select);
+  return select;
 }
 
 function editField(label, control) {
-  const field = el("label", "edit-row");
+  const field = el("div", "edit-row");
   field.append(el("span", "", label), control);
   return field;
 }

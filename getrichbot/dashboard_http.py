@@ -29,7 +29,16 @@ from getrichbot.eval_log import limit_mail_text
 from getrichbot.eval_log import remember_category_choice
 from getrichbot.eval_log import valid_message_id
 from getrichbot.group_post import marks_from_state_rows
-from getrichbot.row_edits import expense_kind, format_saved_row, plan_edit
+from getrichbot.models import CardUsageRecord, CardUsageRow, ExpenseRecord, ExpenseRow
+from getrichbot.row_edits import (
+    card_usage_from_expense,
+    claim_success_message,
+    expense_from_card_usage,
+    expense_kind,
+    format_saved_row,
+    plan_claim,
+    plan_edit,
+)
 from getrichbot.sheets import CATEGORY_SHEET_READ_TIMEOUT_SECONDS
 from getrichbot.shop_category import apply_email_shop_correction
 from getrichbot.summary import build_monthly_summary_table
@@ -67,6 +76,54 @@ def _edited_card_usage(record, planned):
     if not changes:
         return record
     return replace(record, **changes)
+
+
+def _usage_record_from_row(row: CardUsageRow) -> CardUsageRecord:
+    stamp = row.timestamp
+    return CardUsageRecord(
+        row_number=0,
+        entry_id=row.entry_id,
+        timestamp=stamp.strftime("%H:%M:%S"),
+        usage_date=stamp.strftime("%Y-%m-%d"),
+        month=stamp.strftime("%Y-%m"),
+        logged_by=row.logged_by,
+        raw_input=row.raw_input,
+        amount=row.amount,
+        payment_method=row.payment_method,
+        description=row.description,
+        usage_type=row.usage_type,
+        status=row.status,
+        payment_owner=row.payment_owner,
+        payment_channel=row.payment_channel,
+        telegram_chat_id=str(row.telegram_chat_id),
+        telegram_message_id=str(row.telegram_message_id),
+        kept_category=row.kept_category,
+        kept_input_type=row.kept_input_type,
+    )
+
+
+def _expense_record_from_row(row: ExpenseRow) -> ExpenseRecord:
+    stamp = row.timestamp
+    return ExpenseRecord(
+        row_number=0,
+        entry_id=row.entry_id,
+        timestamp=stamp.strftime("%H:%M:%S"),
+        expense_date=stamp.strftime("%Y-%m-%d"),
+        month=stamp.strftime("%Y-%m"),
+        logged_by=row.logged_by,
+        raw_input=row.raw_input,
+        amount=row.amount,
+        category=row.category,
+        description=row.description,
+        input_type=row.input_type,
+        status=row.status,
+        transaction_type=row.transaction_type,
+        payment_method=row.payment_method,
+        payment_owner=row.payment_owner,
+        payment_channel=row.payment_channel,
+        telegram_message_id=str(row.telegram_message_id),
+        telegram_chat_id=str(row.telegram_chat_id),
+    )
 _MAX_BODY_BYTES = 20_000
 _PACKAGE_DIR = Path(__file__).resolve().parent
 _STATIC = {
@@ -261,7 +318,9 @@ class DashboardApp:
         missing_category = _missing_category_flag(payload.get("missing"))
         if not isinstance(entry_id, str) or not entry_id.strip() or len(entry_id) > 40:
             return _json(400, {"ok": False, "error": "invalid"})
-        if source not in {"expense", "card_usage"} or field not in {"category", "amount", "card", "channel"}:
+        if source not in {"expense", "card_usage"} or field not in {"category", "amount", "card", "channel", "claim"}:
+            return _json(400, {"ok": False, "error": "invalid"})
+        if field == "claim" and value not in {"claim", "expense"}:
             return _json(400, {"ok": False, "error": "invalid"})
         if not isinstance(value, str) or not isinstance(scope, str) or not isinstance(cards_scope, str):
             return _json(400, {"ok": False, "error": "invalid"})
@@ -340,6 +399,19 @@ class DashboardApp:
                 current_category = ""
                 current_date = record.usage_date
                 row_number = record.row_number
+            if field == "claim":
+                return self._move_claim(
+                    label,
+                    value,
+                    scope,
+                    cards_scope,
+                    missing_category,
+                    records,
+                    card_usage,
+                    payment_config,
+                    record,
+                    kind,
+                )
             if field in {"card", "channel"} and payment_config is None:
                 return 400, {
                     "ok": False,
@@ -437,6 +509,193 @@ class DashboardApp:
         dashboard["ok"] = True
         dashboard["message"] = saved
         return 200, dashboard
+
+    def _move_claim(
+        self,
+        label: str,
+        direction: str,
+        scope: str,
+        cards_scope: str,
+        missing_category: bool,
+        records: list,
+        card_usage: list,
+        payment_config,
+        record,
+        kind: str,
+    ) -> tuple[int, dict]:
+        """Move one purchase between Raw Expenses and Card Usage.
+
+        The new row is written first. The old row is removed only after that
+        write succeeds. If the removal fails, the new row is removed again and
+        the reply does not say the purchase moved.
+        """
+        entry_id = record.entry_id
+        planned = plan_claim(
+            kind=kind,
+            direction=direction,
+            payment_method=record.payment_method,
+            payment_owner=record.payment_owner,
+            logged_by=record.logged_by,
+            payment_config=payment_config,
+        )
+        if not planned.ok:
+            return 400, {"ok": False, "error": planned.error, "message": planned.message}
+
+        if direction == "claim":
+            if not isinstance(record, ExpenseRecord):
+                return 400, {"ok": False, "error": "invalid", "message": "That change does not apply to this row."}
+            if any(item.entry_id.lower() == entry_id.lower() for item in card_usage):
+                return 400, {
+                    "ok": False,
+                    "error": "invalid",
+                    "message": "That purchase is already on the card list. Nothing was changed.",
+                }
+            try:
+                destination = card_usage_from_expense(
+                    record,
+                    card_name=planned.card_name,
+                    card_owner=planned.card_owner,
+                )
+            except ValueError:
+                return 400, {
+                    "ok": False,
+                    "error": "invalid",
+                    "message": "I could not read that purchase date. Nothing was changed.",
+                }
+            inserted, removed = self._insert_then_delete(
+                self.context.card_usage_sheet,
+                destination,
+                self.context.raw_sheet,
+                entry_id,
+                to_card_usage=True,
+            )
+            if not inserted or not removed:
+                return self._claim_failure(inserted, removed, entry_id, to_card_usage=True)
+            kept_category = record.category
+            fallback_records = [item for item in records if item.entry_id.lower() != entry_id.lower()]
+            fallback_usage = [item for item in card_usage if item.entry_id.lower() != entry_id.lower()]
+            fallback_usage.append(_usage_record_from_row(destination))
+        else:
+            if not isinstance(record, CardUsageRecord):
+                return 400, {"ok": False, "error": "invalid", "message": "That change does not apply to this row."}
+            if any(item.entry_id.lower() == entry_id.lower() for item in records):
+                return 400, {
+                    "ok": False,
+                    "error": "invalid",
+                    "message": "That purchase is already a household expense. Nothing was changed.",
+                }
+            try:
+                destination = expense_from_card_usage(
+                    record,
+                    card_name=planned.card_name,
+                    card_owner=planned.card_owner,
+                )
+            except ValueError:
+                return 400, {
+                    "ok": False,
+                    "error": "invalid",
+                    "message": "I could not read that purchase date. Nothing was changed.",
+                }
+            inserted, removed = self._insert_then_delete(
+                self.context.raw_sheet,
+                destination,
+                self.context.card_usage_sheet,
+                entry_id,
+                to_card_usage=False,
+            )
+            if not inserted or not removed:
+                return self._claim_failure(inserted, removed, entry_id, to_card_usage=False)
+            kept_category = record.kept_category
+            fallback_usage = [item for item in card_usage if item.entry_id.lower() != entry_id.lower()]
+            fallback_records = [item for item in records if item.entry_id.lower() != entry_id.lower()]
+            fallback_records.append(_expense_record_from_row(destination))
+
+        try:
+            self._refresh_monthly_summary(timeout_seconds=CATEGORY_SHEET_READ_TIMEOUT_SECONDS)
+        except Exception:
+            LOGGER.exception("Monthly summary was not rewritten. The purchase is already moved.")
+        saved = claim_success_message(
+            direction=direction,
+            amount=record.amount,
+            card_name=planned.card_name,
+            category=kept_category,
+            entry_id=entry_id,
+        )
+        try:
+            dashboard = self._read_sheet_unlocked(label, scope, cards_scope, missing_category)
+        except ValueError:
+            raise
+        except Exception:
+            LOGGER.exception("The purchase is already moved. The page could not be reloaded from the sheet.")
+            today = self.context.today() if self.context.today is not None else datetime.now(SINGAPORE_TZ).date()
+            dashboard = build_dashboard_payload(
+                viewer_label=label,
+                scope=scope,
+                records=fallback_records,
+                card_usage=fallback_usage,
+                payment_config=payment_config,
+                today=today,
+                cards_scope=cards_scope,
+                household_labels=self._household_labels(),
+                missing_category=missing_category,
+            )
+            mark_after_write = _sheet_change_mark(self.context.sheets)
+            if mark_after_write is not None:
+                dashboard["change_mark"] = mark_after_write
+        dashboard["ok"] = True
+        dashboard["message"] = saved
+        return 200, dashboard
+
+    def _insert_then_delete(
+        self,
+        insert_sheet: str,
+        row,
+        delete_sheet: str,
+        entry_id: str,
+        *,
+        to_card_usage: bool,
+    ) -> tuple[bool, bool]:
+        try:
+            if to_card_usage:
+                self.context.sheets.append_card_usage(insert_sheet, row)
+            else:
+                self.context.sheets.append_expense(insert_sheet, row)
+        except Exception:
+            LOGGER.exception("Dashboard could not add the moved purchase. The original row was left in place.")
+            return False, False
+        try:
+            removed = bool(self.context.sheets.delete_entry_by_id(delete_sheet, entry_id))
+        except Exception:
+            LOGGER.exception("Dashboard could not remove the original purchase after adding it on the other tab.")
+            return True, False
+        return True, removed
+
+    def _claim_failure(self, inserted: bool, removed: bool, entry_id: str, *, to_card_usage: bool) -> tuple[int, dict]:
+        if inserted and not removed:
+            undo_sheet = self.context.card_usage_sheet if to_card_usage else self.context.raw_sheet
+            undone = self._undo_inserted_row(undo_sheet, entry_id)
+        else:
+            undone = not inserted
+        if to_card_usage:
+            message = (
+                "I could not move that purchase. It is still a household expense."
+                if undone
+                else "I could not finish moving that purchase. It was not marked as a claim."
+            )
+        else:
+            message = (
+                "I could not move that purchase. It is still card-only."
+                if undone
+                else "I could not finish moving that purchase. It was not marked as an expense."
+            )
+        return 500, {"ok": False, "error": "sheet", "message": message}
+
+    def _undo_inserted_row(self, sheet_name: str, entry_id: str) -> bool:
+        try:
+            return bool(self.context.sheets.delete_entry_by_id(sheet_name, entry_id))
+        except Exception:
+            LOGGER.exception("Could not remove the row just added after the move failed.")
+            return False
 
     def _delete(self, headers: dict[str, str], body: bytes) -> tuple[int, list[tuple[str, str]], bytes]:
         identity = self._identity_from_headers(headers)

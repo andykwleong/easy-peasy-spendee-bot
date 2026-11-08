@@ -249,6 +249,10 @@ def _cards_snapshot(
             "period_end": item.period_end.isoformat(),
             "spent": _money(item.total_spend),
             "limits": [_limit_usage(usage.limit, usage.spent, usage.percent) for usage in item.limits],
+            "transactions": [
+                {"shop": tx.shop, "date": tx.expense_date, "amount": _money(tx.amount)}
+                for tx in item.transactions
+            ],
         }
         if item.limits:
             capped.append(card)

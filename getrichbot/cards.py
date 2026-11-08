@@ -79,12 +79,22 @@ class CardLimitUsage:
 
 
 @dataclass(frozen=True)
+class CardTransaction:
+    shop: str
+    expense_date: str
+    amount: Decimal
+    sort_time: str
+    sort_id: str
+
+
+@dataclass(frozen=True)
 class CardSummaryItem:
     payment_method: PaymentMethod
     period_start: date
     period_end: date
     total_spend: Decimal
     limits: tuple[CardLimitUsage, ...]
+    transactions: tuple[CardTransaction, ...] = ()
 
 
 def parse_payment_config(method_rows: list[list[str]], limit_rows: list[list[str]]) -> PaymentConfig:
@@ -180,6 +190,7 @@ def build_card_summary(
                 total_spend=sum((record.amount for record in card_records), Decimal("0"))
                 + sum((record.amount for record in usage_records), Decimal("0")),
                 limits=limits,
+                transactions=_card_transactions(card_records, usage_records),
             )
         )
     return items
@@ -373,6 +384,34 @@ def _shift_card_period(method: PaymentMethod, start: date, end: date, cycle_offs
         previous_reference = shifted_start - date.resolution
         shifted_start, shifted_end = current_card_period(method, previous_reference)
     return shifted_start, shifted_end
+
+
+def _card_transactions(
+    card_records: list[ExpenseRecord],
+    usage_records: list[CardUsageRecord],
+) -> tuple[CardTransaction, ...]:
+    rows = [
+        CardTransaction(
+            shop=record.description or record.raw_input,
+            expense_date=record.expense_date,
+            amount=record.amount,
+            sort_time=record.timestamp,
+            sort_id=record.entry_id,
+        )
+        for record in card_records
+    ]
+    rows.extend(
+        CardTransaction(
+            shop=record.description or record.raw_input,
+            expense_date=record.usage_date,
+            amount=record.amount,
+            sort_time=record.timestamp,
+            sort_id=record.entry_id,
+        )
+        for record in usage_records
+    )
+    rows.sort(key=lambda row: (row.expense_date, row.sort_time, row.sort_id), reverse=True)
+    return tuple(rows)
 
 
 def _is_matching_card_expense(

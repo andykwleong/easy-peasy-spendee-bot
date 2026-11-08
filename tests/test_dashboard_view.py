@@ -266,6 +266,162 @@ class DashboardViewTests(unittest.TestCase):
         self.assertEqual(len(payload["recent"]), 40)
         self.assertTrue(payload["recent_truncated"])
 
+    def test_card_transactions_match_owner_method_and_current_period(self):
+        records = [
+            expense(
+                "cafe",
+                "18.50",
+                "Food",
+                payment_method="Sample Visa",
+                payment_owner="Alex",
+                description="Sample cafe",
+                expense_date="2026-09-20",
+                timestamp="15:00:00",
+            ),
+            expense(
+                "blank",
+                "3.00",
+                "Food",
+                payment_method="Sample Visa",
+                payment_owner="",
+                description="Sample blank owner",
+                expense_date="2026-09-20",
+                timestamp="12:00:00",
+            ),
+            expense(
+                "casefold",
+                "1.00",
+                "Food",
+                payment_method="sample visa",
+                payment_owner="Alex",
+                description="Sample case",
+                expense_date="2026-09-01",
+                timestamp="08:00:00",
+            ),
+            expense(
+                "older",
+                "9.00",
+                "Food",
+                payment_method="Sample Visa",
+                payment_owner="Alex",
+                description="Sample old",
+                expense_date="2026-08-02",
+            ),
+            expense(
+                "partner",
+                "7.00",
+                "Food",
+                logged_by="Alex",
+                payment_method="Sample Mastercard",
+                payment_owner="Sam",
+                description="Sample partner shop",
+            ),
+            expense(
+                "income",
+                "100.00",
+                "Income - Sample Pay",
+                transaction_type="Income",
+                payment_method="Sample Visa",
+                payment_owner="Alex",
+                description="Sample pay",
+            ),
+            expense(
+                "fixed",
+                "20.00",
+                "Sample Bills",
+                transaction_type="Fixed",
+                payment_method="Sample Visa",
+                payment_owner="Alex",
+                description="Sample rent",
+            ),
+            expense(
+                "pending",
+                "8.00",
+                "Food",
+                status="Pending",
+                payment_method="Sample Visa",
+                payment_owner="Alex",
+                description="Sample pending",
+            ),
+            expense(
+                "cash",
+                "2.00",
+                "Food",
+                payment_method="Sample Cash",
+                payment_owner="Alex",
+                description="Sample cash",
+            ),
+            expense(
+                "sam-blank",
+                "11.00",
+                "Food",
+                logged_by="Sam",
+                payment_method="Sample Visa",
+                payment_owner="",
+                description="Sample sam blank",
+            ),
+        ]
+        usage = [
+            card_usage("clinic", "12.00", "Sample Cashback", description="Sample clinic"),
+            card_usage(
+                "claim",
+                "1.25",
+                "Sample Visa",
+                description="Sample claim",
+                usage_date="2026-09-21",
+                payment_owner="Alex",
+            ),
+        ]
+
+        mine = build_dashboard_payload(
+            viewer_label="Alex",
+            scope="both",
+            records=records,
+            card_usage=usage,
+            payment_config=payment_config(),
+            today=date(2026, 9, 26),
+            cards_scope="mine",
+            household_labels=("Alex", "Sam"),
+        )
+        other = build_dashboard_payload(
+            viewer_label="Alex",
+            scope="Alex",
+            records=records,
+            card_usage=usage,
+            payment_config=payment_config(),
+            today=date(2026, 9, 26),
+            cards_scope="other",
+            household_labels=("Alex", "Sam"),
+        )
+
+        self.assertNotIn("transactions", mine["cards"])
+        visa = next(card for card in mine["cards"]["capped"] if card["name"] == "Sample Visa")
+        cashback = next(card for card in mine["cards"]["uncapped"] if card["name"] == "Sample Cashback")
+        self.assertEqual(
+            visa["transactions"],
+            [
+                {"shop": "Sample claim", "date": "2026-09-21", "amount": "1.25"},
+                {"shop": "Sample cafe", "date": "2026-09-20", "amount": "18.50"},
+                {"shop": "Sample blank owner", "date": "2026-09-20", "amount": "3.00"},
+                {"shop": "Sample case", "date": "2026-09-01", "amount": "1.00"},
+            ],
+        )
+        self.assertEqual(set(visa["transactions"][0]), {"shop", "date", "amount"})
+        self.assertEqual(visa["spent"], "23.75")
+        self.assertEqual(cashback["transactions"], [{"shop": "Sample clinic", "date": "2026-09-18", "amount": "12.00"}])
+        alex_shops = [row["shop"] for card in mine["cards"]["capped"] + mine["cards"]["uncapped"] for row in card["transactions"]]
+        self.assertNotIn("Sample partner shop", alex_shops)
+        self.assertNotIn("Sample old", alex_shops)
+        self.assertNotIn("Sample pay", alex_shops)
+        self.assertNotIn("Sample rent", alex_shops)
+        self.assertNotIn("Sample pending", alex_shops)
+        self.assertNotIn("Sample cash", alex_shops)
+        self.assertNotIn("Sample sam blank", alex_shops)
+
+        mastercard = next(card for card in other["cards"]["capped"] if card["name"] == "Sample Mastercard")
+        self.assertEqual(mastercard["transactions"], [{"shop": "Sample partner shop", "date": "2026-09-20", "amount": "7.00"}])
+        self.assertNotIn("Sample cafe", [row["shop"] for row in mastercard["transactions"]])
+
     def test_cards_toggle_shows_the_other_persons_cards(self):
         records = [
             expense("aa1001", "60.00", "Food", payment_method="Sample Visa", payment_owner="Alex"),

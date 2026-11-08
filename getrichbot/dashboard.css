@@ -321,10 +321,40 @@ button.eval-card { font: inherit; cursor: pointer; }
 .band-yellow { background: #c4a035; }
 .band-orange { background: #e07a2f; }
 .band-red { background: #c44747; }
-.card-grid { grid-template-columns: 1fr 1fr; }
+.card-grid { grid-template-columns: 1fr 1fr; align-items: start; }
 .money-card { margin-bottom: 0; }
 .money-card header { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
 .money-card h3 { font-size: 1.05rem; }
+button.card-toggle {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  border-radius: 4px;
+  appearance: none;
+}
+button.card-toggle:focus-visible {
+  outline: 2px solid var(--green);
+  outline-offset: 3px;
+}
+.card-tx {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 10px;
+}
+.card-tx-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+.card-tx-shop { min-width: 0; }
+.card-tx-row .amount { flex: none; }
 .limit-block { margin-top: 12px; }
 .bar {
   height: 10px;

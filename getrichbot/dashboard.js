@@ -36,7 +36,8 @@ const state = {
   evalOpenText: "",
   evalOpenError: "",
   evalOpenGroup: "",
-  recentQuery: ""
+  recentQuery: "",
+  openCardKey: ""
 };
 
 const app = document.querySelector("#app");
@@ -163,6 +164,7 @@ async function loginWithWidget(user) {
   state.cards = "mine";
   state.missingCategory = false;
   state.recentQuery = "";
+  state.openCardKey = "";
   state.editingId = "";
   state.pendingDelete = null;
   state.deleteError = "";
@@ -185,6 +187,7 @@ async function logout() {
   state.loading = false;
   state.refreshNote = "";
   state.recentQuery = "";
+  state.openCardKey = "";
   state.view = "recent";
   state.message = "Logged out. This browser has forgotten you.";
   renderLogin();
@@ -323,6 +326,7 @@ function renderTop() {
     button.type = "button";
     if (state.view === id) button.setAttribute("aria-current", "page");
     button.addEventListener("click", () => {
+      if (id !== "cards") state.openCardKey = "";
       state.view = id;
       render();
     });
@@ -776,6 +780,7 @@ function renderCards() {
       chip.setAttribute("aria-pressed", String(cardsPersonPressed(person)));
       chip.addEventListener("click", () => {
         if (cardsPersonPressed(person)) return;
+        state.openCardKey = "";
         state.cards = person.scope;
         loadDashboard();
       });
@@ -801,37 +806,86 @@ function cardGrid(cards) {
 }
 
 function renderCard(card) {
-  const article = el("article", "money-card");
+  const open = cardIsOpen(card);
+  const article = el("article", open ? "money-card open" : "money-card");
+  const toggle = el("button", "card-toggle");
+  toggle.type = "button";
+  toggle.setAttribute("aria-label", card.name);
+  toggle.setAttribute("aria-expanded", String(open));
   const header = el("header");
   header.append(el("h3", "", card.name));
   if (!card.limits.length) header.append(el("strong", "", "No cap"));
-  article.append(header);
-  article.append(el("div", "sub", prettyDate(card.period_start) + " to " + prettyDate(card.period_end)));
+  toggle.append(header);
+  toggle.append(el("div", "sub", prettyDate(card.period_start) + " to " + prettyDate(card.period_end)));
   if (!card.limits.length) {
     const bar = el("div", "bar");
     const fill = el("span", "fill-neutral");
     fill.style.width = "100%";
     bar.append(fill);
-    article.append(bar);
-    article.append(el("div", "", money(card.spent) + " this period"));
-    article.append(el("div", "sub", "No limit set · still shown"));
-    return article;
+    toggle.append(bar);
+    toggle.append(el("div", "", money(card.spent) + " this period"));
+    toggle.append(el("div", "sub", "No limit set · still shown"));
+  } else {
+    card.limits.forEach((limit) => {
+      const block = el("div", "limit-block");
+      const title = el("div", "tx-top");
+      title.append(el("span", "", limit.label));
+      title.append(el("strong", "", limit.percent_label + "%"));
+      const bar = el("div", "bar");
+      const fill = el("span", "fill-" + limit.band);
+      const width = Math.min(Number(limit.percent) || 0, 100);
+      fill.style.width = width + "%";
+      bar.append(fill);
+      block.append(title, bar);
+      block.append(el("div", "", money(limit.spent) + " of " + money(limit.limit)));
+      toggle.append(block);
+    });
   }
-  card.limits.forEach((limit) => {
-    const block = el("div", "limit-block");
-    const title = el("div", "tx-top");
-    title.append(el("span", "", limit.label));
-    title.append(el("strong", "", limit.percent_label + "%"));
-    const bar = el("div", "bar");
-    const fill = el("span", "fill-" + limit.band);
-    const width = Math.min(Number(limit.percent) || 0, 100);
-    fill.style.width = width + "%";
-    bar.append(fill);
-    block.append(title, bar);
-    block.append(el("div", "", money(limit.spent) + " of " + money(limit.limit)));
-    article.append(block);
-  });
+  toggle.addEventListener("click", () => toggleCard(card));
+  article.append(toggle);
+  if (open) {
+    const list = renderCardTransactions(card);
+    toggle.setAttribute("aria-controls", list.id);
+    article.append(list);
+  }
   return article;
+}
+
+function cardOpenKey(card) {
+  const owner = state.payload && state.payload.cards ? state.payload.cards.owner : "";
+  return owner + "\n" + card.name;
+}
+
+function cardIsOpen(card) {
+  return state.openCardKey === cardOpenKey(card);
+}
+
+function toggleCard(card) {
+  const key = cardOpenKey(card);
+  state.openCardKey = state.openCardKey === key ? "" : key;
+  render();
+}
+
+function renderCardTransactions(card) {
+  const list = el("div", "card-tx");
+  const slug = cardOpenKey(card).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  list.id = "card-tx-" + (slug || "card");
+  list.setAttribute("role", "region");
+  list.setAttribute("aria-label", "Transactions on " + card.name);
+  const rows = Array.isArray(card.transactions) ? card.transactions : [];
+  if (!rows.length) {
+    list.append(el("p", "sub", "No transactions on this card."));
+    return list;
+  }
+  rows.forEach((row) => {
+    const line = el("div", "card-tx-row");
+    const shop = el("div", "card-tx-shop");
+    shop.append(el("div", "merchant", row.shop || "No description"));
+    shop.append(el("div", "tx-date", prettyDate(row.date)));
+    line.append(shop, el("div", "amount", money(row.amount)));
+    list.append(line);
+  });
+  return list;
 }
 
 function renderMonth() {

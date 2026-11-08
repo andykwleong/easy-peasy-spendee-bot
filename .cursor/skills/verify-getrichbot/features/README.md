@@ -44,7 +44,7 @@ Each feature file starts with an H1 title and one paragraph describing the user-
 ## Features
 
 - [Recent transactions](./recent-transactions.md) covers the locked page, signing in, the same person chips for both people, the search box under those chips, the group-note dots, and fixing a category.
-- [Card summary](./card-summary.md) covers the signed-in person's cards, the other person's cards, a cap, and a card with no cap.
+- [Card summary](./card-summary.md) covers the signed-in person's cards, the other person's cards, a cap, a card with no cap, and the purchases that open under a tapped card.
 - [Monthly summary](./monthly-summary.md) covers the household month table built from the raw rows.
 - [Raw entries](./raw-entries.md) covers the full raw expense table, the empty card-only table, and dragging that table.
 - [Eval](./eval.md) covers the mail, category, and group-note scores after Raw entries.

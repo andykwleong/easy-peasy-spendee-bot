@@ -1509,6 +1509,108 @@ class EmailMailTests(unittest.TestCase):
             self.assertEqual(decision.payment_owner, "")
             self.assertNotEqual(decision.kind, "purchase")
 
+    def test_forward_header_date_is_not_the_purchase_date(self):
+        body = "\n".join(
+            (
+                "---------- Forwarded message ---------",
+                "From: Sample Bank <alerts@bank.example>",
+                "Date: Mon, Nov 9, 2026 at 8:15 AM",
+                "Subject: Fwd: Card Transaction Alert",
+                "To: person-a@example.com",
+                "",
+                "We wish to inform you that SGD12.30 was charged at 16:52 on 05-Nov-26 to",
+                "your card (-1111) at SAMPLE SHOP.",
+            )
+        )
+        decision = decide("Fwd: Card Transaction Alert", body, config_with(last4="1111"))
+        self.assertEqual(decision.action, "log", decision.text)
+        self.assertEqual(decision.expense_date, date(2026, 11, 5))
+        self.assertEqual(decision.amount, Decimal("12.30"))
+        self.assertEqual(decision.last4, "1111")
+        self.assertEqual(decision.shop, "SAMPLE SHOP")
+        self.assertEqual(decision.payment_method, "UOB Sample Visa")
+
+        fwd_line = "\n".join(
+            (
+                "Fwd: Date: Mon, Nov 9, 2026 at 8:15 AM",
+                "Amount: SGD18.50",
+                "card ending 1111",
+                "Transaction date",
+                "05/10/2026",
+                "To: SAMPLE SHOP",
+            )
+        )
+        labeled = decide("Fwd: Card Transaction Alert", fwd_line, config_with(last4="1111"))
+        self.assertEqual(labeled.action, "log", labeled.text)
+        self.assertEqual(labeled.expense_date, date(2026, 10, 5))
+        self.assertEqual(labeled.shop, "SAMPLE SHOP")
+
+        header_only = "\n".join(
+            (
+                "---------- Forwarded message ---------",
+                "From: Sample Bank <alerts@bank.example>",
+                "Date: Mon, Nov 9, 2026 at 8:15 AM",
+                "Subject: Fwd: Card Transaction Alert",
+                "To: person-a@example.com",
+                "",
+                "Amount: SGD12.30",
+                "card ending 1111",
+                "To: SAMPLE SHOP",
+            )
+        )
+        missing = decide("Fwd: Card Transaction Alert", header_only, config_with(last4="1111"))
+        self.assertEqual(missing.action, "ask")
+        self.assertEqual(missing.text, "I got a transaction, but the date was missing. I have not logged it.")
+
+    def test_incoming_paynow_masked_account_is_income_and_not_a_card(self):
+        body = "\n".join(
+            (
+                "You received $25.00 by PayNow on 05/10/2026.",
+                "Account number XXXX-XXXX-XXXX-2525",
+                "A/C ending 2525",
+            )
+        )
+        decision = decide(PAYNOW_SUBJECT, body, config_with(last4="2525"))
+        self.assertEqual(decision.action, "log", decision.text)
+        self.assertEqual(decision.kind, "paynow")
+        self.assertEqual(decision.category, INCOME_MISC)
+        self.assertEqual(decision.amount, Decimal("25.00"))
+        self.assertEqual(decision.expense_date, date(2026, 10, 5))
+        self.assertEqual(decision.payment_method, "")
+        self.assertEqual(decision.payment_owner, "")
+        self.assertEqual(decision.payment_channel, "")
+        self.assertEqual(decision.last4, "")
+        self.assertNotIn("could not match one card", decision.text)
+        row = build_expense_row(decision, chat_id=-100, now=datetime(2026, 10, 5, 9, 0, tzinfo=SINGAPORE))
+        self.assertEqual(row.transaction_type, "Income")
+        self.assertEqual(row.category, INCOME_MISC)
+        self.assertEqual(row.amount, Decimal("25.00"))
+        self.assertEqual(row.payment_method, "")
+        self.assertEqual(row.payment_owner, "")
+        self.assertEqual(row.payment_channel, "")
+
+        compact = decide(
+            PAYNOW_SUBJECT,
+            "SGD 25.00 was credited on 05/10/2026.\nAccount XXXXXXXX2525\naccount ending 2525\n",
+            config_with(last4="2525"),
+        )
+        self.assertEqual(compact.action, "log", compact.text)
+        self.assertEqual(compact.category, INCOME_MISC)
+        self.assertEqual(compact.amount, Decimal("25.00"))
+        self.assertEqual(compact.last4, "")
+        self.assertEqual(compact.payment_method, "")
+        self.assertNotEqual(compact.kind, "purchase")
+
+        missing_category = decide(
+            PAYNOW_SUBJECT,
+            body,
+            config_with(last4="2525"),
+            categories=("Food", "Income - A", "Income - fx"),
+        )
+        self.assertEqual(missing_category.action, "ask")
+        self.assertIn("Income - misc", missing_category.text)
+        self.assertEqual(missing_category.category, "")
+
 
 if __name__ == "__main__":
     unittest.main()

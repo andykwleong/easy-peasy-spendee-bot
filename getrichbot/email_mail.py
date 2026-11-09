@@ -90,6 +90,15 @@ _SHOP_AFTER_CARD_RE = re.compile(
     re.IGNORECASE,
 )
 _CUT_OFF_PAREN_RE = re.compile(r"\s*\([^)]*$")
+_FORWARD_DATE_LINE_RE = re.compile(
+    r"^[ \t>]*(?:fwd:\s*)?(?:date|sent)\s*:\s*\S.+$",
+    re.IGNORECASE,
+)
+_FORWARD_WEEKDAY_RE = re.compile(
+    r"\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tue|tues|wed|thu|thur|thurs|fri|sat|sun)\b",
+    re.IGNORECASE,
+)
+_FORWARD_CLOCK_RE = re.compile(r"\bat\s+\d{1,2}:\d{2}\b|[+-]\d{4}\b", re.IGNORECASE)
 _SHOP_LABEL_RE = re.compile(
     r"^(?:transaction\s+details|description|merchant|shop|to)\b\s*:?\s*(.*)$",
     re.IGNORECASE,
@@ -530,6 +539,7 @@ def _income_decision(
     }
     description = labels.get(kind, kind)
     logged_by = _logged_by(addresses, forwarders) or ""
+    # A masked account on this path is the account number, not a card.
     return EmailDecision(
         action="log",
         kind=kind,
@@ -725,8 +735,29 @@ def _decimal_dot(body: str, index: int) -> bool:
 
 
 def _mail_date(body: str, today: date) -> date | None:
-    when, _span = resolve_transaction_date(body, today, include_numeric=True)
+    when, _span = resolve_transaction_date(_without_forward_dates(body), today, include_numeric=True)
     return when
+
+
+def _without_forward_dates(body: str) -> str:
+    """Drop the forward wrapper's date line. The original message date stays.
+
+    Gmail writes its own date on a forwarded mail, such as
+    `Date: Mon, Nov 9, 2026 at 8:15 AM` or `Fwd: Date: ...`. That is not the
+    purchase date. `Date & Time` and a date written in the original body stay.
+    """
+    kept: list[str] = []
+    for line in (body or "").splitlines():
+        if _is_forward_date_line(line):
+            continue
+        kept.append(line)
+    return "\n".join(kept)
+
+
+def _is_forward_date_line(line: str) -> bool:
+    if _FORWARD_DATE_LINE_RE.match(line) is None:
+        return False
+    return _FORWARD_WEEKDAY_RE.search(line) is not None or _FORWARD_CLOCK_RE.search(line) is not None
 
 
 def _parse_date_text(raw: str) -> date | None:

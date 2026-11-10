@@ -1,23 +1,27 @@
 # GetRichBot
 
-GetRichBot is a private Telegram household finance bot that captures spending and income from a shared chat and appends confirmed raw transaction rows to Google Sheets.
+GetRichBot is a private household money bot for two people. You log spending and income in a shared Telegram chat. When email logging is turned on, the bot can also read a mailbox you choose and save a clear purchase, or money paid into the account. Confirmed rows are written to a Google Sheet you control. That sheet is the record. The bot does not keep a second copy of the numbers.
 
-The bot keeps Telegram focused on quick capture, confirmation, edits, and deletion. Google Sheets remains the source of truth for raw data, category totals, monthly P&L, charts, and reporting.
+The same bot shows a private page for those two people. The page has five screens: Recent, Cards, Month, Raw entries, and Eval. Recent is the latest saved rows, with a search box and a small mark for whether Telegram accepted the household group note. Cards shows each person's credit cards, and a tap opens that card's purchases under the card. Month shows household income, expenses, and the net, which is income minus expenses. Raw entries shows the saved rows in a table. Eval shows whether mail was logged, whether an emailed category was later changed, and whether Telegram accepted the group note.
+
+Telegram stays focused on quick capture, confirmation, edits, and deletion. Screenshots and voice notes can be read when an OpenAI key is set, and nothing from them is saved until you confirm.
 
 ## How It Works
 
 ```text
-Telegram group chat
+Telegram chat, or mail in the mailbox you chose
   -> Railway-hosted Python bot
-  -> optional OpenAI extraction for screenshots, voice notes, and natural-language actions
-  -> Google Sheets raw transaction log
-  -> Google Sheets monthly P&L summary
+  -> optional OpenAI help for screenshots, voice notes, and plain-language edits
+  -> Google Sheet (the record)
+  -> monthly totals, card totals, and the private dashboard
 ```
+
+A bank email is not sent to OpenAI. If a shop is not already known, a lookup sends only the shop name. When that lookup returns a short description, the model sees the shop name, that description, and your category list. It does not see the amount, the card, or the rest of the email.
 
 ## Features
 
 - Logs expenses and income from Telegram text messages.
-- Maps each Telegram sender to either `Me` or `My wife`.
+- Recognizes the two configured people. The sheet stores the names you set, such as `Me` and `My wife`. On the dashboard, both people see the buttons Andy and FX.
 - Categorizes expenses using your private household category config.
 - Appends every confirmed entry as raw transaction data to Google Sheets.
 - Supports pending review when category or amount is unclear.
@@ -34,8 +38,8 @@ Telegram group chat
 - Shows category spending breakdowns by month, including who logged each row and category totals.
 - Supports undo for the last expense sent by a user.
 - Keeps the bot private to configured Telegram user IDs.
-- Shows a private dashboard for those same two people. It reads the Google Sheet. Fix tagging can correct a saved row's category, amount, card, or channel, and that correction is written back to the same row. Delete asks first. While that delete is working, the Delete button becomes a spinning circle and the row stays until it finishes.
-- Can log a clear bank email when email logging is turned on. A purchase is written immediately. A refund, an incoming PayNow, a dividend, or interest is written as household income. A payment sent out to a merchant is an expense. A statement stays quiet. A card purchase that is missing an amount, a date, or a card asks and is not written. A payment straight from a bank account is logged as PayNow with no card.
+- Shows a private dashboard for those same two people, with Recent, Cards, Month, Raw entries, and Eval. It reads the Google Sheet. Fix tagging can correct a saved row's category, amount, card, or channel, and that correction is written back to the same row. Delete asks first. While that delete is working, the Delete button becomes a spinning circle and the row stays until it finishes.
+- Can log a clear bank email when email logging is turned on. A purchase is written immediately. Money paid into the account, including an incoming PayNow, a refund, a dividend, or interest, is written as household income in the category `Income - misc`. The last 4 digits on that account mail are the account, not a credit card. A forwarded mail uses the date written in the original message, not the date on the forward. A payment sent out to a merchant is an expense. A statement stays quiet. A card purchase that is missing an amount, a date, or a card asks and is not written. A payment straight from a bank account is logged as PayNow with no card.
 
 ## Requirements
 
@@ -308,7 +312,7 @@ Two ways to open it, and only for the two Telegram accounts already allowed to u
 
 The page rearranges itself. A narrow window uses the phone layout. A wide window uses the desktop layout.
 
-It shows recent transactions (yours, or both), card summary, the household monthly income, expenses, and net, the raw rows, and card-only rows that stay out of household spending. Income is for the household, not split by person. On Cards, a toggle switches between your credit cards and the other person's. The colours stay the same as Telegram: green under 60%, yellow from 60% to 79%, orange from 80% to 94%, red at 95% or more. A card with no limit still shows, and it does not get a made-up percentage. The page keeps the coloured bar and the percentage number. It does not print the colour name under the bar, and it does not show a row of colour explanation boxes.
+It shows recent transactions for Andy, FX, or both, card summary, the household monthly income, expenses, and net, the raw rows, and card-only rows that stay out of household spending. Income is for the household, not split by person. On Cards, the Andy and FX buttons switch whose credit cards you are looking at. The colours stay the same as Telegram: green under 60%, yellow from 60% to 79%, orange from 80% to 94%, red at 95% or more. A card with no limit still shows, and it does not get a made-up percentage. The page keeps the coloured bar and the percentage number. It does not print the colour name under the bar, and it does not show a row of colour explanation boxes.
 
 Tap a card and that card’s purchases open directly under it. Tap the same card again and they close. Opening a different card closes the one that was open. Capped cards stay in the capped group, and uncapped cards stay in the uncapped group. The list is not placed under every card. Each line shows the shop, the date, and the amount. A purchase is included when the payment owner and the payment method match that card, for the dates already printed on the card. If the payment owner was left blank, it still counts as the person who logged it, the same way the card total does. Card-only spend is included. Income is not. Andy and FX still switch whose cards you are looking at. Tapping does not read the sheet again. The open or closed choice stays on the Cards screen only. Switching person, leaving Cards, logging out, or reloading closes it. That choice is not saved.
 
@@ -328,7 +332,7 @@ Each recent row can show a small dot. Green, with the words **Message sent**, me
 
 The sheet row is saved before Telegram is asked. A slow or failed Telegram note does not block the save. The failed note is tried once more in the background. There is no third try. A restart in the short moment after the first failure, and before that retry finishes, leaves the row with no dot.
 
-**Eval** sits after Raw entries. A month picker and **All time** filter the three blocks on the page. The month you pick stays until you reload the page. It is not saved, and picking a month does not read Gmail or the sheet again. The numbers already on the page are filtered.
+**Eval** sits after Raw entries. A month picker and **All time** filter the three blocks on the page. Mail and categories use the day the mail was handled. Group notes use the expense date. The month you pick stays until you reload the page. It is not saved, and picking a month does not read Gmail or the sheet again. The numbers already on the page are filtered.
 
 Email logging leads with the percent of mail that was logged, then how many were logged and how many were not. A reversal that removed the original charge counts in that logged percent. It is not listed with the mail that was not logged. A reversal that cannot find the original charge is still not logged. An older row can still say not logged even though the charge was removed. The short reason already stored on that row is how the bot tells them apart. `reversal` means the charge was removed. `reversal_missing` means it was not found. When the bot starts, it reads the hidden Eval Log tab once and changes a `reversal` row's result to handled. Opening Eval does the same check on the read the page already makes. Only that result cell is written. If it already says handled, nothing is written. A `reversal_missing` row stays not logged. The subject line is not used, so a mail that was not logged for another reason stays not logged. This does not open the mailbox, does not call a model, and does not run on a timer. If the sheet does not save the change, the row stays not logged, the problem is written to the bot log, and the next Eval read tries again. Restarting the bot tries once at startup as well. Nothing else on the row is rewritten. Each of the three percents is coloured the opposite way from a card limit, because a high percent is the healthy one. Green is 95% or above, orange is 80% to 94%, yellow is 60% to 79%, and red is below 60%. The Cards screen keeps its own colours. The three headings are **Email successfully logged**, **Categories successfully matched**, and **Telegram message successfully sent**. Each mail that was not logged is its own rectangle, with the date, the sender, the subject, and a plain reason. Tap that rectangle to read that one message. Tap it again to close it. The message is not left open. It is read from Gmail at that moment and is not saved. A full card number in that view is masked, and the last 4 digits stay. A very long mail is cut after 12,000 characters, with a line saying the rest is not shown. If that one mail cannot be read, the rectangle says so and the rest of Eval stays. Each group note that was not sent is its own rectangle too. Tap it to see that the purchase is still on the sheet and Telegram did not accept the note. Tap it again to close it.
 
@@ -518,6 +522,10 @@ Plain-language shortcuts:
 - `confirm fixed`
 - `confirm fixed last month`
 - `confirm fixed May 2026`
+- `pause email`
+- `resume email`
+- `log email backlog`
+- `skip email backlog`
 
 With `OPENAI_API_KEY` configured, natural language actions also work:
 

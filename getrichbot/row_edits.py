@@ -9,12 +9,15 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime, time
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 from getrichbot.cards import PaymentConfig, PaymentMethod
 from getrichbot.categories import CATEGORY_ALIASES, FIXED_CATEGORIES, VARIABLE_CATEGORIES
-from getrichbot.models import CardUsageRecord, ExpenseRecord
+from getrichbot.models import CardUsageRecord, CardUsageRow, ExpenseRecord, ExpenseRow, is_paynow_method
+
+_SINGAPORE_TZ = ZoneInfo("Asia/Singapore")
 
 _EXPLICIT_EDIT = re.compile(
     r"(?:change|changed|update|set|make)"
@@ -195,6 +198,7 @@ def edit_choices(payment_config: PaymentConfig | None) -> dict:
                     "name": method.name,
                     "owner": method.owner,
                     "channels": list(payment_config.channel_options_for(method.owner, method.name)),
+                    "credit_card": method.is_credit_card,
                 }
             )
     return {
@@ -203,6 +207,7 @@ def edit_choices(payment_config: PaymentConfig | None) -> dict:
         "fixed_categories": list(categories_for("fixed")),
         "category_picker": list(category_picker_choices("expense")),
         "cards": cards,
+        "cards_loaded": payment_config is not None,
     }
 
 
@@ -466,6 +471,143 @@ def _rejected_field_message(kind: str, field: str) -> str:
     if kind == "card_only" and field == "category":
         return "Card-only spend has no expense category."
     return "That change does not apply to this row."
+
+
+@dataclass(frozen=True)
+class ClaimPlan:
+    message: str
+    error: str = ""
+    card_name: str = ""
+    card_owner: str = ""
+
+    @property
+    def ok(self) -> bool:
+        return self.error == ""
+
+
+def credit_card_for_claim(
+    config: PaymentConfig | None,
+    method_name: str,
+    owner: str,
+    logged_by: str,
+) -> PaymentMethod | None:
+    """The credit card already stored on the row. PayNow and a blank method are not cards."""
+    if config is None or not method_name.strip() or is_paynow_method(method_name):
+        return None
+    hint = owner.strip() or logged_by.strip()
+    status, method = find_payment_method(config, method_name, hint or None)
+    if status != "found" or method is None or not method.is_credit_card:
+        return None
+    return method
+
+
+def plan_claim(
+    *,
+    kind: str,
+    direction: str,
+    payment_method: str,
+    payment_owner: str,
+    logged_by: str,
+    payment_config: PaymentConfig | None,
+) -> ClaimPlan:
+    """Decide whether this saved row can move between a household expense and card-only spend."""
+    if direction == "claim":
+        if kind == "income":
+            return ClaimPlan("Income cannot be a claim.", error="not_applicable")
+        if kind == "fixed":
+            return ClaimPlan("A fixed expense cannot be a claim.", error="not_applicable")
+        if kind != "expense":
+            return ClaimPlan("That change does not apply to this row.", error="not_applicable")
+        if payment_config is None:
+            return ClaimPlan("I could not read the card list just now. Nothing was changed.", error="sheet")
+        method = credit_card_for_claim(payment_config, payment_method, payment_owner, logged_by)
+        if method is None:
+            return ClaimPlan("This purchase has no card, so it cannot be a claim.", error="not_applicable")
+        return ClaimPlan("Saved.", card_name=method.name, card_owner=method.owner)
+    if direction == "expense":
+        if kind != "card_only":
+            return ClaimPlan("This purchase is already a household expense.", error="not_applicable")
+        method = credit_card_for_claim(payment_config, payment_method, payment_owner, logged_by)
+        if method is None:
+            return ClaimPlan("Saved.", card_name=payment_method, card_owner=payment_owner)
+        return ClaimPlan("Saved.", card_name=method.name, card_owner=method.owner)
+    return ClaimPlan("That change is not available.", error="invalid")
+
+
+def card_usage_from_expense(record: ExpenseRecord, *, card_name: str, card_owner: str) -> CardUsageRow:
+    """Card-only row that keeps the expense's category so it can be put back."""
+    return CardUsageRow(
+        entry_id=record.entry_id,
+        timestamp=_timestamp_on(record.expense_date, record.timestamp),
+        logged_by=record.logged_by,
+        raw_input=record.raw_input,
+        amount=record.amount,
+        payment_method=card_name,
+        description=record.description,
+        usage_type="Claimable",
+        status=record.status or "Confirmed",
+        telegram_chat_id=record.telegram_chat_id,
+        telegram_message_id=record.telegram_message_id,
+        payment_owner=card_owner,
+        payment_channel=record.payment_channel,
+        kept_category=record.category,
+        kept_input_type=record.input_type,
+    )
+
+
+def expense_from_card_usage(record: CardUsageRecord, *, card_name: str, card_owner: str) -> ExpenseRow:
+    """Household expense restored from the card-only row. The stored category is not replaced."""
+    return ExpenseRow(
+        entry_id=record.entry_id,
+        timestamp=_timestamp_on(record.usage_date, record.timestamp),
+        logged_by=record.logged_by,
+        raw_input=record.raw_input,
+        amount=record.amount,
+        category=record.kept_category,
+        description=record.description,
+        input_type=record.kept_input_type or "Text",
+        status=record.status or "Confirmed",
+        telegram_chat_id=record.telegram_chat_id,
+        telegram_message_id=record.telegram_message_id,
+        transaction_type="Expense",
+        payment_method=card_name,
+        payment_owner=card_owner,
+        payment_channel=record.payment_channel,
+    )
+
+
+def claim_success_message(
+    *,
+    direction: str,
+    amount: Decimal,
+    card_name: str,
+    category: str,
+    entry_id: str,
+) -> str:
+    money = f"${amount:.2f}"
+    if direction == "claim":
+        detail = f" It still counts on {card_name}." if card_name else ""
+        return f"Moved {money} off household expenses.{detail} [{entry_id}]"
+    if category:
+        return f"Moved {money} back to {category}. It counts as a household expense again. [{entry_id}]"
+    return f"Moved {money} back to a household expense. [{entry_id}]"
+
+
+def _timestamp_on(day_text: str, clock_text: str) -> datetime:
+    try:
+        day = date.fromisoformat(day_text.strip()[:10])
+    except ValueError as exc:
+        raise ValueError("date") from exc
+    parsed: time | None = None
+    for pattern in ("%H:%M:%S", "%H:%M"):
+        try:
+            parsed = datetime.strptime((clock_text or "").strip(), pattern).time()
+        except ValueError:
+            continue
+        break
+    if parsed is None:
+        parsed = time(0, 0)
+    return datetime.combine(day, parsed, tzinfo=_SINGAPORE_TZ)
 
 
 def _human_date(value: str) -> str:

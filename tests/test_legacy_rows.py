@@ -132,6 +132,25 @@ class TestLegacyRows(unittest.TestCase):
         self.assertEqual(record.payment_method, "UOB PP (Blue)")
         self.assertEqual(record.payment_channel, "PayWave")
         self.assertEqual(record.status, "Confirmed")
+        self.assertEqual(record.kept_category, "")
+        self.assertEqual(record.telegram_message_id, "6")
+
+    def test_card_usage_keeps_the_category_for_a_later_expense_move(self):
+        row = [
+            "aug003", "12:00:00", "2026-08-11", "2026-08", "Me", "doctor claim 120",
+            "120.00", "Me", "UOB PP (Blue)", "PayWave", "doctor claim", "Claimable",
+            "Confirmed", "-100", "6", "Food", "Email",
+        ]
+        client = SheetsClient("test-sheet")
+        client.service = _Service([row])
+
+        record = client.get_card_usage_records("Card Usage")[0]
+
+        self.assertEqual(record.kept_category, "Food")
+        self.assertEqual(record.kept_input_type, "Email")
+        self.assertEqual(record.telegram_chat_id, "-100")
+        self.assertEqual(record.telegram_message_id, "6")
+        self.assertEqual(record.payment_method, "UOB PP (Blue)")
 
     def test_paynow_bank_row_keeps_a_blank_payment_owner(self):
         row = [

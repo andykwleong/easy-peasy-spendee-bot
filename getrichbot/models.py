@@ -103,6 +103,7 @@ class ExpenseRecord:
     payment_owner: str = ""
     payment_channel: str = ""
     telegram_message_id: str = ""
+    telegram_chat_id: str = ""
 
     def compact(self) -> str:
         return (
@@ -126,6 +127,8 @@ class CardUsageRow:
     telegram_message_id: int | str
     payment_owner: str = ""
     payment_channel: str = ""
+    kept_category: str = ""
+    kept_input_type: str = ""
 
     def to_sheet_row(self, include_payment_owner: bool = True, include_payment_channel: bool = False) -> list[str]:
         usage_date = self.timestamp.strftime("%Y-%m-%d")
@@ -157,6 +160,8 @@ class CardUsageRow:
                 str(self.telegram_message_id),
             ]
         )
+        if self.kept_category or self.kept_input_type:
+            values.extend([self.kept_category, self.kept_input_type])
         return values
 
 
@@ -176,3 +181,7 @@ class CardUsageRecord:
     status: str
     payment_owner: str = ""
     payment_channel: str = ""
+    telegram_chat_id: str = ""
+    telegram_message_id: str = ""
+    kept_category: str = ""
+    kept_input_type: str = ""

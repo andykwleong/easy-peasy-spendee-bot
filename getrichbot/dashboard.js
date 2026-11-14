@@ -18,7 +18,7 @@ const state = {
   pendingDelete: null,
   deleteError: "",
   deleting: false,
-  saving: false,
+  saving: null,
   loading: false,
   payload: null,
   message: "",
@@ -48,6 +48,10 @@ window.onTelegramAuth = function (user) {
 
 window.addEventListener("load", boot);
 
+function openOnSignedInPerson(label) {
+  state.scope = label || "both";
+}
+
 function telegramInitData() {
   const telegram = window.Telegram && window.Telegram.WebApp;
   return telegram && telegram.initData ? telegram.initData : "";
@@ -68,6 +72,7 @@ async function boot() {
   if (!state.loggedOut && telegramInitData()) {
     const result = await postJson("/api/session/webapp", { init_data: telegramInitData() });
     if (result.ok) {
+      openOnSignedInPerson(result.label);
       if (await loadDashboard()) watchChanges();
       return;
     }
@@ -77,6 +82,8 @@ async function boot() {
   }
   const session = await fetch("/api/session", { credentials: "same-origin" });
   if (session.ok) {
+    const body = await session.json().catch(() => ({}));
+    openOnSignedInPerson(body.label);
     if (await loadDashboard()) watchChanges();
     return;
   }
@@ -160,7 +167,7 @@ async function loginWithWidget(user) {
     return;
   }
   state.loggedOut = false;
-  state.scope = "both";
+  openOnSignedInPerson(result.label);
   state.cards = "mine";
   state.missingCategory = false;
   state.recentQuery = "";
@@ -170,7 +177,7 @@ async function loginWithWidget(user) {
   state.deleteError = "";
   state.deleting = false;
   state.view = "recent";
-  state.saving = false;
+  state.saving = null;
   if (await loadDashboard()) watchChanges();
 }
 
@@ -183,7 +190,7 @@ async function logout() {
   state.pendingDelete = null;
   state.deleteError = "";
   state.deleting = false;
-  state.saving = false;
+  state.saving = null;
   state.loading = false;
   state.refreshNote = "";
   state.recentQuery = "";
@@ -253,6 +260,7 @@ function renderLogin() {
         renderLogin();
         return;
       }
+      openOnSignedInPerson(result.label);
       if (await loadDashboard()) watchChanges();
     });
     card.append(cont);
@@ -452,6 +460,7 @@ function renderTransaction(row) {
   const actions = el("div", "tx-actions");
   actions.append(deleteButton(row));
   const open = state.editingId === row.id;
+  if (open) actions.append(closeFixButton());
   const fix = el("button", "text-btn", open ? "Save" : "Fix tagging");
   fix.type = "button";
   fix.setAttribute("aria-expanded", String(open));
@@ -476,6 +485,22 @@ function renderTransaction(row) {
   article.append(actions);
   if (open) article.append(renderEditor(row));
   return article;
+}
+
+function closeFixButton() {
+  const close = el("button", "text-btn", "X");
+  close.type = "button";
+  close.setAttribute("aria-label", "Close");
+  close.addEventListener("mousedown", (event) => {
+    // Keep the amount field from blurring, which would save it.
+    event.preventDefault();
+  });
+  close.addEventListener("click", () => {
+    state.editingId = "";
+    state.savedNote = "";
+    render();
+  });
+  return close;
 }
 
 function deleteButton(row) {
@@ -611,7 +636,7 @@ function renderEditor(row) {
   const fields = fieldsFor(row);
   if (row.kind === "card_only") {
     const wrap = el("span", "edit-control");
-    wrap.append(claimButton(row, "Expense", "expense"));
+    wrap.append(claimButton(row, "Add a category - not claimable", "expense"));
     box.append(editField("Category", wrap));
   } else if (fields.indexOf("category") !== -1) {
     box.append(categoryEditor(row));
@@ -649,6 +674,8 @@ function categoryEditor(row) {
 }
 
 function claimButton(row, label, direction) {
+  const saving = state.saving;
+  if (saving && saving.id === row.id && saving.field === "claim") return deleteSpinner();
   const button = el("button", "text-btn", label);
   button.type = "button";
   button.addEventListener("click", () => saveEdit(row, "claim", direction));
@@ -779,7 +806,8 @@ function cardKey(owner, name) {
 
 async function saveEdit(row, field, value, owner) {
   const seq = ++state.loadSeq;
-  state.saving = true;
+  state.saving = { id: row.id, field: field };
+  if (field === "claim") render();
   const payload = {
     id: row.id,
     source: row.source,
@@ -801,6 +829,7 @@ async function saveEdit(row, field, value, owner) {
     });
     const body = await response.json();
     if (seq !== state.loadSeq) return;
+    state.saving = null;
     if (!response.ok || !body.ok) {
       state.savedNote = body.message || ERROR_TEXT.sheet;
       render();
@@ -811,10 +840,11 @@ async function saveEdit(row, field, value, owner) {
     render();
   } catch (error) {
     if (seq !== state.loadSeq) return;
+    state.saving = null;
     state.savedNote = ERROR_TEXT.sheet;
     render();
   } finally {
-    state.saving = false;
+    if (seq === state.loadSeq) state.saving = null;
     wakeWatch();
   }
 }
@@ -1594,7 +1624,7 @@ function expenseCategoryIsBlank(row) {
 }
 
 function categoryLabel(row) {
-  if (row.kind === "card_only") return "Card only · not an expense";
+  if (row.kind === "card_only") return "Claimable - Added to card expense only";
   if (expenseCategoryIsBlank(row)) return "No category";
   return row.category || row.kind;
 }

@@ -105,6 +105,13 @@ def main() -> None:
     sheet.add_argument("--path", required=True)
     sheet.set_defaults(func=cmd_sheet_show)
 
+    arrive = sub.add_parser("sheet-arrive")
+    arrive.add_argument("--shop", required=True)
+    arrive.add_argument("--logged-by", required=True, choices=("Alex", "Sam"))
+    arrive.add_argument("--amount", default="7.25")
+    arrive.add_argument("--wait-text")
+    arrive.set_defaults(func=cmd_sheet_arrive)
+
     cleanup = sub.add_parser("cleanup")
     cleanup.set_defaults(func=cmd_cleanup)
 
@@ -257,6 +264,29 @@ def cmd_serve(args: argparse.Namespace) -> None:
     if ":" in context.bot_token or context.bot_token != VERIFY_TOKEN:
         raise SystemExit("Refusing to start with a token that is not the local verification token.")
     app = DashboardApp(context)
+    original_handle = app.handle
+
+    def handle(method, target, headers, body, *, secure):
+        path = target.split("?", 1)[0]
+        if path != "/" and path.endswith("/"):
+            path = path.rstrip("/")
+        if method == "POST" and path == "/verify/arrive":
+            from getrichbot.dashboard_http import _json
+
+            try:
+                payload = json.loads(body.decode() or "{}")
+            except json.JSONDecodeError:
+                return _json(400, {"ok": False})
+            shop = str(payload.get("shop") or "").strip()
+            logged_by = str(payload.get("logged_by") or "").strip()
+            amount = str(payload.get("amount") or "").strip()
+            if not shop or logged_by not in {"Alex", "Sam"} or not amount:
+                return _json(400, {"ok": False})
+            entry_id = sheets.arrive(shop, logged_by, amount)
+            return _json(200, {"ok": True, "id": entry_id})
+        return original_handle(method, target, headers, body, secure=secure)
+
+    app.handle = handle
     DashboardHTTPServer.allow_reuse_address = True
     try:
         server = DashboardHTTPServer("127.0.0.1", args.port, app)
@@ -452,6 +482,26 @@ def cmd_browser_drag(_args: argparse.Namespace) -> None:
     )
 
 
+def cmd_sheet_arrive(args: argparse.Namespace) -> None:
+    instance = _require_instance()
+    url = instance["url"].rstrip("/") + "/verify/arrive"
+    payload = json.dumps(
+        {"shop": args.shop, "logged_by": args.logged_by, "amount": args.amount}
+    ).encode()
+    request = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            body = json.loads(response.read().decode())
+    except urllib.error.URLError as error:
+        raise SystemExit(f"Could not add the row: {error}") from error
+    if not isinstance(body, dict) or not body.get("ok"):
+        raise SystemExit(f"Could not add the row: {body}")
+    print(f"arrived id={body.get('id')} shop={args.shop} logged_by={args.logged_by}")
+    if args.wait_text:
+        with _cdp(instance) as cdp:
+            _wait_for_text(cdp, args.wait_text, timeout=15)
+
+
 def cmd_sheet_show(args: argparse.Namespace) -> None:
     instance = _require_instance()
     path = _evidence_path(args.path)
@@ -557,6 +607,10 @@ class FakeSheets:
             ["2026-09-18", "sample-market-mail", "market@example.com", "Sample market", "pass", "logged", "bb2002", "Groceries", "keyword", "Food"],
             ["2026-09-12", "sample-quiet-mail", "quiet@example.com", "Quiet note", "fail", "no_amount", "", "", "", ""],
         ]
+        from getrichbot.sheet_changes import SheetChanges
+
+        self.changes = SheetChanges(frozenset({"Raw Expenses", "Card Usage"}))
+        self._next_row = 4
         self.config = parse_payment_config(
             [
                 ["Payment Method", "Owner", "Type", "Cycle Type", "Cycle Start Day", "Active"],
@@ -598,8 +652,10 @@ class FakeSheets:
                 record = replace(record, **changes)
             updated.append(record)
         self.records = updated
+        self._note(sheet_name)
 
     def update_card_usage_record(self, sheet_name, row_number, **kwargs):
+        self._note(sheet_name)
         return None
 
     def update_monthly_summary(self, sheet_name, rows, timeout_seconds=None):
@@ -634,6 +690,7 @@ class FakeSheets:
                 kept_input_type=row.kept_input_type,
             )
         )
+        self._note(sheet_name)
 
     def append_expense(self, sheet_name, row):
         from getrichbot.models import ExpenseRecord
@@ -661,15 +718,54 @@ class FakeSheets:
                 telegram_chat_id=str(row.telegram_chat_id),
             )
         )
+        self._note(sheet_name)
 
     def delete_entry_by_id(self, sheet_name, entry_id, logged_by=None):
         if sheet_name == "Card Usage":
             before = len(self.usage)
             self.usage = [row for row in self.usage if row.entry_id.lower() != entry_id.lower()]
-            return len(self.usage) != before
+            removed = len(self.usage) != before
+            if removed:
+                self._note(sheet_name)
+            return removed
         before = len(self.records)
         self.records = [row for row in self.records if row.entry_id.lower() != entry_id.lower()]
-        return len(self.records) != before
+        removed = len(self.records) != before
+        if removed:
+            self._note(sheet_name)
+        return removed
+
+    def _note(self, sheet_name: str) -> None:
+        changes = getattr(self, "changes", None)
+        if changes is not None:
+            changes.note_write(sheet_name)
+
+    def arrive(self, shop: str, logged_by: str, amount: str) -> str:
+        from getrichbot.models import ExpenseRecord
+
+        entry_id = f"n{self._next_row:04d}"
+        self._next_row += 1
+        self.records.append(
+            ExpenseRecord(
+                row_number=self._next_row,
+                entry_id=entry_id,
+                timestamp="19:00:00",
+                expense_date="2026-09-26",
+                month="2026-09",
+                logged_by=logged_by,
+                raw_input=shop,
+                amount=Decimal(amount),
+                category="Food",
+                description=shop,
+                input_type="text",
+                status="Confirmed",
+                transaction_type="Expense",
+                payment_method="Sample Visa" if logged_by == "Alex" else "Sample Mastercard",
+                payment_owner=logged_by,
+            )
+        )
+        self._note("Raw Expenses")
+        return entry_id
 
 
 def _label_for_user(user_id: int) -> str | None:

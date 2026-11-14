@@ -124,6 +124,6 @@ Start a fresh launch for each feature. Category edits and deletes stay in the se
 
 ## Helpers
 
-The only helper is `.cursor/skills/verify-getrichbot/scripts/verify_dashboard.py`. Run it with `python3` from the repo root. Commands: `launch`, `doctor`, `browser-open`, `browser-login`, `browser-click`, `browser-select`, `browser-expect`, `browser-screenshot`, `browser-snapshot`, `browser-hosts`, `browser-drag`, `sheet-show`, `cleanup`. `serve` is the private child process `launch` starts. Do not start it yourself.
+The only helper is `.cursor/skills/verify-getrichbot/scripts/verify_dashboard.py`. Run it with `python3` from the repo root. Commands: `launch`, `doctor`, `browser-open`, `browser-login`, `browser-click`, `browser-select`, `browser-expect`, `browser-screenshot`, `browser-snapshot`, `browser-hosts`, `browser-drag`, `sheet-show`, `sheet-arrive`, `cleanup`. `sheet-arrive` adds one fake purchase on this server and moves the same change mark a real sheet write moves, so an open page can show that row without a reload. `serve` is the private child process `launch` starts. Do not start it yourself.
 
 When the dashboard's screens change, update the feature files with `/maintain-verification-skill`.

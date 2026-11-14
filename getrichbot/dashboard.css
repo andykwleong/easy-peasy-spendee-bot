@@ -307,6 +307,7 @@ button.eval-card { font: inherit; cursor: pointer; }
 }
 .edit-control {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   align-items: center;
   min-width: 0;
@@ -319,6 +320,9 @@ button.eval-card { font: inherit; cursor: pointer; }
 .edit-control > .text-btn {
   flex: none;
   width: auto;
+  white-space: normal;
+  text-align: center;
+  line-height: 1.2;
 }
 .claim-note {
   margin: 4px 0 0;

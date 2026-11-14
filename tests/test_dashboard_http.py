@@ -989,6 +989,68 @@ class DashboardHttpTests(unittest.TestCase):
         self.assertIn('active.tagName !== "SELECT"', script)
         self.assertIn("Could not refresh. The list on screen is unchanged.", script)
 
+    def test_a_noted_write_is_visible_on_the_next_dashboard_read(self):
+        sheets = FakeSheets()
+        sheets.changes = SheetChanges(frozenset({"Raw Expenses", "Card Usage"}))
+        app, _sheets = app_for(sheets)
+        headers = {"X-Telegram-Init-Data": sign_webapp(111)}
+
+        first_status, _, first_payload = app.handle(
+            "GET",
+            "/api/dashboard?scope=both",
+            headers,
+            b"",
+            secure=False,
+        )
+        first = body_json(first_payload)
+        self.assertEqual(first_status, 200)
+        before = first["change_mark"]
+        self.assertNotIn("Fresh buns", first_payload.decode())
+
+        sheets.records.append(
+            ExpenseRecord(
+                row_number=4,
+                entry_id="cc3003",
+                timestamp="18:00:00",
+                expense_date="2026-09-26",
+                month="2026-09",
+                logged_by="Alex",
+                raw_input="fresh buns",
+                amount=Decimal("7.25"),
+                category="Food",
+                description="Fresh buns",
+                input_type="text",
+                status="Confirmed",
+                transaction_type="Expense",
+                payment_method="Sample Visa",
+                payment_owner="Alex",
+            )
+        )
+        sheets.changes.note_write("Raw Expenses")
+
+        change_status, _, change_payload = app.handle(
+            "GET",
+            "/api/dashboard/changes?since=" + before,
+            headers,
+            b"",
+            secure=False,
+        )
+        changed = body_json(change_payload)
+        self.assertEqual(change_status, 200, changed)
+        self.assertNotEqual(changed["mark"], before)
+        self.assertEqual(sheets.calls, ["get_expense_records", "get_card_usage_records", "get_payment_config"])
+
+        next_status, _, next_payload = app.handle(
+            "GET",
+            "/api/dashboard?scope=Alex",
+            headers,
+            b"",
+            secure=False,
+        )
+        nxt = body_json(next_payload)
+        self.assertEqual(next_status, 200)
+        self.assertTrue(any(row["description"] == "Fresh buns" and row["logged_by"] == "Alex" for row in nxt["recent"]))
+        self.assertTrue(all(row["description"] != "Sample market" for row in nxt["recent"]))
 
     def test_message_marks_keep_a_blank_row_blank_and_count_only_sent(self):
         sheets = FakeSheets()
@@ -1604,7 +1666,16 @@ class ClaimMoveTests(unittest.TestCase):
         self.assertNotIn("claimButton", row)
         self.assertIn("This purchase has no card, so it cannot be a claim.", script)
         self.assertIn('claimButton(row, "Claim", "claim")', script)
-        self.assertIn('claimButton(row, "Expense", "expense")', script)
+        self.assertIn('claimButton(row, "Add a category - not claimable", "expense")', script)
+        self.assertNotIn('claimButton(row, "Expense", "expense")', script)
+        self.assertIn("Claimable - Added to card expense only", script)
+        self.assertNotIn("Card only · not an expense", script)
+        self.assertIn('aria-label", "Close"', script)
+        self.assertIn("openOnSignedInPerson", script)
+        self.assertIn('state.scope = label || "both"', script)
+        claim = script.split("function claimButton", 1)[1].split("function expenseHasCard", 1)[0]
+        self.assertIn("deleteSpinner()", claim)
+        self.assertIn('saving.field === "claim"', claim)
 
     def test_claim_moves_to_card_only_and_expense_moves_back(self):
         sheets = self._expense()

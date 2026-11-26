@@ -217,6 +217,19 @@ tr.needs-category td {
   color: inherit;
 }
 button.eval-card { font: inherit; cursor: pointer; }
+.eval-card-toggle {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.eval-approval { margin-top: 8px; }
+.eval-approve { margin-top: 8px; }
 .eval-card.open { background: white; border-color: #b7a990; }
 .eval-card-top { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
 .eval-card-title { font-weight: 700; }

@@ -24,8 +24,14 @@ from getrichbot.dashboard_auth import (
     verify_webapp_init_data,
 )
 from getrichbot.dashboard_view import build_dashboard_payload, cards_scope_allowed, named_household_labels, recent_scope_allowed
-from getrichbot.eval_log import failed_message_ids
+from getrichbot.eval_log import APPROVAL_NOTE
+from getrichbot.eval_log import approved_from_state_rows
+from getrichbot.eval_log import approval_token
+from getrichbot.eval_log import diagnosis_for
+from getrichbot.eval_log import diagnosis_state_key
+from getrichbot.eval_log import failed_eval_row
 from getrichbot.eval_log import limit_mail_text
+from getrichbot.eval_log import open_mail_diagnosis
 from getrichbot.eval_log import remember_category_choice
 from getrichbot.eval_log import valid_message_id
 from getrichbot.group_post import marks_from_state_rows
@@ -196,6 +202,8 @@ class DashboardApp:
             return self._dashboard(normalized, query)
         if method == "GET" and path == "/api/dashboard/eval-mail":
             return self._eval_mail(normalized, query)
+        if method == "POST" and path == "/api/dashboard/eval-diagnosis":
+            return self._approve_diagnosis(normalized, body)
         if method == "GET" and path == "/api/dashboard/changes":
             return self._changes(normalized, query)
         if method == "POST" and path == "/api/dashboard/edit":
@@ -805,6 +813,7 @@ class DashboardApp:
             LOGGER.warning("Dashboard could not read payment setup. Other sections are still shown.")
             cards_error = "Card setup could not be read. Nothing was changed."
         today = self.context.today() if self.context.today is not None else datetime.now(SINGAPORE_TZ).date()
+        state_rows = self._state_rows()
         payload = build_dashboard_payload(
             viewer_label=label,
             scope=scope,
@@ -816,8 +825,9 @@ class DashboardApp:
             cards_scope=cards_scope,
             household_labels=self._household_labels(),
             missing_category=missing_category,
-            message_marks=self._message_marks(),
+            message_marks=marks_from_state_rows(state_rows),
             eval_rows=self._eval_rows(),
+            diagnosis_approvals=approved_from_state_rows(state_rows),
         )
         if change_mark is not None:
             payload["change_mark"] = change_mark
@@ -834,11 +844,11 @@ class DashboardApp:
         if not valid_message_id(message_id):
             return _json(200, {"ok": False, "message": "I could not read that mail."})
         try:
-            allowed = message_id in failed_message_ids(self._eval_rows())
+            row = failed_eval_row(self._eval_rows(), message_id)
         except Exception:
             LOGGER.warning("Dashboard could not check Eval Log for one mail. The rest of Eval is unchanged.")
             return _json(200, {"ok": False, "message": "I could not read that mail."})
-        if not allowed:
+        if row is None:
             return _json(200, {"ok": False, "message": "I could not read that mail."})
         reader = self.read_mail
         if reader is None:
@@ -848,7 +858,49 @@ class DashboardApp:
         except Exception:
             LOGGER.exception("Dashboard could not read that one mail. The rest of Eval is unchanged.")
             return _json(200, {"ok": False, "message": "I could not read that mail."})
-        return _json(200, {"ok": True, "body": limit_mail_text(str(body or ""))})
+        payload = {"ok": True, "body": limit_mail_text(str(body or ""))}
+        if diagnosis_for(row.reason).needs_mail:
+            today = self.context.today() if self.context.today is not None else datetime.now(SINGAPORE_TZ).date()
+            payload["diagnosis"] = open_mail_diagnosis(str(body or ""), today)
+        return _json(200, payload)
+
+    def _approve_diagnosis(self, headers: dict[str, str], body: bytes) -> tuple[int, list[tuple[str, str]], bytes]:
+        identity = self._identity_from_headers(headers)
+        if identity is None:
+            return _json(401, {"ok": False, "error": "locked"})
+        if self.context.label_for_user(identity.user_id) is None:
+            return _json(401, {"ok": False, "error": "not_allowed"})
+        payload = _json_object(body)
+        if payload is None:
+            return _json(400, {"ok": False, "error": "invalid"})
+        message_id = payload.get("id")
+        if not isinstance(message_id, str) or not valid_message_id(message_id):
+            return _json(200, {"ok": False, "message": "That mail is not waiting for approval."})
+        try:
+            row = failed_eval_row(self._eval_rows(), message_id)
+        except Exception:
+            LOGGER.warning("Dashboard could not check Eval Log before approval. Nothing was written.")
+            return _json(200, {"ok": False, "message": "I could not save that approval. Nothing was written."})
+        if row is None:
+            return _json(200, {"ok": False, "message": "That mail is not waiting for approval."})
+        token = approval_token(row.reason)
+        key = diagnosis_state_key(message_id)
+        try:
+            current = self._stored_approval(key)
+        except Exception:
+            LOGGER.warning("Dashboard could not read the diagnosis approval. Nothing was written.")
+            return _json(200, {"ok": False, "message": "I could not save that approval. Nothing was written."})
+        if current == token:
+            return _json(200, {"ok": True, "approved": True, "message": APPROVAL_NOTE})
+        writer = getattr(self.context.sheets, "set_state_value", None)
+        if writer is None:
+            return _json(200, {"ok": False, "message": "I could not save that approval. Nothing was written."})
+        try:
+            writer(self.context.bot_state_sheet, key, token)
+        except Exception:
+            LOGGER.exception("Dashboard could not save the diagnosis approval. No expense was written.")
+            return _json(200, {"ok": False, "message": "I could not save that approval. Nothing was written."})
+        return _json(200, {"ok": True, "approved": True, "message": APPROVAL_NOTE})
 
     def _eval_rows(self) -> list[list[str]]:
         sheets = self.context.sheets
@@ -869,19 +921,25 @@ class DashboardApp:
             return []
         return rows
 
-    def _message_marks(self) -> dict[str, str]:
-        """Bot State marks for the status dots. A failed read leaves every row unmarked."""
+    def _state_rows(self) -> list[list[str]]:
         reader = getattr(self.context.sheets, "get_state_rows", None)
         if reader is None:
-            return {}
+            return []
         try:
             rows = reader(self.context.bot_state_sheet)
         except Exception:
-            LOGGER.warning("Dashboard could not read message marks. Rows are shown without a status dot.")
-            return {}
+            LOGGER.warning("Dashboard could not read Bot State. Message marks and diagnosis approvals are left off.")
+            return []
         if not isinstance(rows, list):
-            return {}
-        return marks_from_state_rows(rows)
+            return []
+        return rows
+
+    def _stored_approval(self, key: str) -> str:
+        reader = getattr(self.context.sheets, "get_state_value", None)
+        if reader is None:
+            return ""
+        value = reader(self.context.bot_state_sheet, key)
+        return "" if value is None else str(value)
 
     def _household_labels(self) -> tuple[str, ...]:
         ordered = named_household_labels(self.context.household_order)

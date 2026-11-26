@@ -19,9 +19,14 @@ from getrichbot.email_mail import REASON_REVERSAL_MISSING
 from getrichbot.email_mail import REASON_SALARY
 from getrichbot.email_mail import REASON_STATEMENT
 from getrichbot.email_mail import decide_mail
+from getrichbot.eval_log import PLAIN_REASONS
+from getrichbot.eval_log import approved_from_state_rows
 from getrichbot.eval_log import category_after_choice
+from getrichbot.eval_log import diagnosis_for
+from getrichbot.eval_log import diagnosis_state_key
 from getrichbot.eval_log import eval_sheet_row
 from getrichbot.eval_log import eval_view
+from getrichbot.eval_log import open_mail_diagnosis
 from getrichbot.eval_log import group_message_rows
 from getrichbot.eval_log import handled_reversal_row_numbers
 from getrichbot.eval_log import is_category_miss
@@ -647,6 +652,9 @@ class EvalDashboardTests(unittest.TestCase):
         self.assertIn("not sent", script)
         self.assertIn('el("button", "eval-card"', script)
         self.assertIn("The purchase is on the sheet. Telegram did not accept the group note.", script)
+        self.assertIn('el("button", "ghost eval-approve", "Approve")', script)
+        self.assertIn("Nothing is written until you approve. The mail stays unlogged.", script)
+        self.assertIn("Approved. The mail was not logged.", script)
         self.assertNotIn("Show this mail", script)
         self.assertNotIn("no mark yet", script)
         self.assertIn("function evalHealthBand(percent)", script)
@@ -667,6 +675,230 @@ class EvalDashboardTests(unittest.TestCase):
         self.assertIn(".eval-count.tone-red { color: #c44747; }", style)
         self.assertIn(".fill-green { background: #1b6b45; }", style)
         self.assertIn(".fill-red { background: #c44747; }", style)
+
+
+class DiagnosisTests(unittest.TestCase):
+    def test_every_stored_reason_has_a_diagnosis_and_an_unknown_reason_needs_the_mail(self):
+        for reason in PLAIN_REASONS:
+            diagnosis = diagnosis_for(reason)
+            self.assertFalse(diagnosis.needs_mail)
+            self.assertNotIn("4111111111111111", diagnosis.text)
+            self.assertNotRegex(diagnosis.text, r"\d{4}")
+            self.assertTrue(diagnosis.text.endswith("."))
+        unknown = diagnosis_for("not-a-reason")
+        self.assertTrue(unknown.needs_mail)
+        self.assertIn("I will not guess a category or a card.", unknown.text)
+
+    def test_an_unlogged_row_carries_its_diagnosis_and_a_logged_row_does_not(self):
+        rows = [
+            ["2026-09-12", "mail-quiet", "quiet@example.com", "Quiet note", "fail", "no_amount", "", "", "", ""],
+            ["2026-09-20", "mail-cafe", "cafe@example.com", "Sample cafe", "pass", "logged", "aa1001", "Food", "keyword", "Food"],
+        ]
+        view = eval_view(rows, [], [], {}, date(2026, 9, 26))
+        quiet = view["emails"][0]
+        logged = view["emails"][1]
+        self.assertEqual(quiet["diagnosis"], "This mail had no amount, so it was not logged.")
+        self.assertFalse(quiet["needs_mail"])
+        self.assertFalse(quiet["approved"])
+        self.assertNotIn("diagnosis", logged)
+        approved = eval_view(rows, [], [], {}, date(2026, 9, 26), {"mail-quiet": "no_amount"})
+        self.assertTrue(approved["emails"][0]["approved"])
+        changed = eval_view(rows, [], [], {}, date(2026, 9, 26), {"mail-quiet": "no_date"})
+        self.assertFalse(changed["emails"][0]["approved"])
+
+    def test_open_mail_diagnosis_copies_neither_the_amount_nor_the_card(self):
+        body = "Paid SGD 20.00 on 09/10/2026 with card ending 4242 at Sample Shop. Card 4111111111111111."
+        text = open_mail_diagnosis(body, date(2026, 11, 26))
+        self.assertNotIn("20.00", text)
+        self.assertNotIn("4242", text)
+        self.assertNotIn("4111111111111111", text)
+        self.assertNotIn("Sample Shop", text)
+        self.assertIn("I will not log it from here", text)
+        self.assertIn("no amount", open_mail_diagnosis("Hello from the bank.", date(2026, 11, 26)))
+
+    def test_a_card_number_in_bot_state_is_not_treated_as_approval(self):
+        rows = [
+            ["eval_diagnosis:mail-quiet", "4111111111111111"],
+            ["eval_diagnosis:mail-ok", "no_amount"],
+            ["group_post:aa1001", "Message sent"],
+        ]
+        self.assertEqual(approved_from_state_rows(rows), {"mail-ok": "no_amount"})
+
+    def test_approving_a_diagnosis_writes_only_the_reason_code(self):
+        sheets = _DiagnosisSheets()
+        reads = []
+        app, _sheets = app_for(sheets)
+        app.read_mail = lambda message_id: reads.append(message_id) or "Paid SGD 20.00 with 4111111111111111."
+        headers = {"X-Telegram-Init-Data": sign_webapp(111)}
+
+        status, _, payload = app.handle("GET", "/api/dashboard?scope=both", headers, b"", secure=True)
+        quiet = body_json(payload)["agent_eval"]["emails"][0]
+        self.assertEqual(status, 200)
+        self.assertEqual(quiet["subject"], "Quiet note")
+        self.assertEqual(quiet["diagnosis"], "This mail had no amount, so it was not logged.")
+        self.assertFalse(quiet["approved"])
+
+        opened, _, opened_body = app.handle(
+            "GET", "/api/dashboard/eval-mail?id=sample-quiet-mail", headers, b"", secure=True
+        )
+        opened_json = body_json(opened_body)
+        self.assertEqual(opened, 200)
+        self.assertTrue(opened_json["ok"])
+        self.assertNotIn("diagnosis", opened_json)
+        self.assertEqual(reads, ["sample-quiet-mail"])
+
+        approved, _, approved_body = app.handle(
+            "POST",
+            "/api/dashboard/eval-diagnosis",
+            headers,
+            json.dumps({"id": "sample-quiet-mail", "diagnosis": "4111111111111111"}).encode(),
+            secure=True,
+        )
+        self.assertEqual(approved, 200)
+        self.assertEqual(body_json(approved_body)["message"], "Approved. The mail was not logged.")
+        self.assertEqual(sheets.state_writes, [("Bot State", diagnosis_state_key("sample-quiet-mail"), "no_amount")])
+        self.assertEqual(reads, ["sample-quiet-mail"])
+        self.assertEqual([record.description for record in sheets.records], ["Sample cafe"])
+
+        again, _, _again_body = app.handle(
+            "POST",
+            "/api/dashboard/eval-diagnosis",
+            headers,
+            json.dumps({"id": "sample-quiet-mail"}).encode(),
+            secure=True,
+        )
+        self.assertEqual(again, 200)
+        self.assertEqual(len(sheets.state_writes), 1)
+
+        reloaded, _, reloaded_body = app.handle("GET", "/api/dashboard?scope=both", headers, b"", secure=True)
+        self.assertEqual(reloaded, 200)
+        self.assertTrue(body_json(reloaded_body)["agent_eval"]["emails"][0]["approved"])
+
+        logged, _, logged_body = app.handle(
+            "POST",
+            "/api/dashboard/eval-diagnosis",
+            headers,
+            json.dumps({"id": "sample-cafe-mail"}).encode(),
+            secure=True,
+        )
+        self.assertEqual(logged, 200)
+        self.assertFalse(body_json(logged_body)["ok"])
+        self.assertEqual(len(sheets.state_writes), 1)
+
+        locked, _, _locked_body = app.handle(
+            "POST",
+            "/api/dashboard/eval-diagnosis",
+            {},
+            json.dumps({"id": "sample-quiet-mail"}).encode(),
+            secure=True,
+        )
+        self.assertEqual(locked, 401)
+
+    def test_an_unknown_reason_uses_the_open_mail_and_approval_does_not_log_it(self):
+        sheets = _DiagnosisSheets()
+        sheets.eval_rows[0][5] = "mystery"
+        reads = []
+        app, _sheets = app_for(sheets)
+
+        def read_mail(message_id):
+            reads.append(message_id)
+            return "Paid SGD 20.00 on 09/10/2026 with card ending 4242 at Sample Shop."
+
+        app.read_mail = read_mail
+        headers = {"X-Telegram-Init-Data": sign_webapp(111)}
+        opened, _, opened_body = app.handle(
+            "GET", "/api/dashboard/eval-mail?id=sample-quiet-mail", headers, b"", secure=True
+        )
+        note = body_json(opened_body)
+        self.assertEqual(opened, 200)
+        self.assertIn("I will not guess a category", note["diagnosis"])
+        self.assertNotIn("4242", note["diagnosis"])
+        self.assertNotIn("20.00", note["diagnosis"])
+        self.assertNotIn("4242", json.dumps(sheets.state_rows))
+
+        approved, _, approved_body = app.handle(
+            "POST",
+            "/api/dashboard/eval-diagnosis",
+            headers,
+            json.dumps({"id": "sample-quiet-mail"}).encode(),
+            secure=True,
+        )
+        self.assertEqual(approved, 200)
+        self.assertEqual(body_json(approved_body)["message"], "Approved. The mail was not logged.")
+        self.assertEqual(sheets.state_writes, [("Bot State", "eval_diagnosis:sample-quiet-mail", "unknown")])
+        self.assertEqual(reads, ["sample-quiet-mail"])
+        self.assertEqual(len(sheets.records), 1)
+
+    def test_a_failed_approval_read_does_not_write(self):
+        sheets = _DiagnosisSheets()
+
+        def boom(sheet_name, key):
+            raise RuntimeError("sheet down")
+
+        sheets.get_state_value = boom
+        app, _sheets = app_for(sheets)
+        headers = {"X-Telegram-Init-Data": sign_webapp(111)}
+        status, _, payload = app.handle(
+            "POST",
+            "/api/dashboard/eval-diagnosis",
+            headers,
+            json.dumps({"id": "sample-quiet-mail"}).encode(),
+            secure=True,
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(body_json(payload)["message"], "I could not save that approval. Nothing was written.")
+        self.assertEqual(sheets.state_writes, [])
+        self.assertEqual(len(sheets.records), 1)
+
+    def test_a_failed_approval_write_leaves_the_expense_sheet_alone(self):
+        sheets = _DiagnosisSheets(fail_write=True)
+        app, _sheets = app_for(sheets)
+        headers = {"X-Telegram-Init-Data": sign_webapp(111)}
+        status, _, payload = app.handle(
+            "POST",
+            "/api/dashboard/eval-diagnosis",
+            headers,
+            json.dumps({"id": "sample-quiet-mail"}).encode(),
+            secure=True,
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(body_json(payload)["message"], "I could not save that approval. Nothing was written.")
+        self.assertEqual(sheets.state_rows, [])
+        self.assertEqual(len(sheets.records), 1)
+
+
+class _DiagnosisSheets(FakeSheets):
+    def __init__(self, fail_write: bool = False):
+        super().__init__()
+        self.fail_write = fail_write
+        self.state_rows = []
+        self.state_writes = []
+        self.eval_rows = [
+            ["2026-09-12", "sample-quiet-mail", "quiet@example.com", "Quiet note", "fail", "no_amount", "", "", "", ""],
+            ["2026-09-20", "sample-cafe-mail", "cafe@example.com", "Sample cafe", "pass", "logged", "aa1001", "Food", "keyword", "Food"],
+        ]
+
+    def get_eval_log_rows(self):
+        return [list(row) for row in self.eval_rows]
+
+    def get_state_rows(self, sheet_name):
+        return [list(row) for row in self.state_rows]
+
+    def get_state_value(self, sheet_name, key):
+        for row in self.state_rows:
+            if row[0] == key:
+                return row[1]
+        return None
+
+    def set_state_value(self, sheet_name, key, value):
+        if self.fail_write:
+            raise RuntimeError("sheet down")
+        self.state_writes.append((sheet_name, key, value))
+        for row in self.state_rows:
+            if row[0] == key:
+                row[1] = value
+                return
+        self.state_rows.append([key, value])
 
 
 def _expense(entry_id: str, expense_date: str) -> ExpenseRecord:

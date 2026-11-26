@@ -34,8 +34,12 @@ const state = {
   evalPeriod: "",
   evalOpenId: "",
   evalOpenText: "",
+  evalOpenDiagnosis: "",
   evalOpenError: "",
   evalOpenGroup: "",
+  evalApproving: "",
+  evalApproveError: "",
+  evalApproveErrorId: "",
   recentQuery: "",
   openCardKey: ""
 };
@@ -1130,6 +1134,7 @@ function evalPeriodChip(id, label, period) {
     state.evalPeriod = id;
     state.evalOpenId = "";
     state.evalOpenText = "";
+    state.evalOpenDiagnosis = "";
     state.evalOpenError = "";
     state.evalOpenGroup = "";
     render();
@@ -1210,39 +1215,75 @@ function renderEmailEval(info, period) {
 
 function renderFailedMail(row) {
   const open = state.evalOpenId === row.message_id;
-  const item = el("button", "eval-card" + (open ? " open" : ""));
-  item.type = "button";
-  item.setAttribute("aria-expanded", String(open));
-  item.addEventListener("click", () => toggleFailedMail(row.message_id));
+  const item = el("div", "eval-card" + (open ? " open" : ""));
+  const toggle = el("button", "eval-card-toggle");
+  toggle.type = "button";
+  toggle.setAttribute("aria-expanded", String(open));
+  toggle.setAttribute("aria-label", row.subject || "(no subject)");
+  toggle.addEventListener("click", () => toggleFailedMail(row.message_id));
   const top = el("div", "eval-card-top");
   const titles = el("div");
   titles.append(el("p", "eval-card-title", row.subject || "(no subject)"));
   titles.append(el("p", "sub", shortDate(row.date) + " · " + (row.sender || "Unknown sender")));
   top.append(titles);
   top.append(el("p", "sub eval-card-aside", row.reason || "Not logged"));
-  item.append(top);
+  toggle.append(top);
+  item.append(toggle);
+  item.append(el("p", "eval-note", row.diagnosis || "This mail was not logged."));
+  item.append(diagnosisApproval(row));
   if (open) item.append(failedMailBody());
   return item;
 }
 
+function diagnosisApproval(row) {
+  const box = el("div", "eval-approval");
+  if (row.approved) {
+    box.append(el("p", "eval-note", "Approved. The mail was not logged."));
+    return box;
+  }
+  if (state.evalApproving === row.message_id) {
+    box.append(deleteSpinner());
+    return box;
+  }
+  const approve = el("button", "ghost eval-approve", "Approve");
+  approve.type = "button";
+  approve.setAttribute("aria-label", "Approve " + (row.subject || "this mail"));
+  approve.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    approveDiagnosis(row.message_id);
+  });
+  box.append(approve);
+  box.append(el("p", "sub", "Nothing is written until you approve. The mail stays unlogged."));
+  if (state.evalApproveErrorId === row.message_id && state.evalApproveError) {
+    box.append(el("p", "banner", state.evalApproveError));
+  }
+  return box;
+}
+
 function failedMailBody() {
+  const wrap = el("div");
+  if (state.evalOpenDiagnosis) wrap.append(el("p", "eval-note", state.evalOpenDiagnosis));
   const note = el("pre", "eval-mail");
   if (state.evalOpenError) note.textContent = state.evalOpenError;
   else if (state.evalOpenText) note.textContent = state.evalOpenText;
   else note.textContent = "Reading that mail...";
-  return note;
+  wrap.append(note);
+  return wrap;
 }
 
 function toggleFailedMail(messageId) {
   if (state.evalOpenId === messageId) {
     state.evalOpenId = "";
     state.evalOpenText = "";
+    state.evalOpenDiagnosis = "";
     state.evalOpenError = "";
     render();
     return;
   }
   state.evalOpenId = messageId;
   state.evalOpenText = "";
+  state.evalOpenDiagnosis = "";
   state.evalOpenError = "";
   render();
   const headers = telegramInitData() && !state.loggedOut ? { "X-Telegram-Init-Data": telegramInitData() } : {};
@@ -1252,13 +1293,54 @@ function toggleFailedMail(messageId) {
   }).then((response) => response.json().catch(() => ({ ok: false }))).then((body) => {
     if (state.evalOpenId !== messageId) return;
     if (!body || !body.ok) state.evalOpenError = (body && body.message) || "I could not read that mail.";
-    else state.evalOpenText = body.body || "That mail had no text.";
+    else {
+      state.evalOpenText = body.body || "That mail had no text.";
+      state.evalOpenDiagnosis = body.diagnosis || "";
+    }
     render();
   }).catch(() => {
     if (state.evalOpenId !== messageId) return;
     state.evalOpenError = "I could not read that mail.";
     render();
   });
+}
+
+async function approveDiagnosis(messageId) {
+  if (state.evalApproving) return;
+  state.evalApproving = messageId;
+  state.evalApproveError = "";
+  state.evalApproveErrorId = "";
+  render();
+  const headers = { "Content-Type": "application/json" };
+  if (telegramInitData() && !state.loggedOut) headers["X-Telegram-Init-Data"] = telegramInitData();
+  try {
+    const response = await fetch("/api/dashboard/eval-diagnosis", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: headers,
+      body: JSON.stringify({ id: messageId })
+    });
+    const body = await response.json().catch(() => ({ ok: false }));
+    if (state.evalApproving !== messageId) return;
+    state.evalApproving = "";
+    if (!response.ok || !body || !body.ok) {
+      state.evalApproveErrorId = messageId;
+      state.evalApproveError = (body && body.message) || "I could not save that approval. Nothing was written.";
+      render();
+      return;
+    }
+    const emails = (((state.payload || {}).agent_eval || {}).emails) || [];
+    emails.forEach((row) => {
+      if (row.message_id === messageId) row.approved = true;
+    });
+    render();
+  } catch (error) {
+    if (state.evalApproving !== messageId) return;
+    state.evalApproving = "";
+    state.evalApproveErrorId = messageId;
+    state.evalApproveError = "I could not save that approval. Nothing was written.";
+    render();
+  }
 }
 
 function renderCategoryEval(info, period) {

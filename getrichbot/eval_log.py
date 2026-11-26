@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
+from datetime import date
 
 from getrichbot.email_mail import REASON_DUPLICATE
 from getrichbot.email_mail import REASON_LOGGED
@@ -25,6 +26,9 @@ from getrichbot.email_mail import REASON_REVERSAL_MISSING
 from getrichbot.email_mail import REASON_SALARY
 from getrichbot.email_mail import REASON_SHEET_UNREADABLE
 from getrichbot.email_mail import REASON_STATEMENT
+from getrichbot.email_mail import _amounts
+from getrichbot.email_mail import _last4s
+from getrichbot.email_mail import _mail_date
 from getrichbot.group_post import MESSAGE_FAIL
 from getrichbot.group_post import MESSAGE_SENT
 from getrichbot.group_post import message_status_for
@@ -49,6 +53,27 @@ SENDER_LIMIT = 200
 MAIL_TEXT_LIMIT = 12_000
 _MESSAGE_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 _LONG_NUMBER = re.compile(r"(?<!\d)(?:\d[ \-]?){12,}\d(?!\d)")
+
+DIAGNOSIS_PREFIX = "eval_diagnosis:"
+UNKNOWN_APPROVAL = "unknown"
+APPROVAL_NOTE = "Approved. The mail was not logged."
+_DIAGNOSIS_TEXT = {
+    REASON_LOGGED: "This row says it was logged, but it is still marked not logged. Nothing new was written.",
+    REASON_NO_AMOUNT: "This mail had no amount, so it was not logged.",
+    REASON_NO_DATE: "This mail had no date, so it was not logged.",
+    REASON_NO_CARD: "This mail had no card, so it was not logged. I will not guess a card.",
+    REASON_NO_CARD_MATCH: "The card in this mail did not match one card on the sheet. I will not guess a card.",
+    REASON_SALARY: "This looks like salary. It was left for you to type. I will not log it from here.",
+    REASON_STATEMENT: "This is a statement. It was left unlogged on purpose.",
+    REASON_REVERSAL: "The original charge was removed. This row is still marked not logged.",
+    REASON_REVERSAL_MISSING: "This was a reversal, and the original charge was not on the sheet. No new row was written.",
+    REASON_NOT_FOUND: "This mail is no longer in the mailbox, so it was not logged.",
+    REASON_NO_INCOME_MISC: "Income - misc is not on the category list, so this was not logged. I will not invent a category.",
+    REASON_DUPLICATE: "This looked like a duplicate, so it was not logged yet.",
+    REASON_SHEET_UNREADABLE: "The card list could not be read, so this mail was not logged.",
+    REASON_NOT_WRITTEN: "The sheet did not save the row, so this mail was not logged.",
+}
+_APPROVAL_VALUES = frozenset(_DIAGNOSIS_TEXT) | {UNKNOWN_APPROVAL}
 
 PLAIN_REASONS = {
     REASON_LOGGED: "Logged",
@@ -87,6 +112,12 @@ class EvalRow:
         return self.result == "pass" and self.category_source in CATEGORY_SOURCES
 
 
+@dataclass(frozen=True)
+class MailDiagnosis:
+    text: str
+    needs_mail: bool
+
+
 def valid_message_id(message_id: str) -> bool:
     return _MESSAGE_ID.fullmatch(message_id or "") is not None
 
@@ -112,6 +143,70 @@ def clip_text(value: str, limit: int) -> str:
 
 def plain_reason(reason: str) -> str:
     return PLAIN_REASONS.get(reason, "Not logged")
+
+
+def diagnosis_for(reason: str) -> MailDiagnosis:
+    text = _DIAGNOSIS_TEXT.get(reason)
+    if text is None:
+        return MailDiagnosis(
+            "The stored reason does not say why this mail was not logged. "
+            "Open it to read the message. I will not guess a category or a card.",
+            True,
+        )
+    return MailDiagnosis(text, False)
+
+
+def approval_token(reason: str) -> str:
+    if reason in _DIAGNOSIS_TEXT:
+        return reason
+    return UNKNOWN_APPROVAL
+
+
+def approval_matches(reason: str, stored: str) -> bool:
+    return stored == approval_token(reason)
+
+
+def diagnosis_state_key(message_id: str) -> str:
+    return DIAGNOSIS_PREFIX + message_id
+
+
+def approved_from_state_rows(rows: list[list[str]] | None) -> dict[str, str]:
+    found: dict[str, str] = {}
+    for row in rows or []:
+        if not row:
+            continue
+        key = str(row[0]).strip() if len(row) > 0 else ""
+        value = str(row[1]).strip() if len(row) > 1 else ""
+        if not key.startswith(DIAGNOSIS_PREFIX):
+            continue
+        message_id = key[len(DIAGNOSIS_PREFIX) :]
+        if not valid_message_id(message_id) or value not in _APPROVAL_VALUES:
+            continue
+        found[message_id] = value
+    return found
+
+
+def open_mail_diagnosis(body: str, today: date) -> str:
+    text = body or ""
+    if not _amounts(text):
+        return "This open mail has no amount, so there is nothing to log."
+    if _mail_date(text, today) is None:
+        return "This open mail has no date, so it stays unlogged."
+    if not _last4s(text):
+        return "This open mail has no card. I will not guess one."
+    return (
+        "This open mail has an amount, a date, and a card. "
+        "I will not log it from here, and I will not guess a category."
+    )
+
+
+def failed_eval_row(raw_rows: list[list[str]] | None, message_id: str) -> EvalRow | None:
+    if not valid_message_id(message_id):
+        return None
+    for row in parse_eval_rows(raw_rows):
+        if row.result != "pass" and row.message_id == message_id:
+            return row
+    return None
 
 
 def whole_percent(part: int, whole: int) -> int | None:
@@ -214,6 +309,7 @@ def eval_view(
     card_usage,
     marks: dict[str, str],
     today,
+    approvals: dict[str, str] | None = None,
 ) -> dict:
     shops: dict[str, str] = {}
     for record in records or []:
@@ -222,17 +318,22 @@ def eval_view(
             shops[entry_id.casefold()] = str(getattr(record, "description", "") or "")
     emails = []
     purchases = []
+    accepted = approvals or {}
     for row in parse_eval_rows(raw_rows):
-        emails.append(
-            {
-                "date": row.logged_on,
-                "sender": row.sender,
-                "subject": row.subject,
-                "result": row.result,
-                "reason": plain_reason(row.reason),
-                "message_id": row.message_id,
-            }
-        )
+        item = {
+            "date": row.logged_on,
+            "sender": row.sender,
+            "subject": row.subject,
+            "result": row.result,
+            "reason": plain_reason(row.reason),
+            "message_id": row.message_id,
+        }
+        if row.result != "pass":
+            diagnosis = diagnosis_for(row.reason)
+            item["diagnosis"] = diagnosis.text
+            item["needs_mail"] = diagnosis.needs_mail
+            item["approved"] = approval_matches(row.reason, accepted.get(row.message_id, ""))
+        emails.append(item)
         if not row.purchase:
             continue
         purchases.append(

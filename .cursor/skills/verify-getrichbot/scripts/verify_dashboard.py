@@ -637,6 +637,22 @@ class FakeSheets:
     def get_state_rows(self, sheet_name):
         return [list(row) for row in self.state_rows]
 
+    def get_state_value(self, sheet_name, key):
+        for row in self.state_rows:
+            if row and row[0] == key:
+                return row[1] if len(row) > 1 else ""
+        return None
+
+    def set_state_value(self, sheet_name, key, value):
+        for row in self.state_rows:
+            if row and row[0] == key:
+                if len(row) == 1:
+                    row.append(value)
+                else:
+                    row[1] = value
+                return
+        self.state_rows.append([key, value])
+
     def get_eval_log_rows(self):
         return [list(row) for row in self.eval_rows]
 

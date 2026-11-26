@@ -49,3 +49,4 @@ Each feature file starts with an H1 title and one paragraph describing the user-
 - [Raw entries](./raw-entries.md) covers the full raw expense table, the empty card-only table, and dragging that table.
 - [Eval](./eval.md) covers the mail, category, and group-note scores after Raw entries.
 - [Delete a row](./delete-row.md) covers the confirm dialog, cancel, and a confirmed delete.
+- [Add an expense](./add-expense.md) covers typing the same expense text as Telegram and choosing the payment button the handler returns.

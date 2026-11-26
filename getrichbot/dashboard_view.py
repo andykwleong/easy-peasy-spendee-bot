@@ -16,8 +16,6 @@ ANDY_FILTER = "Andy"
 FX_FILTER = "FX"
 EVAL_DESCRIPTION = "Telegram accepted the group post."
 
-RECENT_LIMIT = 40
-
 
 def named_household_labels(household_labels: tuple[str, ...]) -> tuple[str, ...]:
     """Configured names, in the order they were given, with blanks dropped."""
@@ -137,7 +135,13 @@ def build_dashboard_payload(
         _month_snapshot(records, _previous_month_period(today)),
         _month_snapshot(records, _current_month_period(today)),
     ]
-    recent = _recent_items(records, card_usage, scope, marks)
+    shown_months = _recent_month_window(today)
+    month_ids = {item["id"] for item in shown_months}
+    recent = [
+        item
+        for item in _recent_items(records, card_usage, scope, marks)
+        if _month_key(item["date"]) in month_ids
+    ]
     if missing_category:
         recent = [item for item in recent if expense_category_is_blank(item)]
     cards = _cards_snapshot(card_owner, records, card_usage, payment_config, today, cards_error)
@@ -149,9 +153,8 @@ def build_dashboard_payload(
         "household_labels": list(labels),
         "scope": scope,
         "cards_scope": cards_scope,
-        "recent": recent[:RECENT_LIMIT],
-        "recent_limit": RECENT_LIMIT,
-        "recent_truncated": len(recent) > RECENT_LIMIT,
+        "recent": recent,
+        "recent_months": shown_months,
         "cards": cards,
         "months": months,
         "edit_choices": edit_choices(payment_config),
@@ -180,6 +183,22 @@ def expense_category_is_blank(item: dict) -> bool:
     row_type = str(item.get("type") or "Expense").casefold()
     status = str(item.get("status") or "Confirmed").casefold()
     return row_type == "expense" and status == "confirmed"
+
+
+def _recent_month_window(today: date) -> list[dict]:
+    current = _current_month_period(today)
+    previous = _previous_month_period(today)
+    return [
+        {"id": current.start.strftime("%Y-%m"), "label": current.label, "current": True},
+        {"id": previous.start.strftime("%Y-%m"), "label": previous.label, "current": False},
+    ]
+
+
+def _month_key(value: object) -> str:
+    text = str(value or "")
+    if len(text) >= 7 and text[4] == "-" and text[:4].isdigit() and text[5:7].isdigit():
+        return text[:7]
+    return ""
 
 
 def _current_month_period(today: date) -> SummaryPeriod:

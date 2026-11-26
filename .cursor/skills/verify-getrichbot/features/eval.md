@@ -4,7 +4,7 @@ Eval shows three scores for the open month: the share of mail that was logged, t
 
 ## Sub-features
 
-- `eval-open` opens Eval from the section navigation, after Raw entries.
+- `eval-open` opens Eval from the section navigation, after Month.
 - `eval-email` shows 67% of the September mail logged.
 - `eval-category` shows 50% of the email purchases unchanged, and names the one that changed.
 - `eval-group` shows 50% of the group notes sent, and names the one Telegram did not accept.

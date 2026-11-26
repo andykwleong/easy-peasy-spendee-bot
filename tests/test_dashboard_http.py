@@ -511,6 +511,11 @@ class DashboardHttpTests(unittest.TestCase):
         self.assertNotIn("fetch(", search)
         path = script.split("function dashboardPath()", 1)[1].split("function ", 1)[0]
         self.assertNotIn("recentQuery", path)
+        self.assertNotIn("recentMonth", path)
+        month = script.split("function recentMonthChips", 1)[1].split("function ", 1)[0]
+        self.assertNotIn("loadDashboard", month)
+        self.assertNotIn("fetch(", month)
+        self.assertNotIn("Showing the latest", script)
         for name in ("renderCards", "renderMonth", "renderEval"):
             body = script.split(f"function {name}()", 1)[1].split("function ", 1)[0]
             self.assertNotIn("recentSearchBox", body)
@@ -1405,8 +1410,8 @@ class DashboardPromptTests(unittest.IsolatedAsyncioTestCase):
                     row_number=8,
                     entry_id="cc3111",
                     timestamp="14:42:00",
-                    expense_date="2026-10-13",
-                    month="2026-10",
+                    expense_date="2026-09-13",
+                    month="2026-09",
                     logged_by="Alex",
                     raw_input="email: GPAY NETWORK (S) PTE L Singapore SGP",
                     amount=Decimal("9.60"),

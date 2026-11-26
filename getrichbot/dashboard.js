@@ -37,6 +37,7 @@ const state = {
   evalOpenError: "",
   evalOpenGroup: "",
   recentQuery: "",
+  recentMonth: "",
   openCardKey: ""
 };
 
@@ -171,6 +172,7 @@ async function loginWithWidget(user) {
   state.cards = "mine";
   state.missingCategory = false;
   state.recentQuery = "";
+  state.recentMonth = "";
   state.openCardKey = "";
   state.editingId = "";
   state.pendingDelete = null;
@@ -194,6 +196,7 @@ async function logout() {
   state.loading = false;
   state.refreshNote = "";
   state.recentQuery = "";
+  state.recentMonth = "";
   state.openCardKey = "";
   state.view = "recent";
   state.message = "Logged out. This browser has forgotten you.";
@@ -372,7 +375,7 @@ function renderRecent() {
     loadDashboard();
   });
   filters.append(missing);
-  tools.append(filters, recentSearchBox());
+  tools.append(filters, recentMonthChips(), recentSearchBox());
   head.append(tools);
   section.append(head);
   const list = el("div", "recent-list");
@@ -402,18 +405,49 @@ function onRecentSearch(event) {
   if (list) fillRecentList(list);
 }
 
+function recentMonthChips() {
+  const filters = el("div", "filters");
+  const selected = selectedRecentMonth();
+  recentMonths().forEach((month) => {
+    const chip = el("button", "chip", month.label);
+    chip.type = "button";
+    chip.setAttribute("aria-pressed", String(Boolean(selected) && selected.id === month.id));
+    chip.addEventListener("click", () => {
+      const next = month.current ? "" : month.id;
+      if (state.recentMonth === next) return;
+      state.recentMonth = next;
+      render();
+    });
+    filters.append(chip);
+  });
+  return filters;
+}
+
+function recentMonths() {
+  const months = state.payload && state.payload.recent_months;
+  return Array.isArray(months) ? months : [];
+}
+
+function selectedRecentMonth() {
+  const months = recentMonths();
+  const picked = months.find((month) => month.id === state.recentMonth);
+  if (picked) return picked;
+  return months.find((month) => month.current) || months[0] || null;
+}
+
 function fillRecentList(list) {
   list.replaceChildren();
   const recent = state.payload && state.payload.recent ? state.payload.recent : [];
+  const month = selectedRecentMonth();
+  const inMonth = month && month.id
+    ? recent.filter((row) => String(row.date || "").slice(0, 7) === month.id)
+    : recent;
   const query = recentQueryText();
-  const rows = recent.filter((row) => recentRowMatches(row, query));
-  if (state.payload && state.payload.recent_truncated) {
-    list.append(el("p", "sub", "Showing the latest " + state.payload.recent_limit + " confirmed rows."));
-  }
+  const rows = inMonth.filter((row) => recentRowMatches(row, query));
   if (!rows.length) {
     const empty = query
       ? "No rows match that search."
-      : (state.missingCategory ? "No rows are missing a category." : "No confirmed rows for this view.");
+      : (state.missingCategory ? "No rows are missing a category." : "No confirmed rows for this month.");
     list.append(el("p", "empty", empty));
     return;
   }

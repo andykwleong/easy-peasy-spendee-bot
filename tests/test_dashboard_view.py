@@ -243,23 +243,64 @@ class DashboardViewTests(unittest.TestCase):
         self.assertEqual(shown["payment_owner"], "")
         self.assertEqual(shown["payment_channel"], "")
 
-    def test_recent_and_raw_lists_say_when_they_are_shortened(self):
+    def test_recent_lists_the_whole_month_and_the_month_before(self):
         records = [
             expense(f"aa{index:04d}", "1.00", "Food", timestamp=f"{index % 24:02d}:00:00", expense_date="2026-09-01")
             for index in range(41)
         ]
+        records.extend(
+            [
+                expense("aug001", "2.00", "Food", expense_date="2026-08-31", description="Sample august"),
+                expense("jul001", "3.00", "Food", expense_date="2026-07-31", description="Sample july"),
+                expense("late001", "4.00", "Food", expense_date="2026-09-30", description="Sample later"),
+                expense("blank001", "6.00", "Food", expense_date="", description="Sample undated"),
+            ]
+        )
+        usage = [card_usage("oldcard", "5.00", "Sample Visa", usage_date="2026-08-02", description="Sample old card")]
 
         payload = build_dashboard_payload(
             viewer_label="Alex",
             scope="both",
             records=records,
-            card_usage=[],
+            card_usage=usage,
             payment_config=payment_config(),
             today=date(2026, 9, 26),
         )
 
-        self.assertEqual(len(payload["recent"]), 40)
-        self.assertTrue(payload["recent_truncated"])
+        ids = [item["id"] for item in payload["recent"]]
+        self.assertEqual(len([item for item in ids if item.startswith("aa")]), 41)
+        self.assertIn("aug001", ids)
+        self.assertIn("late001", ids)
+        self.assertIn("oldcard", ids)
+        self.assertNotIn("jul001", ids)
+        self.assertNotIn("blank001", ids)
+        self.assertNotIn("recent_truncated", payload)
+        self.assertEqual(
+            payload["recent_months"],
+            [
+                {"id": "2026-09", "label": "September 2026", "current": True},
+                {"id": "2026-08", "label": "August 2026", "current": False},
+            ],
+        )
+
+    def test_recent_month_window_crosses_the_new_year(self):
+        payload = build_dashboard_payload(
+            viewer_label="Alex",
+            scope="both",
+            records=[
+                expense("jan001", "1.00", "Food", expense_date="2026-01-02"),
+                expense("dec001", "2.00", "Food", expense_date="2025-12-31"),
+                expense("nov001", "3.00", "Food", expense_date="2025-11-30"),
+            ],
+            card_usage=[],
+            payment_config=payment_config(),
+            today=date(2026, 1, 1),
+        )
+
+        self.assertEqual([item["id"] for item in payload["recent"]], ["jan001", "dec001"])
+        self.assertEqual([item["id"] for item in payload["recent_months"]], ["2026-01", "2025-12"])
+        self.assertTrue(payload["recent_months"][0]["current"])
+        self.assertFalse(payload["recent_months"][1]["current"])
 
     def test_card_transactions_match_owner_method_and_current_period(self):
         records = [

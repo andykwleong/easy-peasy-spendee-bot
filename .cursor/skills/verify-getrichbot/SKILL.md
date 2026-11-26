@@ -1,6 +1,6 @@
 ---
 name: verify-getrichbot
-description: "Drive the GetRichBot household web dashboard on a local fake-sheet server. Use to prove Recent, Cards, Month, Raw entries, Eval, or delete behavior without starting the live Telegram bot or opening the Railway site."
+description: "Drive the GetRichBot household web dashboard on a local fake-sheet server. Use to prove Recent, Cards, Month, Eval, or delete behavior without starting the live Telegram bot or opening the Railway site."
 ---
 
 # Verify GetRichBot
@@ -76,7 +76,7 @@ python3 .cursor/skills/verify-getrichbot/scripts/verify_dashboard.py sheet-show 
 
 `browser-click` fails if zero or more than one control has that role and name. It does not guess.
 
-`browser-drag` pans the open Raw entries table from the Sample cafe cell. It fails unless the table moves sideways. It does not click a button. A net amount that starts with a minus must be passed as `--contains=-$30.90`. A separate argument that starts with `-` is read as another flag.
+A net amount that starts with a minus must be passed as `--contains=-$30.90`. A separate argument that starts with `-` is read as another flag.
 
 There is no command that opens Telegram. The refused command is `python -m getrichbot.bot`.
 

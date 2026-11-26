@@ -17,7 +17,6 @@ FX_FILTER = "FX"
 EVAL_DESCRIPTION = "Telegram accepted the group post."
 
 RECENT_LIMIT = 40
-RAW_LIMIT = 200
 
 
 def named_household_labels(household_labels: tuple[str, ...]) -> tuple[str, ...]:
@@ -138,8 +137,6 @@ def build_dashboard_payload(
         _month_snapshot(records, _previous_month_period(today)),
         _month_snapshot(records, _current_month_period(today)),
     ]
-    raw_expenses = _raw_expenses(records)
-    usage_rows = _raw_card_usage(card_usage)
     recent = _recent_items(records, card_usage, scope, marks)
     if missing_category:
         recent = [item for item in recent if expense_category_is_blank(item)]
@@ -157,12 +154,6 @@ def build_dashboard_payload(
         "recent_truncated": len(recent) > RECENT_LIMIT,
         "cards": cards,
         "months": months,
-        "raw_expenses": raw_expenses[:RAW_LIMIT],
-        "raw_expenses_limit": RAW_LIMIT,
-        "raw_expenses_truncated": len(raw_expenses) > RAW_LIMIT,
-        "card_usage": usage_rows[:RAW_LIMIT],
-        "card_usage_limit": RAW_LIMIT,
-        "card_usage_truncated": len(usage_rows) > RAW_LIMIT,
         "edit_choices": edit_choices(payment_config),
         "person_filters": person_filter_labels(labels),
         "agent_eval": {
@@ -345,49 +336,6 @@ def _expense_kind(record: ExpenseRecord) -> str:
     if kind == "fixed":
         return "fixed"
     return "expense"
-
-
-def _raw_expenses(records: list[ExpenseRecord]) -> list[dict]:
-    rows = [
-        {
-            "id": record.entry_id,
-            "date": record.expense_date,
-            "time": record.timestamp,
-            "logged_by": record.logged_by,
-            "amount": _money(record.amount),
-            "category": record.category,
-            "description": record.description,
-            "payment_owner": record.payment_owner,
-            "payment_method": record.payment_method,
-            "payment_channel": record.payment_channel,
-            "type": record.transaction_type or "Expense",
-            "status": record.status,
-        }
-        for record in records
-    ]
-    rows.sort(key=lambda row: (row["date"], row["time"], row["id"]), reverse=True)
-    return rows
-
-
-def _raw_card_usage(records: list[CardUsageRecord]) -> list[dict]:
-    rows = [
-        {
-            "id": record.entry_id,
-            "date": record.usage_date,
-            "time": record.timestamp,
-            "logged_by": record.logged_by,
-            "amount": _money(record.amount),
-            "payment_owner": record.payment_owner,
-            "payment_method": record.payment_method,
-            "payment_channel": record.payment_channel,
-            "description": record.description,
-            "type": "Card only",
-            "status": record.status,
-        }
-        for record in records
-    ]
-    rows.sort(key=lambda row: (row["date"], row["time"], row["id"]), reverse=True)
-    return rows
 
 
 def _money(value: Decimal) -> str:

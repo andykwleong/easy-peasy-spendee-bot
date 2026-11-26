@@ -300,7 +300,6 @@ function render() {
   if (state.view === "recent") wrap.append(renderRecent());
   else if (state.view === "cards") wrap.append(renderCards());
   else if (state.view === "month") wrap.append(renderMonth());
-  else if (state.view === "raw") wrap.append(renderRaw());
   else if (state.view === "eval") wrap.append(renderEval());
   else wrap.append(renderRecent());
   main.append(wrap);
@@ -327,7 +326,6 @@ function renderTop() {
     ["recent", "Recent"],
     ["cards", "Cards"],
     ["month", "Month"],
-    ["raw", "Raw entries"],
     ["eval", "Eval"]
   ].forEach(([id, label]) => {
     const button = el("button", "nav-btn" + (id === "later" ? " later" : ""), label);
@@ -1023,46 +1021,6 @@ function totalRow(name, months, key, kind) {
   return row;
 }
 
-function renderRaw() {
-  const section = el("section", "raw-page");
-  const head = el("div", "page-head");
-  head.append(el("h2", "", "Raw entries"));
-  section.append(head);
-  const frame = el("div", "raw-frame");
-  bindRawPan(frame);
-  if (state.payload.raw_expenses_truncated) {
-    frame.append(el("p", "sub", "Showing the latest " + state.payload.raw_expenses_limit + " raw expense rows."));
-  }
-  frame.append(rawTable(
-    "Raw Expenses",
-    ["Entry ID", "Date", "Logged by", "Amount", "Category", "Description", "Payment owner", "Payment method", "Channel", "Type", "Status"],
-    state.payload.raw_expenses.map((row) => ({
-      cells: [
-        row.id, prettyDate(row.date), row.logged_by, money(row.amount), row.category, row.description,
-        row.payment_owner || "—", row.payment_method || "—", row.payment_channel || "—", row.type, row.status
-      ],
-      deleteTarget: rawDeleteTarget(row, "expense"),
-      needsCategory: expenseCategoryIsBlank(row)
-    }))
-  ));
-  if (state.payload.card_usage_truncated) {
-    frame.append(el("p", "sub", "Showing the latest " + state.payload.card_usage_limit + " card-only rows."));
-  }
-  frame.append(rawTable(
-    "Card Usage",
-    ["Entry ID", "Date", "Logged by", "Amount", "Payment owner", "Payment method", "Channel", "Description", "Type", "Status"],
-    state.payload.card_usage.map((row) => ({
-      cells: [
-        row.id, prettyDate(row.date), row.logged_by, money(row.amount), row.payment_owner || "—",
-        row.payment_method || "—", row.payment_channel || "—", row.description, row.type, row.status
-      ],
-      deleteTarget: rawDeleteTarget(row, "card_usage")
-    }))
-  ));
-  section.append(frame);
-  return section;
-}
-
 function personFilters() {
   const people = state.payload && state.payload.person_filters;
   return Array.isArray(people) ? people : [];
@@ -1381,44 +1339,6 @@ function mark() {
   return node;
 }
 
-function rawDeleteTarget(row, source) {
-  return {
-    id: row.id,
-    source: source,
-    description: row.description || "No description",
-    amount: row.amount,
-    date: row.date
-  };
-}
-
-function rawTable(title, headers, records) {
-  const panel = el("div", "panel raw-block");
-  panel.append(el("h3", "", title));
-  if (!records.length) {
-    panel.append(el("p", "empty", "No rows."));
-    return panel;
-  }
-  const table = el("table");
-  const head = el("tr");
-  headers.forEach((header, index) => head.append(el("th", index === 3 ? "num" : "", header)));
-  head.append(el("th", "", ""));
-  const thead = el("thead");
-  thead.append(head);
-  table.append(thead);
-  const body = el("tbody");
-  records.forEach((record) => {
-    const row = el("tr", record.needsCategory ? "needs-category" : "");
-    record.cells.forEach((value, index) => row.append(el("td", index === 3 ? "num" : "", value)));
-    const action = el("td");
-    if (record.deleteTarget) action.append(deleteButton(record.deleteTarget));
-    row.append(action);
-    body.append(row);
-  });
-  table.append(body);
-  panel.append(table);
-  return panel;
-}
-
 function watchChanges() {
   if (state.watching) return;
   if (!state.payload || typeof state.payload.change_mark !== "string" || !state.payload.change_mark) return;
@@ -1543,56 +1463,11 @@ async function waitForMark(since) {
   }
 }
 
-function bindRawPan(frame) {
-  if (!state.rawPanBound) {
-    state.rawPanBound = true;
-    window.addEventListener("mousemove", moveRawPan);
-    window.addEventListener("mouseup", endRawPan);
-  }
-  frame.addEventListener("mousedown", startRawPan);
-}
-
-function startRawPan(event) {
-  if (event.button !== 0) return;
-  if (event.target.closest("button, a, input, select, textarea, label")) return;
-  state.rawPan = {
-    startX: event.clientX,
-    startY: event.clientY,
-    startLeft: event.currentTarget.scrollLeft,
-    startTop: window.scrollY
-  };
-  event.currentTarget.classList.add("is-panning");
-  event.preventDefault();
-}
-
-function moveRawPan(event) {
-  if (!state.rawPan) return;
-  const frame = document.querySelector(".raw-frame");
-  if (!frame) return;
-  frame.scrollLeft = state.rawPan.startLeft - (event.clientX - state.rawPan.startX);
-  window.scrollTo(window.scrollX, state.rawPan.startTop - (event.clientY - state.rawPan.startY));
-}
-
-function endRawPan() {
-  if (!state.rawPan) return;
-  state.rawPan = null;
-  const frame = document.querySelector(".raw-frame");
-  if (frame) frame.classList.remove("is-panning");
-}
-
 function keepScroll(paint) {
-  const frame = document.querySelector(".raw-frame");
-  const top = frame ? frame.scrollTop : 0;
-  const left = frame ? frame.scrollLeft : 0;
   const x = window.scrollX;
   const y = window.scrollY;
   paint();
   window.scrollTo(x, y);
-  const next = document.querySelector(".raw-frame");
-  if (next) {
-    next.scrollTop = top;
-    next.scrollLeft = left;
-  }
 }
 
 function pause(ms) {

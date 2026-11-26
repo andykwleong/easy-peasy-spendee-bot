@@ -215,9 +215,7 @@ class DashboardViewTests(unittest.TestCase):
         self.assertEqual(uncapped["Sample Cashback"]["limits"], [])
         self.assertNotIn("Sample Mastercard", capped)
         self.assertNotIn("Sample Cash", {**capped, **uncapped})
-        self.assertEqual(next(row for row in mine["raw_expenses"] if row["id"] == "aa1001")["payment_owner"], "")
-        self.assertIn("aa1012", [row["id"] for row in mine["raw_expenses"]])
-        self.assertIn("cc1002", [row["id"] for row in mine["card_usage"]])
+        self.assertNotIn("aa1012", [item["id"] for item in mine["recent"]])
 
     def test_paynow_recent_row_keeps_a_blank_payment_owner(self):
         records = [
@@ -244,9 +242,6 @@ class DashboardViewTests(unittest.TestCase):
         self.assertEqual(shown["payment_method"], "PayNow")
         self.assertEqual(shown["payment_owner"], "")
         self.assertEqual(shown["payment_channel"], "")
-        raw = payload["raw_expenses"][0]
-        self.assertEqual(raw["payment_owner"], "")
-        self.assertEqual(raw["payment_method"], "PayNow")
 
     def test_recent_and_raw_lists_say_when_they_are_shortened(self):
         records = [
@@ -517,8 +512,8 @@ class DashboardViewTests(unittest.TestCase):
         self.assertEqual([item["id"] for item in filtered["recent"]], ["aa1002"])
         self.assertEqual(filtered["recent"][0]["category"], "")
         self.assertNotIn("pending", filtered["recent"][0])
-        self.assertIn("aa1001", [row["id"] for row in filtered["raw_expenses"]])
-        self.assertIn("cc1001", [row["id"] for row in filtered["card_usage"]])
+        self.assertIn("aa1001", [item["id"] for item in full["recent"]])
+        self.assertIn("cc1001", [item["id"] for item in full["recent"]])
 
     def test_recent_person_filter_follows_logged_by_and_keeps_label_order(self):
         records = [

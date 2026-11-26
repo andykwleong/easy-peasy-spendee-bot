@@ -30,6 +30,7 @@ A bank email is not sent to OpenAI. If a shop is not already known, a lookup sen
 - Supports screenshot and voice-note extraction with confirmation before logging.
 - Supports monthly fixed expenses confirmation.
 - Sends 9am Singapore month-end fixed expense reminders when `TELEGRAM_CHAT_ID` is set.
+- Sends a 9am Singapore reminder when a card reaches 90% of a spending limit, and tags the person who owns the card. A card with no limit stays quiet.
 - Updates `Monthly Summary` as a month-by-month P&L with total income, total expenses, net P&L, and cumulative P&L.
 - Records a payment method for normal expenses using personal card, Cash, and PayNow buttons.
 - Tracks personal credit-card spend against configurable calendar-month or billing-cycle caps.
@@ -110,7 +111,7 @@ If an unexpected month appears, for example `2023-05`, check `Raw Expenses` for 
 
 ### Bot State
 
-The bot creates this tab automatically when needed. It stores small markers so Railway restarts do not resend the same month-end reminder or final summary. When email logging is on, it also stores the Gmail place marker, whether email is paused, and a marker for each mail already handled. Those markers stay in the sheet until you delete them. A Railway restart does not log the same mail again.
+The bot creates this tab automatically when needed. It stores small markers so Railway restarts do not resend the same month-end reminder, final summary, or 90% card reminder. When email logging is on, it also stores the Gmail place marker, whether email is paused, and a marker for each mail already handled. Those markers stay in the sheet until you delete them. A Railway restart does not log the same mail again, and it does not send the same card reminder again for that card cycle.
 
 ### Payment Methods
 
@@ -618,6 +619,10 @@ If Railway is running and `TELEGRAM_CHAT_ID` is set:
 - Fixed expense confirmation writes the reviewed fixed amounts directly into the matching month column in `Monthly Summary`.
 - If the month column already exists, the reviewed fixed category values are replaced for that month.
 - Fixed expenses are not handled with duplicate prompts. In `Monthly Summary`, the latest confirmed fixed value for a category/month is used instead of summing repeated fixed rows.
+- Each day at 9am Singapore time, the bot checks card spending once. If a card with a Limit Amount is at 90% or more, it sends one household message and tags that card's owner. The totals match `card summary`, including claimable card spend. Summary colours stay the same. Green is under 60%, yellow is 60% to 79%, orange is 80% to 94%, and red is 95% or more. The reminder is sent at 90%, inside the orange band.
+- The check runs the first time the bot is awake during that 9am hour. A purchase logged later that day is included the next morning. If the bot is off for the whole 9am hour, that day is skipped. If Telegram rejects the message, the bot tries again each minute until 10am.
+- Each card is reminded once per card cycle. A calendar card uses the calendar month. A billing card uses its reset day. The next cycle can remind you again.
+- Bot State keeps two markers. `card_limit_90:<cycle start>:<owner>:<card>` means that reminder was sent. `card_limit_90_checked:<date>` means that morning's check finished. Delete the card marker to allow the same card to be reminded again in that cycle. The tag uses every Telegram user id configured for that person. If none is configured, the message still says their name.
 
 You can manually start a fixed expense review for a specific month:
 

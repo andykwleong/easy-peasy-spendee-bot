@@ -23,6 +23,7 @@ from getrichbot.dashboard_auth import (
     verify_login_widget,
     verify_webapp_init_data,
 )
+from getrichbot.dashboard_expense import command_reply, submit_callback, submit_text, text_is_command, text_is_sendable
 from getrichbot.dashboard_view import build_dashboard_payload, cards_scope_allowed, named_household_labels, recent_scope_allowed
 from getrichbot.eval_log import failed_message_ids
 from getrichbot.eval_log import limit_mail_text
@@ -157,6 +158,9 @@ class DashboardApp:
         self.context = context
         self._username_lock = threading.Lock()
         self._sheet_lock = threading.Lock()
+        self._expense_lock = threading.Lock()
+        self._expense_bot = None
+        self._expense_message_id = 0
         self._bot_username: str | None = None
         self._changes_missing_logged = False
         self.gmail_push = None
@@ -166,6 +170,10 @@ class DashboardApp:
             path: (content_type, file_path.read_bytes())
             for path, (content_type, file_path) in _STATIC.items()
         }
+
+    def attach_expense_bot(self, bot: object) -> None:
+        with self._expense_lock:
+            self._expense_bot = bot
 
     def set_bot_username(self, username: str) -> None:
         cleaned = username.strip().lstrip("@")
@@ -202,6 +210,8 @@ class DashboardApp:
             return self._edit(normalized, body)
         if method == "POST" and path == "/api/dashboard/delete":
             return self._delete(normalized, body)
+        if method == "POST" and path == "/api/dashboard/expense":
+            return self._expense(normalized, body)
         if path == "/gmail/push":
             with self._gmail_lock:
                 handler = self.gmail_push
@@ -212,6 +222,42 @@ class DashboardApp:
         if method not in {"GET", "POST"}:
             return _json(405, {"ok": False, "error": "locked"})
         return _json(404, {"ok": False, "error": "locked"})
+
+    def _expense(self, headers: dict[str, str], body: bytes) -> tuple[int, list[tuple[str, str]], bytes]:
+        identity = self._identity_from_headers(headers)
+        if identity is None or self.context.label_for_user(identity.user_id) is None:
+            return _json(401, {"ok": False, "error": "locked"})
+        payload = _json_object(body)
+        if payload is None:
+            return _json(400, {"ok": False, "error": "invalid"})
+        has_text = "text" in payload
+        has_callback = "callback" in payload
+        if has_text == has_callback:
+            return _json(400, {"ok": False, "error": "invalid"})
+        with self._expense_lock:
+            bot = self._expense_bot
+            if bot is None:
+                return _json(503, {"ok": False, "error": "unavailable"})
+            self._expense_message_id += 1
+            message_id = self._expense_message_id
+            try:
+                if has_text:
+                    text = payload.get("text")
+                    if not isinstance(text, str) or not text_is_sendable(text):
+                        return _json(400, {"ok": False, "error": "invalid"})
+                    if text_is_command(text):
+                        replies = command_reply()
+                    else:
+                        replies = submit_text(bot, identity.user_id, text.strip(), message_id)
+                else:
+                    callback = payload.get("callback")
+                    if not isinstance(callback, str):
+                        return _json(400, {"ok": False, "error": "invalid"})
+                    replies = submit_callback(bot, identity.user_id, callback, message_id)
+            except Exception:
+                LOGGER.exception("Dashboard expense did not finish.")
+                return _json(500, {"ok": False, "error": "sheet"})
+        return _json(200, {"ok": True, "replies": replies})
 
     def _session_status(self, headers: dict[str, str]) -> tuple[int, list[tuple[str, str]], bytes]:
         identity = self._identity_from_headers(headers)

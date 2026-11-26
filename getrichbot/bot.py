@@ -3847,6 +3847,8 @@ def main() -> None:
     finance_bot = FinanceBot(settings, sheets)
     email_service = attach_email(finance_bot, settings, sheets)
     dashboard_server = start_page_and_mail(settings, sheets, email_service)
+    if dashboard_server is not None:
+        dashboard_server.dashboard_app.attach_expense_bot(finance_bot)
 
     print("Loading Telegram library...", flush=True)
     from telegram import Update

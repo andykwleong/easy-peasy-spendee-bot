@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import calendar
+import html
 import logging
 import traceback
 import re
@@ -32,7 +33,14 @@ from getrichbot.shop_category import resolve_shop_category_tap
 from getrichbot.shop_category import shop_category_callback
 from getrichbot.shop_category import shop_choice_state_key
 from getrichbot.shop_category import shop_choices_from_state
-from getrichbot.cards import PaymentConfig, build_card_summary, format_card_summary
+from getrichbot.cards import (
+    PaymentConfig,
+    build_card_summary,
+    card_limit_reminder_state_key,
+    card_limit_reminders,
+    format_card_limit_reminder,
+    format_card_summary,
+)
 from getrichbot.image_utils import prepare_image_for_vision
 from getrichbot.logging_utils import configure_logging
 from getrichbot.models import CardUsageRow, ExpenseDraft, ExpenseRecord, ExpenseRow
@@ -2372,6 +2380,10 @@ class FinanceBot:
             await self._send_fixed_expense_reminder(bot, today)
         if today.day == 1:
             await self._send_previous_month_summary(bot, today)
+        try:
+            await self._send_card_limit_reminders(bot, today)
+        except Exception:
+            LOGGER.exception("Card limit reminder check failed")
 
     async def _send_fixed_expense_reminder(self, bot, today) -> None:
         target_month = today.strftime("%Y-%m")
@@ -2415,6 +2427,39 @@ class FinanceBot:
         summary = build_spending_summary(records, period)
         await bot.send_message(chat_id=self.settings.telegram_chat_id, text=format_spending_summary(summary))
         self.sheets.set_state_value(self.settings.bot_state_sheet, state_key, "yes")
+
+    async def _send_card_limit_reminders(self, bot, today: date) -> None:
+        checked_key = f"card_limit_90_checked:{today.isoformat()}"
+        if self.sheets.get_state_value(self.settings.bot_state_sheet, checked_key) == "yes":
+            return
+        try:
+            config = self._load_payment_config()
+        except RuntimeError:
+            LOGGER.info("Card limit reminder skipped because payment tracking is not configured")
+            return
+        except ValueError:
+            LOGGER.exception("Card limit reminder skipped because payment setup could not be loaded")
+            return
+        records = self.sheets.get_expense_records(self.settings.raw_expenses_sheet)
+        card_usage_records = (
+            self.sheets.get_card_usage_records(self.settings.card_usage_sheet)
+            if hasattr(self.sheets, "get_card_usage_records")
+            else []
+        )
+        owners: list[str] = []
+        for label in (self.settings.me_label, self.settings.wife_label):
+            if label and label not in owners:
+                owners.append(label)
+        for owner in owners:
+            items = build_card_summary(config, records, owner, today, card_usage_records)
+            for reminder in card_limit_reminders(items):
+                state_key = card_limit_reminder_state_key(reminder)
+                if self.sheets.get_state_value(self.settings.bot_state_sheet, state_key) == "yes":
+                    continue
+                text = f"{_owner_mention(self.settings, reminder.owner)} {html.escape(format_card_limit_reminder(reminder))}"
+                await bot.send_message(chat_id=self.settings.telegram_chat_id, text=text, parse_mode="HTML")
+                self.sheets.set_state_value(self.settings.bot_state_sheet, state_key, "yes")
+        self.sheets.set_state_value(self.settings.bot_state_sheet, checked_key, "yes")
 
     def _pending_extractions_message(self, expenses, logged_by: str, update: Update, reason: str, title: str) -> str:
         lines = [title]
@@ -3612,6 +3657,20 @@ def _is_date_change_request(text: str) -> bool:
             re.IGNORECASE,
         )
     )
+
+
+def _owner_mention(settings, owner: str) -> str:
+    if owner == settings.me_label:
+        raw_ids = settings.me_telegram_ids
+    elif owner == settings.wife_label:
+        raw_ids = settings.wife_telegram_ids
+    else:
+        raw_ids = ()
+    ids = tuple(sorted(raw_ids))
+    label = html.escape(owner)
+    if not ids:
+        return label
+    return " ".join(f'<a href="tg://user?id={user_id}">{label}</a>' for user_id in ids)
 
 
 def _last_day_of_month(value) -> object:

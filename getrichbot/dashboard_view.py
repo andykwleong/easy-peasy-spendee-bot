@@ -116,6 +116,7 @@ def build_dashboard_payload(
     missing_category: bool = False,
     message_marks: dict[str, str] | None = None,
     eval_rows: list[list[str]] | None = None,
+    diagnosis_approvals: dict[str, str] | None = None,
 ) -> dict:
     labels = named_household_labels(household_labels)
     if not recent_scope_allowed(scope, labels):
@@ -170,7 +171,7 @@ def build_dashboard_payload(
             "scoring": False,
             "messages_sent": messages_sent_count(marks),
             "description": EVAL_DESCRIPTION,
-            **eval_view(eval_rows, records, card_usage, marks, today),
+            **eval_view(eval_rows, records, card_usage, marks, today, diagnosis_approvals),
         },
     }
 

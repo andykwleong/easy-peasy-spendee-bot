@@ -97,6 +97,14 @@ class CardSummaryItem:
     transactions: tuple[CardTransaction, ...] = ()
 
 
+@dataclass(frozen=True)
+class CardLimitReminder:
+    owner: str
+    payment_method: str
+    period_start: date
+    limits: tuple[CardLimitUsage, ...]
+
+
 def parse_payment_config(method_rows: list[list[str]], limit_rows: list[list[str]]) -> PaymentConfig:
     methods = _parse_payment_methods(method_rows)
     limits = _parse_card_limits(limit_rows)
@@ -221,6 +229,48 @@ def format_card_summary(items: list[CardSummaryItem], title: str = "Card summary
             lines.append("")
     while lines and lines[-1] == "":
         lines.pop()
+    return "\n".join(lines)
+
+
+CARD_LIMIT_REMINDER_PERCENT = Decimal("90")
+
+
+def card_limit_reminders(items: list[CardSummaryItem]) -> list[CardLimitReminder]:
+    reminders: list[CardLimitReminder] = []
+    for item in items:
+        reached = tuple(usage for usage in item.limits if usage.percent >= CARD_LIMIT_REMINDER_PERCENT)
+        if not reached:
+            continue
+        reminders.append(
+            CardLimitReminder(
+                owner=item.payment_method.owner,
+                payment_method=item.payment_method.name,
+                period_start=item.period_start,
+                limits=reached,
+            )
+        )
+    return reminders
+
+
+def card_limit_reminder_state_key(reminder: CardLimitReminder) -> str:
+    return f"card_limit_90:{reminder.period_start.isoformat()}:{reminder.owner}:{reminder.payment_method}"
+
+
+def format_card_limit_reminder(reminder: CardLimitReminder) -> str:
+    card = reminder.payment_method
+    if len(reminder.limits) == 1:
+        usage = reminder.limits[0]
+        label = _limit_label(usage)
+        limit_phrase = "its limit" if label == "All spending" else f"its {label} limit"
+        return (
+            f"{card} is at {usage.percent:.0f}% of {limit_phrase}. "
+            f"${usage.spent:,.2f} of ${usage.limit.amount:,.2f} is used this cycle."
+        )
+    lines = [f"{card} is at 90% or more of these limits this cycle."]
+    lines.extend(
+        f"{_limit_label(usage)} - ${usage.spent:,.2f} of ${usage.limit.amount:,.2f} ({usage.percent:.0f}%)"
+        for usage in reminder.limits
+    )
     return "\n".join(lines)
 
 
@@ -460,17 +510,22 @@ def _matches_limit_channel(record_channel: str, limit_channel: str) -> bool:
     return limit_channel.casefold() == "all" or record_channel.casefold() == limit_channel.casefold()
 
 
-def _format_limit_usage(usage: CardLimitUsage, include_category: bool) -> str:
-    usage_text = f"${usage.spent:,.2f}/${usage.limit.amount:,.2f} ({_limit_marker(usage.percent)} {usage.percent:.0f}%)"
-    if not include_category:
-        return usage_text
+def _limit_label(usage: CardLimitUsage) -> str:
     label_parts: list[str] = []
     if usage.limit.category.casefold() != "all":
         label_parts.append(usage.limit.category)
     if usage.limit.payment_channel.casefold() != "all":
         label_parts.append(usage.limit.payment_channel)
-    label = " / ".join(label_parts) if label_parts else "All spending"
-    return f"{label} - {usage_text}"
+    if not label_parts:
+        return "All spending"
+    return " / ".join(label_parts)
+
+
+def _format_limit_usage(usage: CardLimitUsage, include_category: bool) -> str:
+    usage_text = f"${usage.spent:,.2f}/${usage.limit.amount:,.2f} ({_limit_marker(usage.percent)} {usage.percent:.0f}%)"
+    if not include_category:
+        return usage_text
+    return f"{_limit_label(usage)} - {usage_text}"
 
 
 def _limit_marker(percent: Decimal) -> str:

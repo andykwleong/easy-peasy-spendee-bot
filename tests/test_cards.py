@@ -4,7 +4,15 @@ import unittest
 from datetime import date
 from decimal import Decimal
 
-from getrichbot.cards import build_card_summary, current_card_period, format_card_summary, parse_payment_config
+from getrichbot.cards import (
+    build_card_summary,
+    card_limit_reminder_state_key,
+    card_limit_reminders,
+    current_card_period,
+    format_card_limit_reminder,
+    format_card_summary,
+    parse_payment_config,
+)
 from getrichbot.models import CardUsageRecord, ExpenseRecord
 
 
@@ -368,3 +376,184 @@ class TestCardTracking(unittest.TestCase):
 
         self.assertEqual(item.total_spend, Decimal("120"))
         self.assertEqual(item.limits[0].spent, Decimal("120"))
+
+
+class TestCardLimitReminder(unittest.TestCase):
+    def test_ninety_percent_names_the_limit_and_keeps_the_orange_summary_colour(self):
+        items = _summary("100", [record("one111", "90", "Food", "Sample Visa")])
+
+        reminders = card_limit_reminders(items)
+
+        self.assertEqual(len(reminders), 1)
+        self.assertEqual(reminders[0].owner, "Me")
+        self.assertEqual(reminders[0].payment_method, "Sample Visa")
+        self.assertEqual(reminders[0].period_start, date(2026, 7, 1))
+        self.assertEqual(
+            format_card_limit_reminder(reminders[0]),
+            "Sample Visa is at 90% of its limit. $90.00 of $100.00 is used this cycle.",
+        )
+        self.assertIn("(🟠 90%)", format_card_summary(items))
+
+    def test_spending_under_ninety_percent_stays_quiet(self):
+        items = _summary("100", [record("one111", "89.99", "Food", "Sample Visa")])
+        self.assertEqual(card_limit_reminders(items), [])
+        self.assertIn("(🟠 90%)", format_card_summary(items))
+
+    def test_uncapped_card_and_blank_limit_amount_stay_quiet(self):
+        methods = [
+            ["Payment Method", "Owner", "Type", "Cycle Type", "Cycle Start Day", "Active"],
+            ["Sample Visa", "Me", "Credit Card", "Calendar", "1", "TRUE"],
+            ["Sample Cashback", "Me", "Credit Card", "Calendar", "1", "TRUE"],
+        ]
+        no_limit = parse_payment_config(methods, [["Payment Method", "Owner", "Category", "Limit Amount", "Active"]])
+        blank_limit = parse_payment_config(
+            methods,
+            [
+                ["Payment Method", "Owner", "Category", "Limit Amount", "Active"],
+                ["Sample Visa", "Me", "All", "", "TRUE"],
+                ["Sample Cashback", "Me", "All", "", "TRUE"],
+            ],
+        )
+        spent = [record("one111", "500", "Food", "Sample Visa"), record("two222", "500", "Food", "Sample Cashback")]
+
+        self.assertEqual(card_limit_reminders(build_card_summary(no_limit, spent, "Me", date(2026, 7, 10))), [])
+        self.assertEqual(card_limit_reminders(build_card_summary(blank_limit, spent, "Me", date(2026, 7, 10))), [])
+
+    def test_one_reminder_names_only_the_limits_at_ninety(self):
+        config = parse_payment_config(
+            [
+                ["Payment Method", "Owner", "Type", "Cycle Type", "Cycle Start Day", "Active"],
+                ["Sample Visa", "Me", "Credit Card", "Calendar", "1", "TRUE"],
+            ],
+            [
+                ["Payment Method", "Owner", "Category", "Limit Amount", "Active"],
+                ["Sample Visa", "Me", "Food", "100", "TRUE"],
+                ["Sample Visa", "Me", "Groceries", "100", "TRUE"],
+            ],
+        )
+        items = build_card_summary(
+            config,
+            [
+                record("food11", "90", "Food", "Sample Visa"),
+                record("groc11", "10", "Groceries", "Sample Visa"),
+            ],
+            "Me",
+            date(2026, 7, 10),
+        )
+
+        reminders = card_limit_reminders(items)
+
+        self.assertEqual(len(reminders), 1)
+        text = format_card_limit_reminder(reminders[0])
+        self.assertEqual(text, "Sample Visa is at 90% of its Food limit. $90.00 of $100.00 is used this cycle.")
+        self.assertNotIn("Groceries", text)
+
+    def test_two_limits_at_ninety_share_one_reminder(self):
+        config = parse_payment_config(
+            [
+                ["Payment Method", "Owner", "Type", "Cycle Type", "Cycle Start Day", "Active"],
+                ["Sample Visa", "Me", "Credit Card", "Calendar", "1", "TRUE"],
+            ],
+            [
+                ["Payment Method", "Owner", "Category", "Payment Channel", "Limit Amount", "Active"],
+                ["Sample Visa", "Me", "Food", "All", "100", "TRUE"],
+                ["Sample Visa", "Me", "All", "Online", "600", "TRUE"],
+            ],
+        )
+        items = build_card_summary(
+            config,
+            [
+                record("food11", "90", "Food", "Sample Visa", payment_channel="PayWave"),
+                record("web111", "540", "Transport", "Sample Visa", payment_channel="Online"),
+            ],
+            "Me",
+            date(2026, 7, 10),
+        )
+
+        reminders = card_limit_reminders(items)
+
+        self.assertEqual(len(reminders), 1)
+        self.assertEqual(
+            format_card_limit_reminder(reminders[0]),
+            "\n".join(
+                [
+                    "Sample Visa is at 90% or more of these limits this cycle.",
+                    "Food - $90.00 of $100.00 (90%)",
+                    "Online - $540.00 of $600.00 (90%)",
+                ]
+            ),
+        )
+
+    def test_state_key_is_one_per_card_per_cycle(self):
+        july = card_limit_reminders(_summary("100", [record("one111", "90", "Food", "Sample Visa")]))[0]
+        august = card_limit_reminders(
+            _summary(
+                "100",
+                [record("one111", "90", "Food", "Sample Visa", expense_date="2026-08-02")],
+                today=date(2026, 8, 2),
+            )
+        )[0]
+
+        self.assertEqual(card_limit_reminder_state_key(july), "card_limit_90:2026-07-01:Me:Sample Visa")
+        self.assertEqual(card_limit_reminder_state_key(august), "card_limit_90:2026-08-01:Me:Sample Visa")
+
+    def test_billing_cycle_key_uses_the_cycle_start(self):
+        config = parse_payment_config(
+            [
+                ["Payment Method", "Owner", "Type", "Cycle Type", "Cycle Start Day", "Active"],
+                ["Sample Visa", "Me", "Credit Card", "Billing", "17", "TRUE"],
+            ],
+            [
+                ["Payment Method", "Owner", "Category", "Limit Amount", "Active"],
+                ["Sample Visa", "Me", "All", "100", "TRUE"],
+            ],
+        )
+        items = build_card_summary(
+            config,
+            [record("one111", "95", "Food", "Sample Visa", expense_date="2026-07-10")],
+            "Me",
+            date(2026, 7, 10),
+        )
+
+        self.assertEqual(
+            card_limit_reminder_state_key(card_limit_reminders(items)[0]),
+            "card_limit_90:2026-06-17:Me:Sample Visa",
+        )
+
+    def test_card_usage_can_reach_ninety_percent_of_an_overall_limit(self):
+        config = parse_payment_config(
+            [
+                ["Payment Method", "Owner", "Type", "Cycle Type", "Cycle Start Day", "Active"],
+                ["Sample Visa", "Me", "Credit Card", "Calendar", "1", "TRUE"],
+            ],
+            [
+                ["Payment Method", "Owner", "Category", "Limit Amount", "Active"],
+                ["Sample Visa", "Me", "All", "100", "TRUE"],
+            ],
+        )
+        items = build_card_summary(
+            config,
+            [record("one111", "40", "Food", "Sample Visa")],
+            "Me",
+            date(2026, 7, 10),
+            [card_usage("claim1", "50", "Sample Visa")],
+        )
+
+        reminders = card_limit_reminders(items)
+
+        self.assertEqual(len(reminders), 1)
+        self.assertIn("$90.00 of $100.00", format_card_limit_reminder(reminders[0]))
+
+
+def _summary(limit: str, records: list[ExpenseRecord], today: date = date(2026, 7, 10)) -> list:
+    config = parse_payment_config(
+        [
+            ["Payment Method", "Owner", "Type", "Cycle Type", "Cycle Start Day", "Active"],
+            ["Sample Visa", "Me", "Credit Card", "Calendar", "1", "TRUE"],
+        ],
+        [
+            ["Payment Method", "Owner", "Category", "Limit Amount", "Active"],
+            ["Sample Visa", "Me", "All", limit, "TRUE"],
+        ],
+    )
+    return build_card_summary(config, records, "Me", today)

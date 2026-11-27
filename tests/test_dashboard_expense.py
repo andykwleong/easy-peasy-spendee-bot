@@ -52,6 +52,7 @@ class Sheets:
     def __init__(self):
         self.rows = []
         self.summary = None
+        self.state = {}
         self.config = parse_payment_config(
             [
                 ["Payment Method", "Owner", "Type", "Cycle Type", "Cycle Start Day", "Active"],
@@ -74,6 +75,9 @@ class Sheets:
 
     def update_monthly_summary(self, sheet_name, rows, timeout_seconds=None):
         self.summary = rows
+
+    def set_state_value(self, sheet_name, key, value):
+        self.state[key] = value
 
 
 def labels(user_id: int):
@@ -161,6 +165,56 @@ class DashboardExpenseTests(unittest.TestCase):
         self.assertEqual(row.telegram_chat_id, 111)
         self.assertNotEqual(row.telegram_chat_id, Settings.telegram_chat_id)
         self.assertIn("Logged $23.40", chosen[1]["replies"][0]["text"])
+
+    def test_payment_question_stays_on_the_page_and_the_saved_line_goes_to_the_group(self):
+        app, sheets, bot = app_for()
+        sent = []
+
+        async def notify(text):
+            sent.append(text)
+            return 77
+
+        bot.group_notifier = notify
+
+        status, body = post(app, 111, {"text": "lunch 23.40"})
+
+        self.assertEqual(status, 200)
+        self.assertIn("Which payment method?", body["replies"][0]["text"])
+        self.assertEqual(sent, [])
+        self.assertEqual(sheets.rows, [])
+        self.assertEqual(sheets.state, {})
+
+        chosen = post(app, 111, {"callback": body["replies"][0]["buttons"][0]["callback"]})
+
+        self.assertEqual(chosen[0], 200)
+        self.assertEqual(len(sheets.rows), 1)
+        self.assertIn("Logged $23.40", chosen[1]["replies"][0]["text"])
+        self.assertEqual(sent, [chosen[1]["replies"][0]["text"]])
+        self.assertNotIn("Which payment method?", "\n".join(sent))
+        entry_id = sheets.rows[0].entry_id
+        self.assertEqual(sheets.state, {f"group_post:{entry_id}": "Message sent"})
+        self.assertNotIn("23.40", " ".join(sheets.state.values()))
+        self.assertNotIn("Sample Visa", " ".join(sheets.state.values()))
+
+    def test_a_group_post_that_fails_twice_is_marked_message_fail_and_the_row_stays(self):
+        app, sheets, bot = app_for()
+        sent = []
+
+        async def notify(text):
+            sent.append(text)
+            raise RuntimeError("telegram down")
+
+        bot.group_notifier = notify
+        _status, body = post(app, 111, {"text": "lunch 23.40"})
+        chosen = post(app, 111, {"callback": body["replies"][0]["buttons"][0]["callback"]})
+
+        self.assertEqual(len(sheets.rows), 1)
+        self.assertIn("Logged $23.40", chosen[1]["replies"][0]["text"])
+        self.assertEqual(len(sent), 2)
+        self.assertEqual(sent[0], sent[1])
+        self.assertTrue(sent[0].startswith("Logged $23.40"))
+        entry_id = sheets.rows[0].entry_id
+        self.assertEqual(sheets.state, {f"group_post:{entry_id}": "message fail"})
 
     def test_someone_else_cannot_choose_the_payment_method(self):
         app, sheets, _bot = app_for()

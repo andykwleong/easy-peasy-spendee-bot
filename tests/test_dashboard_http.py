@@ -504,22 +504,26 @@ class DashboardHttpTests(unittest.TestCase):
         self.assertIn("No category", script)
         self.assertNotIn('["mine", cards.viewer_label]', script)
         self.assertIn('["eval", "Eval"]', script)
-        self.assertIn('aria-label", "Search recent rows"', script)
+        self.assertIn('["recent", "Transactions"]', script)
+        self.assertNotIn('["recent", "Recent"]', script)
+        self.assertIn('aria-label", "Search transactions"', script)
         self.assertIn("Search shop, category, or amount", script)
+        self.assertIn('"No transactions found"', script)
         search = script.split("function onRecentSearch", 1)[1].split("function ", 1)[0]
         self.assertNotIn("loadDashboard", search)
         self.assertNotIn("fetch(", search)
         path = script.split("function dashboardPath()", 1)[1].split("function ", 1)[0]
         self.assertNotIn("recentQuery", path)
-        self.assertNotIn("recentMonth", path)
-        month = script.split("function recentMonthChips", 1)[1].split("function ", 1)[0]
-        self.assertNotIn("loadDashboard", month)
-        self.assertNotIn("fetch(", month)
+        self.assertNotIn("pickedMonth", path)
+        self.assertNotIn("pickedYear", path)
+        period = script.split("function onTransactionPeriod", 1)[1].split("function ", 1)[0]
+        self.assertNotIn("loadDashboard", period)
+        self.assertNotIn("fetch(", period)
         self.assertNotIn("Showing the latest", script)
         for name in ("renderCards", "renderMonth", "renderEval"):
             body = script.split(f"function {name}()", 1)[1].split("function ", 1)[0]
             self.assertNotIn("recentSearchBox", body)
-            self.assertNotIn("Search recent rows", body)
+            self.assertNotIn("Search transactions", body)
         self.assertIn('row.message_status === "Message sent"', script)
         self.assertIn('row.message_status !== "message fail"', script)
         self.assertNotIn("guesses were right or wrong", script)

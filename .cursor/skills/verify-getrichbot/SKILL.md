@@ -1,6 +1,6 @@
 ---
 name: verify-getrichbot
-description: "Drive the GetRichBot household web dashboard on a local fake-sheet server. Use to prove Recent, Cards, Month, Eval, or delete behavior without starting the live Telegram bot or opening the Railway site."
+description: "Drive the GetRichBot household web dashboard on a local fake-sheet server. Use to prove Transactions, Cards, Month, Eval, or delete behavior without starting the live Telegram bot or opening the Railway site."
 ---
 
 # Verify GetRichBot

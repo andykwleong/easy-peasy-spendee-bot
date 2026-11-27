@@ -8,7 +8,7 @@ Telegram chat is a second surface. This map does not drive it. The live bot alre
 
 - Launch the dashboard with `python3 .cursor/skills/verify-getrichbot/scripts/verify_dashboard.py launch`.
 - The page is `http://127.0.0.1:41731` unless `GETRICHBOT_VERIFY_PORT` set another port. Read the `url=` line from launch. Never substitute a public URL.
-- The fake sheet starts with `Sample cafe` (`aa1001`, Alex, Food, $18.50, Sample Visa, 20 Sep 2026) and `Sample market` (`bb2002`, Sam, Groceries, $12.40, Sample Mastercard, 18 Sep 2026).
+- The fake sheet starts with `Sample cafe` (`aa1001`, Alex, Food, $18.50, Sample Visa, 20 Sep 2026), `Sample market` (`bb2002`, Sam, Groceries, $12.40, Sample Mastercard, 18 Sep 2026), and `Sample archive` (`cc3003`, Alex, Food, $4.00, Sample Visa, 14 Aug 2025). September screens list the first two. Sample archive appears when Transactions is on August 2025. It is outside the September card period and outside the August 2026 and September 2026 month table.
 - Alex's cards are Sample Visa (cap $100, shows 18%) and Sample Cashback (no cap). Sam's card is Sample Mastercard (cap $200, shows 6%).
 - The open month is September 2026 because the server's today is 26 Sep 2026.
 - Run `doctor` and require the first line `ok`.
@@ -43,7 +43,7 @@ Each feature file starts with an H1 title and one paragraph describing the user-
 
 ## Features
 
-- [Recent transactions](./recent-transactions.md) covers the locked page, signing in, the same person chips for both people, the current month and the previous month, the search box under those chips, the group-note dots, and fixing a category.
+- [Transactions](./recent-transactions.md) covers the locked page, signing in, the same person chips for both people, the month and year dropdowns, the search box under the title, the group-note dots, and fixing a category.
 - [Card summary](./card-summary.md) covers the signed-in person's cards, the other person's cards, a cap, a card with no cap, and the purchases that open under a tapped card.
 - [Monthly summary](./monthly-summary.md) covers the household month table built from the saved rows.
 - [Eval](./eval.md) covers the mail, category, and group-note scores after Month.

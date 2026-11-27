@@ -135,13 +135,8 @@ def build_dashboard_payload(
         _month_snapshot(records, _previous_month_period(today)),
         _month_snapshot(records, _current_month_period(today)),
     ]
-    shown_months = _recent_month_window(today)
-    month_ids = {item["id"] for item in shown_months}
-    recent = [
-        item
-        for item in _recent_items(records, card_usage, scope, marks)
-        if _month_key(item["date"]) in month_ids
-    ]
+    shown_months, current_month = _transaction_catalog(records, card_usage, today)
+    recent = [item for item in _recent_items(records, card_usage, scope, marks) if _month_key(item["date"])]
     if missing_category:
         recent = [item for item in recent if expense_category_is_blank(item)]
     cards = _cards_snapshot(card_owner, records, card_usage, payment_config, today, cards_error)
@@ -154,7 +149,8 @@ def build_dashboard_payload(
         "scope": scope,
         "cards_scope": cards_scope,
         "recent": recent,
-        "recent_months": shown_months,
+        "transaction_months": shown_months,
+        "transaction_current": current_month,
         "cards": cards,
         "months": months,
         "edit_choices": edit_choices(payment_config),
@@ -185,13 +181,44 @@ def expense_category_is_blank(item: dict) -> bool:
     return row_type == "expense" and status == "confirmed"
 
 
-def _recent_month_window(today: date) -> list[dict]:
-    current = _current_month_period(today)
-    previous = _previous_month_period(today)
-    return [
-        {"id": current.start.strftime("%Y-%m"), "label": current.label, "current": True},
-        {"id": previous.start.strftime("%Y-%m"), "label": previous.label, "current": False},
-    ]
+_MONTH_NAMES = (
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+)
+
+
+def _transaction_catalog(records: list[ExpenseRecord], card_usage: list[CardUsageRecord], today: date) -> tuple[list[dict], str]:
+    keys: set[str] = set()
+    for record in records:
+        if record.status.casefold() != "confirmed":
+            continue
+        key = _month_key(record.expense_date)
+        if key:
+            keys.add(key)
+    for record in card_usage:
+        if record.status.casefold() != "confirmed":
+            continue
+        key = _month_key(record.usage_date)
+        if key:
+            keys.add(key)
+    current = today.strftime("%Y-%m")
+    keys.add(current)
+    months = []
+    for key in sorted(keys):
+        number = int(key[5:7])
+        label = _MONTH_NAMES[number - 1] if 1 <= number <= 12 else key
+        months.append({"id": key, "month": key[5:7], "year": key[:4], "label": label})
+    return months, current
 
 
 def _month_key(value: object) -> str:

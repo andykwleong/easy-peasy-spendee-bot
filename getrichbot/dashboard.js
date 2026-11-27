@@ -37,7 +37,8 @@ const state = {
   evalOpenError: "",
   evalOpenGroup: "",
   recentQuery: "",
-  recentMonth: "",
+  pickedMonth: "",
+  pickedYear: "",
   openCardKey: ""
 };
 
@@ -172,7 +173,8 @@ async function loginWithWidget(user) {
   state.cards = "mine";
   state.missingCategory = false;
   state.recentQuery = "";
-  state.recentMonth = "";
+  state.pickedMonth = "";
+  state.pickedYear = "";
   state.openCardKey = "";
   state.editingId = "";
   state.pendingDelete = null;
@@ -196,7 +198,8 @@ async function logout() {
   state.loading = false;
   state.refreshNote = "";
   state.recentQuery = "";
-  state.recentMonth = "";
+  state.pickedMonth = "";
+  state.pickedYear = "";
   state.openCardKey = "";
   state.view = "recent";
   state.message = "Logged out. This browser has forgotten you.";
@@ -326,7 +329,7 @@ function renderTop() {
   const nav = el("nav", "nav-row");
   nav.setAttribute("aria-label", "Dashboard sections");
   [
-    ["recent", "Recent"],
+    ["recent", "Transactions"],
     ["cards", "Cards"],
     ["month", "Month"],
     ["eval", "Eval"]
@@ -362,8 +365,23 @@ function scopeChip(id, label) {
 function renderRecent() {
   const section = el("section");
   const head = el("div", "page-head recent-head");
-  head.append(el("h2", "", "Recent transactions"));
-  const tools = el("div", "recent-tools");
+  const title = el("div", "tx-title");
+  title.append(el("h2", "", "Transactions"));
+  const period = selectedTransactionPeriod();
+  const tools = el("div", "tx-period");
+  tools.append(transactionSelect("Month", monthChoices(), period.month));
+  tools.append(transactionSelect("Year", yearChoices(), period.year));
+  tools.append(recentSearchBox());
+  title.append(tools);
+  head.append(title, personFilterRow());
+  section.append(head);
+  const list = el("div", "recent-list");
+  fillRecentList(list);
+  section.append(list);
+  return section;
+}
+
+function personFilterRow() {
   const filters = el("div", "filters");
   personFilters().forEach((person) => filters.append(scopeChip(person.scope, person.label)));
   filters.append(scopeChip("both", "Both"));
@@ -375,13 +393,7 @@ function renderRecent() {
     loadDashboard();
   });
   filters.append(missing);
-  tools.append(filters, recentMonthChips(), recentSearchBox());
-  head.append(tools);
-  section.append(head);
-  const list = el("div", "recent-list");
-  fillRecentList(list);
-  section.append(list);
-  return section;
+  return filters;
 }
 
 function recentSearchBox() {
@@ -390,7 +402,7 @@ function recentSearchBox() {
   input.type = "search";
   input.value = state.recentQuery;
   input.placeholder = "Search shop, category, or amount";
-  input.setAttribute("aria-label", "Search recent rows");
+  input.setAttribute("aria-label", "Search transactions");
   input.autocomplete = "off";
   input.spellcheck = false;
   input.addEventListener("input", onRecentSearch);
@@ -405,50 +417,93 @@ function onRecentSearch(event) {
   if (list) fillRecentList(list);
 }
 
-function recentMonthChips() {
-  const filters = el("div", "filters");
-  const selected = selectedRecentMonth();
-  recentMonths().forEach((month) => {
-    const chip = el("button", "chip", month.label);
-    chip.type = "button";
-    chip.setAttribute("aria-pressed", String(Boolean(selected) && selected.id === month.id));
-    chip.addEventListener("click", () => {
-      const next = month.current ? "" : month.id;
-      if (state.recentMonth === next) return;
-      state.recentMonth = next;
-      render();
-    });
-    filters.append(chip);
+function transactionSelect(label, choices, value) {
+  const select = document.createElement("select");
+  select.setAttribute("aria-label", label);
+  choices.forEach((choice) => {
+    const option = document.createElement("option");
+    option.value = choice.value;
+    option.textContent = choice.label;
+    select.append(option);
   });
-  return filters;
+  if (value) select.value = value;
+  select.addEventListener("change", onTransactionPeriod);
+  return select;
 }
 
-function recentMonths() {
-  const months = state.payload && state.payload.recent_months;
+function onTransactionPeriod(event) {
+  const period = selectedTransactionPeriod();
+  if (event.target.getAttribute("aria-label") === "Year") state.pickedYear = event.target.value;
+  else state.pickedMonth = event.target.value;
+  if (!state.pickedYear) state.pickedYear = period.year;
+  if (!state.pickedMonth) state.pickedMonth = period.month;
+  render();
+}
+
+function transactionCatalog() {
+  const months = state.payload && state.payload.transaction_months;
   return Array.isArray(months) ? months : [];
 }
 
-function selectedRecentMonth() {
-  const months = recentMonths();
-  const picked = months.find((month) => month.id === state.recentMonth);
-  if (picked) return picked;
-  return months.find((month) => month.current) || months[0] || null;
+function currentTransactionPeriod() {
+  const current = String((state.payload && state.payload.transaction_current) || "");
+  if (/^\d{4}-\d{2}$/.test(current)) return {year: current.slice(0, 4), month: current.slice(5)};
+  const first = transactionCatalog()[0];
+  return first ? {year: first.year, month: first.month} : {year: "", month: ""};
+}
+
+function selectedTransactionPeriod() {
+  const current = currentTransactionPeriod();
+  const year = state.pickedYear || current.year;
+  const month = state.pickedMonth || current.month;
+  return {year: year, month: month, id: year && month ? year + "-" + month : ""};
+}
+
+function yearChoices() {
+  const years = [];
+  transactionCatalog().forEach((item) => {
+    if (item.year && years.indexOf(item.year) === -1) years.push(item.year);
+  });
+  const current = currentTransactionPeriod().year;
+  if (current && years.indexOf(current) === -1) years.push(current);
+  years.sort().reverse();
+  return years.map((year) => ({value: year, label: year}));
+}
+
+function monthChoices() {
+  const labels = {};
+  transactionCatalog().forEach((item) => {
+    if (item.month) labels[item.month] = item.label || monthName(item.month);
+  });
+  const current = currentTransactionPeriod().month;
+  if (current && !labels[current]) labels[current] = monthName(current);
+  return Object.keys(labels).sort().map((month) => ({value: month, label: labels[month]}));
+}
+
+function monthName(monthNumber) {
+  const names = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+  return names[Number(monthNumber) - 1] || String(monthNumber || "");
 }
 
 function fillRecentList(list) {
   list.replaceChildren();
   const recent = state.payload && state.payload.recent ? state.payload.recent : [];
-  const month = selectedRecentMonth();
-  const inMonth = month && month.id
-    ? recent.filter((row) => String(row.date || "").slice(0, 7) === month.id)
-    : recent;
+  const period = selectedTransactionPeriod();
+  const inMonth = period.id
+    ? recent.filter((row) => String(row.date || "").slice(0, 7) === period.id)
+    : [];
+  if (!inMonth.length) {
+    const available = transactionCatalog().some((item) => item.id === period.id);
+    const empty = state.missingCategory && available && !recentQueryText()
+      ? "No rows are missing a category."
+      : "No transactions found";
+    list.append(el("p", "empty", empty));
+    return;
+  }
   const query = recentQueryText();
   const rows = inMonth.filter((row) => recentRowMatches(row, query));
   if (!rows.length) {
-    const empty = query
-      ? "No rows match that search."
-      : (state.missingCategory ? "No rows are missing a category." : "No confirmed rows for this month.");
-    list.append(el("p", "empty", empty));
+    list.append(el("p", "empty", "No rows match that search."));
     return;
   }
   rows.forEach((row) => list.append(renderTransaction(row)));

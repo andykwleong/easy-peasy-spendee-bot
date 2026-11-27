@@ -270,10 +270,14 @@ def cmd_serve(args: argparse.Namespace) -> None:
         wife_card_button_label = "FX's Cards"
         openai_api_key = None
         openai_model = "test-model"
-        telegram_chat_id = None
+        telegram_chat_id = -100
 
         def label_for_user(self, user_id):
             return _label_for_user(user_id)
+
+    async def _remember_group_post(text: str):
+        sheets.group_posts.append(text)
+        return 1
 
     context = DashboardContext(
         bot_token=VERIFY_TOKEN,
@@ -289,7 +293,9 @@ def cmd_serve(args: argparse.Namespace) -> None:
     if ":" in context.bot_token or context.bot_token != VERIFY_TOKEN:
         raise SystemExit("Refusing to start with a token that is not the local verification token.")
     app = DashboardApp(context)
-    app.attach_expense_bot(FinanceBot(_VerifyBotSettings(), sheets))
+    expense_bot = FinanceBot(_VerifyBotSettings(), sheets)
+    expense_bot.group_notifier = _remember_group_post
+    app.attach_expense_bot(expense_bot)
     original_handle = app.handle
 
     def handle(method, target, headers, body, *, secure):
@@ -637,6 +643,7 @@ class FakeSheets:
             ["group_post:aa1001", "Message sent"],
             ["group_post:bb2002", "message fail"],
         ]
+        self.group_posts: list[str] = []
         self.eval_rows = [
             ["2026-09-20", "sample-cafe-mail", "cafe@example.com", "Sample cafe", "pass", "logged", "aa1001", "Food", "keyword", "Food"],
             ["2026-09-18", "sample-market-mail", "market@example.com", "Sample market", "pass", "logged", "bb2002", "Groceries", "keyword", "Food"],
@@ -671,6 +678,10 @@ class FakeSheets:
 
     def get_state_rows(self, sheet_name):
         return [list(row) for row in self.state_rows]
+
+    def set_state_value(self, sheet_name, key, value):
+        self.state_rows = [row for row in self.state_rows if not row or row[0] != key]
+        self.state_rows.append([key, value])
 
     def get_eval_log_rows(self):
         return [list(row) for row in self.eval_rows]

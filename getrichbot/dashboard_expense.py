@@ -7,6 +7,7 @@ from getrichbot.bot import (
     INCOME_CATEGORY_CALLBACK,
     PAYMENT_CHANNEL_CALLBACK,
     PAYMENT_METHOD_CALLBACK,
+    dashboard_expense_turn,
 )
 from getrichbot.shop_category import SHOP_CATEGORY_CALLBACK
 
@@ -30,7 +31,8 @@ def command_reply() -> list[dict[str, Any]]:
 
 def submit_text(bot: Any, user_id: int, text: str, message_id: int) -> list[dict[str, Any]]:
     update = _TextUpdate(user_id, text, message_id)
-    asyncio.run(bot.handle_text(update, None))
+    with dashboard_expense_turn():
+        asyncio.run(bot.handle_text(update, None))
     return list(update.message.replies)
 
 
@@ -39,7 +41,8 @@ def submit_callback(bot: Any, user_id: int, callback: str, message_id: int) -> l
     if handler_name is None:
         return [_reply(UNAVAILABLE_BUTTON_REPLY, None)]
     update = _CallbackUpdate(user_id, callback, message_id)
-    asyncio.run(getattr(bot, handler_name)(update, None))
+    with dashboard_expense_turn():
+        asyncio.run(getattr(bot, handler_name)(update, None))
     return list(update.callback_query.message.replies)
 
 

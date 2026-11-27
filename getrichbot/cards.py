@@ -4,6 +4,7 @@ import calendar
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal, InvalidOperation, Overflow
+from enum import Enum
 
 from getrichbot.models import CardUsageRecord, ExpenseRecord
 
@@ -95,14 +96,6 @@ class CardSummaryItem:
     total_spend: Decimal
     limits: tuple[CardLimitUsage, ...]
     transactions: tuple[CardTransaction, ...] = ()
-
-
-@dataclass(frozen=True)
-class CardLimitReminder:
-    owner: str
-    payment_method: str
-    period_start: date
-    limits: tuple[CardLimitUsage, ...]
 
 
 def parse_payment_config(method_rows: list[list[str]], limit_rows: list[list[str]]) -> PaymentConfig:
@@ -232,46 +225,88 @@ def format_card_summary(items: list[CardSummaryItem], title: str = "Card summary
     return "\n".join(lines)
 
 
-CARD_LIMIT_REMINDER_PERCENT = Decimal("90")
+CARD_LIMIT_WARNING_PERCENT = Decimal("90")
+CARD_LIMIT_REACHED_PERCENT = Decimal("100")
 
 
-def card_limit_reminders(items: list[CardSummaryItem]) -> list[CardLimitReminder]:
-    reminders: list[CardLimitReminder] = []
-    for item in items:
-        reached = tuple(usage for usage in item.limits if usage.percent >= CARD_LIMIT_REMINDER_PERCENT)
-        if not reached:
-            continue
-        reminders.append(
-            CardLimitReminder(
-                owner=item.payment_method.owner,
-                payment_method=item.payment_method.name,
-                period_start=item.period_start,
-                limits=reached,
-            )
-        )
-    return reminders
+class CardWarningKind(Enum):
+    FIRST = "first"
+    REPEAT = "repeat"
+    REACHED = "reached"
 
 
-def card_limit_reminder_state_key(reminder: CardLimitReminder) -> str:
-    return f"card_limit_90:{reminder.period_start.isoformat()}:{reminder.owner}:{reminder.payment_method}"
+@dataclass(frozen=True)
+class CardLimitWarning:
+    owner: str
+    payment_method: str
+    period_start: date
+    kind: CardWarningKind
+    spent: Decimal
+    limit_amount: Decimal
+    percent: Decimal
 
 
-def format_card_limit_reminder(reminder: CardLimitReminder) -> str:
-    card = reminder.payment_method
-    if len(reminder.limits) == 1:
-        usage = reminder.limits[0]
-        label = _limit_label(usage)
-        limit_phrase = "its limit" if label == "All spending" else f"its {label} limit"
-        return (
-            f"{card} is at {usage.percent:.0f}% of {limit_phrase}. "
-            f"${usage.spent:,.2f} of ${usage.limit.amount:,.2f} is used this cycle."
-        )
-    lines = [f"{card} is at 90% or more of these limits this cycle."]
-    lines.extend(
-        f"{_limit_label(usage)} - ${usage.spent:,.2f} of ${usage.limit.amount:,.2f} ({usage.percent:.0f}%)"
-        for usage in reminder.limits
+def card_use_warning(
+    items: list[CardSummaryItem],
+    payment_method: str,
+    opened: bool,
+) -> CardLimitWarning | None:
+    item = next(
+        (candidate for candidate in items if candidate.payment_method.name.casefold() == payment_method.casefold()),
+        None,
     )
-    return "\n".join(lines)
+    if item is None:
+        return None
+    usage = _strictest_reached_limit(item)
+    if usage is None:
+        return None
+    percent = usage.percent
+    if percent >= CARD_LIMIT_REACHED_PERCENT:
+        kind = CardWarningKind.REACHED
+    elif not opened and percent >= CARD_LIMIT_WARNING_PERCENT:
+        kind = CardWarningKind.FIRST
+    elif opened and CARD_LIMIT_WARNING_PERCENT < percent < CARD_LIMIT_REACHED_PERCENT:
+        kind = CardWarningKind.REPEAT
+    else:
+        return None
+    return CardLimitWarning(
+        owner=item.payment_method.owner,
+        payment_method=item.payment_method.name,
+        period_start=item.period_start,
+        kind=kind,
+        spent=usage.spent,
+        limit_amount=usage.limit.amount,
+        percent=percent,
+    )
+
+
+def card_limit_opened_key(owner: str, payment_method: str, period_start: date) -> str:
+    return f"card_limit_90_opened:{period_start.isoformat()}:{owner}:{payment_method}"
+
+
+def card_use_note_key(entry_id: str) -> str:
+    return f"card_limit_note:{entry_id}"
+
+
+def format_card_limit_warning(warning: CardLimitWarning) -> str:
+    card = warning.payment_method
+    if warning.kind is CardWarningKind.REACHED:
+        return f"{card} has reached its limit. Use another card for your next purchase."
+    spent = f"${warning.spent:,.2f}"
+    limit = f"${warning.limit_amount:,.2f}"
+    percent = f"{warning.percent:.0f}"
+    if warning.kind is CardWarningKind.FIRST:
+        return f"{card} is at {percent}% of its {limit} limit. {spent} is used in this cycle."
+    if warning.kind is CardWarningKind.REPEAT:
+        return f"{card} is at {percent}% of its limit. {spent} of {limit} is used in this cycle."
+    raise ValueError(f"Unknown card warning kind: {warning.kind}")
+
+
+def _strictest_reached_limit(item: CardSummaryItem) -> CardLimitUsage | None:
+    reached = [usage for usage in item.limits if usage.percent >= CARD_LIMIT_WARNING_PERCENT]
+    if not reached:
+        return None
+    return max(reached, key=lambda usage: usage.percent)
 
 
 def _parse_payment_methods(rows: list[list[str]]) -> list[PaymentMethod]:

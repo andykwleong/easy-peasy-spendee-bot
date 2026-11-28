@@ -37,6 +37,8 @@ const state = {
   evalOpenError: "",
   evalOpenGroup: "",
   recentQuery: "",
+  pickedMonth: "",
+  pickedYear: "",
   openCardKey: ""
 };
 
@@ -171,6 +173,8 @@ async function loginWithWidget(user) {
   state.cards = "mine";
   state.missingCategory = false;
   state.recentQuery = "";
+  state.pickedMonth = "";
+  state.pickedYear = "";
   state.openCardKey = "";
   state.editingId = "";
   state.pendingDelete = null;
@@ -194,6 +198,8 @@ async function logout() {
   state.loading = false;
   state.refreshNote = "";
   state.recentQuery = "";
+  state.pickedMonth = "";
+  state.pickedYear = "";
   state.openCardKey = "";
   state.view = "recent";
   state.message = "Logged out. This browser has forgotten you.";
@@ -300,7 +306,6 @@ function render() {
   if (state.view === "recent") wrap.append(renderRecent());
   else if (state.view === "cards") wrap.append(renderCards());
   else if (state.view === "month") wrap.append(renderMonth());
-  else if (state.view === "raw") wrap.append(renderRaw());
   else if (state.view === "eval") wrap.append(renderEval());
   else wrap.append(renderRecent());
   main.append(wrap);
@@ -324,10 +329,9 @@ function renderTop() {
   const nav = el("nav", "nav-row");
   nav.setAttribute("aria-label", "Dashboard sections");
   [
-    ["recent", "Recent"],
+    ["recent", "Transactions"],
     ["cards", "Cards"],
     ["month", "Month"],
-    ["raw", "Raw entries"],
     ["eval", "Eval"]
   ].forEach(([id, label]) => {
     const button = el("button", "nav-btn" + (id === "later" ? " later" : ""), label);
@@ -361,8 +365,23 @@ function scopeChip(id, label) {
 function renderRecent() {
   const section = el("section");
   const head = el("div", "page-head recent-head");
-  head.append(el("h2", "", "Recent transactions"));
-  const tools = el("div", "recent-tools");
+  const title = el("div", "tx-title");
+  title.append(el("h2", "", "Transactions"));
+  const period = selectedTransactionPeriod();
+  const tools = el("div", "tx-period");
+  tools.append(transactionSelect("Month", monthChoices(), period.month));
+  tools.append(transactionSelect("Year", yearChoices(), period.year));
+  tools.append(recentSearchBox());
+  title.append(tools);
+  head.append(title, personFilterRow());
+  section.append(head);
+  const list = el("div", "recent-list");
+  fillRecentList(list);
+  section.append(list);
+  return section;
+}
+
+function personFilterRow() {
   const filters = el("div", "filters");
   personFilters().forEach((person) => filters.append(scopeChip(person.scope, person.label)));
   filters.append(scopeChip("both", "Both"));
@@ -374,13 +393,7 @@ function renderRecent() {
     loadDashboard();
   });
   filters.append(missing);
-  tools.append(filters, recentSearchBox());
-  head.append(tools);
-  section.append(head);
-  const list = el("div", "recent-list");
-  fillRecentList(list);
-  section.append(list);
-  return section;
+  return filters;
 }
 
 function recentSearchBox() {
@@ -389,7 +402,7 @@ function recentSearchBox() {
   input.type = "search";
   input.value = state.recentQuery;
   input.placeholder = "Search shop, category, or amount";
-  input.setAttribute("aria-label", "Search recent rows");
+  input.setAttribute("aria-label", "Search transactions");
   input.autocomplete = "off";
   input.spellcheck = false;
   input.addEventListener("input", onRecentSearch);
@@ -404,19 +417,93 @@ function onRecentSearch(event) {
   if (list) fillRecentList(list);
 }
 
+function transactionSelect(label, choices, value) {
+  const select = document.createElement("select");
+  select.setAttribute("aria-label", label);
+  choices.forEach((choice) => {
+    const option = document.createElement("option");
+    option.value = choice.value;
+    option.textContent = choice.label;
+    select.append(option);
+  });
+  if (value) select.value = value;
+  select.addEventListener("change", onTransactionPeriod);
+  return select;
+}
+
+function onTransactionPeriod(event) {
+  const period = selectedTransactionPeriod();
+  if (event.target.getAttribute("aria-label") === "Year") state.pickedYear = event.target.value;
+  else state.pickedMonth = event.target.value;
+  if (!state.pickedYear) state.pickedYear = period.year;
+  if (!state.pickedMonth) state.pickedMonth = period.month;
+  render();
+}
+
+function transactionCatalog() {
+  const months = state.payload && state.payload.transaction_months;
+  return Array.isArray(months) ? months : [];
+}
+
+function currentTransactionPeriod() {
+  const current = String((state.payload && state.payload.transaction_current) || "");
+  if (/^\d{4}-\d{2}$/.test(current)) return {year: current.slice(0, 4), month: current.slice(5)};
+  const first = transactionCatalog()[0];
+  return first ? {year: first.year, month: first.month} : {year: "", month: ""};
+}
+
+function selectedTransactionPeriod() {
+  const current = currentTransactionPeriod();
+  const year = state.pickedYear || current.year;
+  const month = state.pickedMonth || current.month;
+  return {year: year, month: month, id: year && month ? year + "-" + month : ""};
+}
+
+function yearChoices() {
+  const years = [];
+  transactionCatalog().forEach((item) => {
+    if (item.year && years.indexOf(item.year) === -1) years.push(item.year);
+  });
+  const current = currentTransactionPeriod().year;
+  if (current && years.indexOf(current) === -1) years.push(current);
+  years.sort().reverse();
+  return years.map((year) => ({value: year, label: year}));
+}
+
+function monthChoices() {
+  const labels = {};
+  transactionCatalog().forEach((item) => {
+    if (item.month) labels[item.month] = item.label || monthName(item.month);
+  });
+  const current = currentTransactionPeriod().month;
+  if (current && !labels[current]) labels[current] = monthName(current);
+  return Object.keys(labels).sort().map((month) => ({value: month, label: labels[month]}));
+}
+
+function monthName(monthNumber) {
+  const names = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+  return names[Number(monthNumber) - 1] || String(monthNumber || "");
+}
+
 function fillRecentList(list) {
   list.replaceChildren();
   const recent = state.payload && state.payload.recent ? state.payload.recent : [];
-  const query = recentQueryText();
-  const rows = recent.filter((row) => recentRowMatches(row, query));
-  if (state.payload && state.payload.recent_truncated) {
-    list.append(el("p", "sub", "Showing the latest " + state.payload.recent_limit + " confirmed rows."));
-  }
-  if (!rows.length) {
-    const empty = query
-      ? "No rows match that search."
-      : (state.missingCategory ? "No rows are missing a category." : "No confirmed rows for this view.");
+  const period = selectedTransactionPeriod();
+  const inMonth = period.id
+    ? recent.filter((row) => String(row.date || "").slice(0, 7) === period.id)
+    : [];
+  if (!inMonth.length) {
+    const available = transactionCatalog().some((item) => item.id === period.id);
+    const empty = state.missingCategory && available && !recentQueryText()
+      ? "No rows are missing a category."
+      : "No transactions found";
     list.append(el("p", "empty", empty));
+    return;
+  }
+  const query = recentQueryText();
+  const rows = inMonth.filter((row) => recentRowMatches(row, query));
+  if (!rows.length) {
+    list.append(el("p", "empty", "No rows match that search."));
     return;
   }
   rows.forEach((row) => list.append(renderTransaction(row)));
@@ -1023,46 +1110,6 @@ function totalRow(name, months, key, kind) {
   return row;
 }
 
-function renderRaw() {
-  const section = el("section", "raw-page");
-  const head = el("div", "page-head");
-  head.append(el("h2", "", "Raw entries"));
-  section.append(head);
-  const frame = el("div", "raw-frame");
-  bindRawPan(frame);
-  if (state.payload.raw_expenses_truncated) {
-    frame.append(el("p", "sub", "Showing the latest " + state.payload.raw_expenses_limit + " raw expense rows."));
-  }
-  frame.append(rawTable(
-    "Raw Expenses",
-    ["Entry ID", "Date", "Logged by", "Amount", "Category", "Description", "Payment owner", "Payment method", "Channel", "Type", "Status"],
-    state.payload.raw_expenses.map((row) => ({
-      cells: [
-        row.id, prettyDate(row.date), row.logged_by, money(row.amount), row.category, row.description,
-        row.payment_owner || "—", row.payment_method || "—", row.payment_channel || "—", row.type, row.status
-      ],
-      deleteTarget: rawDeleteTarget(row, "expense"),
-      needsCategory: expenseCategoryIsBlank(row)
-    }))
-  ));
-  if (state.payload.card_usage_truncated) {
-    frame.append(el("p", "sub", "Showing the latest " + state.payload.card_usage_limit + " card-only rows."));
-  }
-  frame.append(rawTable(
-    "Card Usage",
-    ["Entry ID", "Date", "Logged by", "Amount", "Payment owner", "Payment method", "Channel", "Description", "Type", "Status"],
-    state.payload.card_usage.map((row) => ({
-      cells: [
-        row.id, prettyDate(row.date), row.logged_by, money(row.amount), row.payment_owner || "—",
-        row.payment_method || "—", row.payment_channel || "—", row.description, row.type, row.status
-      ],
-      deleteTarget: rawDeleteTarget(row, "card_usage")
-    }))
-  ));
-  section.append(frame);
-  return section;
-}
-
 function personFilters() {
   const people = state.payload && state.payload.person_filters;
   return Array.isArray(people) ? people : [];
@@ -1381,44 +1428,6 @@ function mark() {
   return node;
 }
 
-function rawDeleteTarget(row, source) {
-  return {
-    id: row.id,
-    source: source,
-    description: row.description || "No description",
-    amount: row.amount,
-    date: row.date
-  };
-}
-
-function rawTable(title, headers, records) {
-  const panel = el("div", "panel raw-block");
-  panel.append(el("h3", "", title));
-  if (!records.length) {
-    panel.append(el("p", "empty", "No rows."));
-    return panel;
-  }
-  const table = el("table");
-  const head = el("tr");
-  headers.forEach((header, index) => head.append(el("th", index === 3 ? "num" : "", header)));
-  head.append(el("th", "", ""));
-  const thead = el("thead");
-  thead.append(head);
-  table.append(thead);
-  const body = el("tbody");
-  records.forEach((record) => {
-    const row = el("tr", record.needsCategory ? "needs-category" : "");
-    record.cells.forEach((value, index) => row.append(el("td", index === 3 ? "num" : "", value)));
-    const action = el("td");
-    if (record.deleteTarget) action.append(deleteButton(record.deleteTarget));
-    row.append(action);
-    body.append(row);
-  });
-  table.append(body);
-  panel.append(table);
-  return panel;
-}
-
 function watchChanges() {
   if (state.watching) return;
   if (!state.payload || typeof state.payload.change_mark !== "string" || !state.payload.change_mark) return;
@@ -1543,56 +1552,11 @@ async function waitForMark(since) {
   }
 }
 
-function bindRawPan(frame) {
-  if (!state.rawPanBound) {
-    state.rawPanBound = true;
-    window.addEventListener("mousemove", moveRawPan);
-    window.addEventListener("mouseup", endRawPan);
-  }
-  frame.addEventListener("mousedown", startRawPan);
-}
-
-function startRawPan(event) {
-  if (event.button !== 0) return;
-  if (event.target.closest("button, a, input, select, textarea, label")) return;
-  state.rawPan = {
-    startX: event.clientX,
-    startY: event.clientY,
-    startLeft: event.currentTarget.scrollLeft,
-    startTop: window.scrollY
-  };
-  event.currentTarget.classList.add("is-panning");
-  event.preventDefault();
-}
-
-function moveRawPan(event) {
-  if (!state.rawPan) return;
-  const frame = document.querySelector(".raw-frame");
-  if (!frame) return;
-  frame.scrollLeft = state.rawPan.startLeft - (event.clientX - state.rawPan.startX);
-  window.scrollTo(window.scrollX, state.rawPan.startTop - (event.clientY - state.rawPan.startY));
-}
-
-function endRawPan() {
-  if (!state.rawPan) return;
-  state.rawPan = null;
-  const frame = document.querySelector(".raw-frame");
-  if (frame) frame.classList.remove("is-panning");
-}
-
 function keepScroll(paint) {
-  const frame = document.querySelector(".raw-frame");
-  const top = frame ? frame.scrollTop : 0;
-  const left = frame ? frame.scrollLeft : 0;
   const x = window.scrollX;
   const y = window.scrollY;
   paint();
   window.scrollTo(x, y);
-  const next = document.querySelector(".raw-frame");
-  if (next) {
-    next.scrollTop = top;
-    next.scrollLeft = left;
-  }
 }
 
 function pause(ms) {

@@ -594,6 +594,23 @@ class FakeSheets:
                 payment_method="Sample Mastercard",
                 payment_owner="Sam",
             ),
+            ExpenseRecord(
+                row_number=4,
+                entry_id="cc3003",
+                timestamp="08:00:00",
+                expense_date="2025-08-14",
+                month="2025-08",
+                logged_by="Alex",
+                raw_input="sample archive",
+                amount=Decimal("4.00"),
+                category="Food",
+                description="Sample archive",
+                input_type="text",
+                status="Confirmed",
+                transaction_type="Expense",
+                payment_method="Sample Visa",
+                payment_owner="Alex",
+            ),
         ]
         self.usage: list = []
         self.summary_rows: list = []
@@ -610,7 +627,7 @@ class FakeSheets:
         from getrichbot.sheet_changes import SheetChanges
 
         self.changes = SheetChanges(frozenset({"Raw Expenses", "Card Usage"}))
-        self._next_row = 4
+        self._next_row = 5
         self.config = parse_payment_config(
             [
                 ["Payment Method", "Owner", "Type", "Cycle Type", "Cycle Start Day", "Active"],

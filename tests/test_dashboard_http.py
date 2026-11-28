@@ -329,7 +329,6 @@ class DashboardHttpTests(unittest.TestCase):
         self.assertEqual(full_ids, ["bb2002", "aa1001"])
         self.assertEqual([row["id"] for row in body_json(filtered)["recent"]], ["bb2002"])
         self.assertEqual(body_json(filtered)["recent"][0]["category"], "")
-        self.assertIn("aa1001", [row["id"] for row in body_json(filtered)["raw_expenses"]])
 
     def test_either_signed_in_person_can_read_the_other_persons_recent_rows(self):
         sheets = EditableSheets()
@@ -505,17 +504,26 @@ class DashboardHttpTests(unittest.TestCase):
         self.assertIn("No category", script)
         self.assertNotIn('["mine", cards.viewer_label]', script)
         self.assertIn('["eval", "Eval"]', script)
-        self.assertIn('aria-label", "Search recent rows"', script)
+        self.assertIn('["recent", "Transactions"]', script)
+        self.assertNotIn('["recent", "Recent"]', script)
+        self.assertIn('aria-label", "Search transactions"', script)
         self.assertIn("Search shop, category, or amount", script)
+        self.assertIn('"No transactions found"', script)
         search = script.split("function onRecentSearch", 1)[1].split("function ", 1)[0]
         self.assertNotIn("loadDashboard", search)
         self.assertNotIn("fetch(", search)
         path = script.split("function dashboardPath()", 1)[1].split("function ", 1)[0]
         self.assertNotIn("recentQuery", path)
-        for name in ("renderCards", "renderMonth", "renderRaw", "renderEval"):
+        self.assertNotIn("pickedMonth", path)
+        self.assertNotIn("pickedYear", path)
+        period = script.split("function onTransactionPeriod", 1)[1].split("function ", 1)[0]
+        self.assertNotIn("loadDashboard", period)
+        self.assertNotIn("fetch(", period)
+        self.assertNotIn("Showing the latest", script)
+        for name in ("renderCards", "renderMonth", "renderEval"):
             body = script.split(f"function {name}()", 1)[1].split("function ", 1)[0]
             self.assertNotIn("recentSearchBox", body)
-            self.assertNotIn("Search recent rows", body)
+            self.assertNotIn("Search transactions", body)
         self.assertIn('row.message_status === "Message sent"', script)
         self.assertIn('row.message_status !== "message fail"', script)
         self.assertNotIn("guesses were right or wrong", script)
@@ -730,16 +738,13 @@ class DashboardHttpTests(unittest.TestCase):
         self.assertNotIn("Household income, expenses, and what is left", script)
         self.assertNotIn("Colours match the bot", script)
         self.assertNotIn("Card Usage counts toward the card", script)
-        self.assertIn('["raw", "Raw entries"]', script)
-        self.assertIn("raw-frame", script)
-        self.assertIn("bindRawPan", script)
-        self.assertIn("scrollLeft", script)
-        self.assertIn("window.scrollY", script)
-        self.assertIn("startY", script)
+        self.assertNotIn('["raw", "Raw entries"]', script)
+        self.assertNotIn("raw-frame", script)
+        self.assertNotIn("bindRawPan", script)
         self.assertNotIn('shell.classList.add("app-fill")', script)
         self.assertIn("limit.percent_label", script)
         self.assertIn("No cap", script)
-        self.assertIn(".raw-frame", css)
+        self.assertNotIn(".raw-frame", css)
         self.assertIn("overflow: hidden", css)
         self.assertNotIn("overflow: scroll", css)
         self.assertNotIn("::-webkit-scrollbar", css)
@@ -1409,8 +1414,8 @@ class DashboardPromptTests(unittest.IsolatedAsyncioTestCase):
                     row_number=8,
                     entry_id="cc3111",
                     timestamp="14:42:00",
-                    expense_date="2026-10-13",
-                    month="2026-10",
+                    expense_date="2026-09-13",
+                    month="2026-09",
                     logged_by="Alex",
                     raw_input="email: GPAY NETWORK (S) PTE L Singapore SGP",
                     amount=Decimal("9.60"),
@@ -1725,8 +1730,6 @@ class ClaimMoveTests(unittest.TestCase):
         self.assertEqual(visa["transactions"][0]["shop"], "Sample cafe")
         self.assertEqual(sheets.keywords, [])
         self.assertNotIn("18.50", " ".join(" ".join(row) for row in sheets.summary_rows))
-        self.assertFalse(any(row["id"] == "aa1001" for row in claimed["raw_expenses"]))
-        self.assertTrue(any(row["id"] == "aa1001" for row in claimed["card_usage"]))
 
         back_status, _, back_body = self._post(app, cookie, {
             "id": "aa1001",

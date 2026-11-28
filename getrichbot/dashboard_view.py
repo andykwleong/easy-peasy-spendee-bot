@@ -16,9 +16,6 @@ ANDY_FILTER = "Andy"
 FX_FILTER = "FX"
 EVAL_DESCRIPTION = "Telegram accepted the group post."
 
-RECENT_LIMIT = 40
-RAW_LIMIT = 200
-
 
 def named_household_labels(household_labels: tuple[str, ...]) -> tuple[str, ...]:
     """Configured names, in the order they were given, with blanks dropped."""
@@ -138,9 +135,8 @@ def build_dashboard_payload(
         _month_snapshot(records, _previous_month_period(today)),
         _month_snapshot(records, _current_month_period(today)),
     ]
-    raw_expenses = _raw_expenses(records)
-    usage_rows = _raw_card_usage(card_usage)
-    recent = _recent_items(records, card_usage, scope, marks)
+    shown_months, current_month = _transaction_catalog(records, card_usage, today)
+    recent = [item for item in _recent_items(records, card_usage, scope, marks) if _month_key(item["date"])]
     if missing_category:
         recent = [item for item in recent if expense_category_is_blank(item)]
     cards = _cards_snapshot(card_owner, records, card_usage, payment_config, today, cards_error)
@@ -152,17 +148,11 @@ def build_dashboard_payload(
         "household_labels": list(labels),
         "scope": scope,
         "cards_scope": cards_scope,
-        "recent": recent[:RECENT_LIMIT],
-        "recent_limit": RECENT_LIMIT,
-        "recent_truncated": len(recent) > RECENT_LIMIT,
+        "recent": recent,
+        "transaction_months": shown_months,
+        "transaction_current": current_month,
         "cards": cards,
         "months": months,
-        "raw_expenses": raw_expenses[:RAW_LIMIT],
-        "raw_expenses_limit": RAW_LIMIT,
-        "raw_expenses_truncated": len(raw_expenses) > RAW_LIMIT,
-        "card_usage": usage_rows[:RAW_LIMIT],
-        "card_usage_limit": RAW_LIMIT,
-        "card_usage_truncated": len(usage_rows) > RAW_LIMIT,
         "edit_choices": edit_choices(payment_config),
         "person_filters": person_filter_labels(labels),
         "agent_eval": {
@@ -189,6 +179,53 @@ def expense_category_is_blank(item: dict) -> bool:
     row_type = str(item.get("type") or "Expense").casefold()
     status = str(item.get("status") or "Confirmed").casefold()
     return row_type == "expense" and status == "confirmed"
+
+
+_MONTH_NAMES = (
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+)
+
+
+def _transaction_catalog(records: list[ExpenseRecord], card_usage: list[CardUsageRecord], today: date) -> tuple[list[dict], str]:
+    keys: set[str] = set()
+    for record in records:
+        if record.status.casefold() != "confirmed":
+            continue
+        key = _month_key(record.expense_date)
+        if key:
+            keys.add(key)
+    for record in card_usage:
+        if record.status.casefold() != "confirmed":
+            continue
+        key = _month_key(record.usage_date)
+        if key:
+            keys.add(key)
+    current = today.strftime("%Y-%m")
+    keys.add(current)
+    months = []
+    for key in sorted(keys):
+        number = int(key[5:7])
+        label = _MONTH_NAMES[number - 1] if 1 <= number <= 12 else key
+        months.append({"id": key, "month": key[5:7], "year": key[:4], "label": label})
+    return months, current
+
+
+def _month_key(value: object) -> str:
+    text = str(value or "")
+    if len(text) >= 7 and text[4] == "-" and text[:4].isdigit() and text[5:7].isdigit():
+        return text[:7]
+    return ""
 
 
 def _current_month_period(today: date) -> SummaryPeriod:
@@ -345,49 +382,6 @@ def _expense_kind(record: ExpenseRecord) -> str:
     if kind == "fixed":
         return "fixed"
     return "expense"
-
-
-def _raw_expenses(records: list[ExpenseRecord]) -> list[dict]:
-    rows = [
-        {
-            "id": record.entry_id,
-            "date": record.expense_date,
-            "time": record.timestamp,
-            "logged_by": record.logged_by,
-            "amount": _money(record.amount),
-            "category": record.category,
-            "description": record.description,
-            "payment_owner": record.payment_owner,
-            "payment_method": record.payment_method,
-            "payment_channel": record.payment_channel,
-            "type": record.transaction_type or "Expense",
-            "status": record.status,
-        }
-        for record in records
-    ]
-    rows.sort(key=lambda row: (row["date"], row["time"], row["id"]), reverse=True)
-    return rows
-
-
-def _raw_card_usage(records: list[CardUsageRecord]) -> list[dict]:
-    rows = [
-        {
-            "id": record.entry_id,
-            "date": record.usage_date,
-            "time": record.timestamp,
-            "logged_by": record.logged_by,
-            "amount": _money(record.amount),
-            "payment_owner": record.payment_owner,
-            "payment_method": record.payment_method,
-            "payment_channel": record.payment_channel,
-            "description": record.description,
-            "type": "Card only",
-            "status": record.status,
-        }
-        for record in records
-    ]
-    rows.sort(key=lambda row: (row["date"], row["time"], row["id"]), reverse=True)
-    return rows
 
 
 def _money(value: Decimal) -> str:

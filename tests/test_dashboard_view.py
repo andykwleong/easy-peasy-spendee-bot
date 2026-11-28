@@ -215,9 +215,7 @@ class DashboardViewTests(unittest.TestCase):
         self.assertEqual(uncapped["Sample Cashback"]["limits"], [])
         self.assertNotIn("Sample Mastercard", capped)
         self.assertNotIn("Sample Cash", {**capped, **uncapped})
-        self.assertEqual(next(row for row in mine["raw_expenses"] if row["id"] == "aa1001")["payment_owner"], "")
-        self.assertIn("aa1012", [row["id"] for row in mine["raw_expenses"]])
-        self.assertIn("cc1002", [row["id"] for row in mine["card_usage"]])
+        self.assertNotIn("aa1012", [item["id"] for item in mine["recent"]])
 
     def test_paynow_recent_row_keeps_a_blank_payment_owner(self):
         records = [
@@ -244,27 +242,65 @@ class DashboardViewTests(unittest.TestCase):
         self.assertEqual(shown["payment_method"], "PayNow")
         self.assertEqual(shown["payment_owner"], "")
         self.assertEqual(shown["payment_channel"], "")
-        raw = payload["raw_expenses"][0]
-        self.assertEqual(raw["payment_owner"], "")
-        self.assertEqual(raw["payment_method"], "PayNow")
 
-    def test_recent_and_raw_lists_say_when_they_are_shortened(self):
+    def test_transactions_include_every_month_that_has_a_row(self):
         records = [
             expense(f"aa{index:04d}", "1.00", "Food", timestamp=f"{index % 24:02d}:00:00", expense_date="2026-09-01")
             for index in range(41)
         ]
+        records.extend(
+            [
+                expense("aug001", "2.00", "Food", expense_date="2026-08-31", description="Sample august"),
+                expense("jul001", "3.00", "Food", expense_date="2026-07-31", description="Sample july"),
+                expense("old001", "8.00", "Food", expense_date="2024-03-02", description="Sample archive"),
+                expense("late001", "4.00", "Food", expense_date="2026-09-30", description="Sample later"),
+                expense("blank001", "6.00", "Food", expense_date="", description="Sample undated"),
+                expense("pending001", "9.00", "Food", expense_date="2024-03-03", status="Pending", description="Sample pending"),
+            ]
+        )
+        usage = [card_usage("oldcard", "5.00", "Sample Visa", usage_date="2026-08-02", description="Sample old card")]
 
         payload = build_dashboard_payload(
             viewer_label="Alex",
             scope="both",
             records=records,
-            card_usage=[],
+            card_usage=usage,
             payment_config=payment_config(),
             today=date(2026, 9, 26),
         )
 
-        self.assertEqual(len(payload["recent"]), 40)
-        self.assertTrue(payload["recent_truncated"])
+        ids = [item["id"] for item in payload["recent"]]
+        self.assertEqual(len([item for item in ids if item.startswith("aa")]), 41)
+        self.assertIn("aug001", ids)
+        self.assertIn("jul001", ids)
+        self.assertIn("old001", ids)
+        self.assertIn("late001", ids)
+        self.assertIn("oldcard", ids)
+        self.assertNotIn("blank001", ids)
+        self.assertNotIn("pending001", ids)
+        self.assertEqual(payload["transaction_current"], "2026-09")
+        self.assertEqual(
+            [item["id"] for item in payload["transaction_months"]],
+            ["2024-03", "2026-07", "2026-08", "2026-09"],
+        )
+        march = next(item for item in payload["transaction_months"] if item["id"] == "2024-03")
+        self.assertEqual(march["label"], "March")
+        self.assertEqual(march["year"], "2024")
+        self.assertEqual(march["month"], "03")
+
+    def test_transaction_catalog_keeps_the_open_month_when_it_has_no_rows(self):
+        payload = build_dashboard_payload(
+            viewer_label="Alex",
+            scope="both",
+            records=[expense("dec001", "2.00", "Food", expense_date="2025-12-31")],
+            card_usage=[],
+            payment_config=payment_config(),
+            today=date(2026, 1, 1),
+        )
+
+        self.assertEqual([item["id"] for item in payload["recent"]], ["dec001"])
+        self.assertEqual(payload["transaction_current"], "2026-01")
+        self.assertEqual([item["id"] for item in payload["transaction_months"]], ["2025-12", "2026-01"])
 
     def test_card_transactions_match_owner_method_and_current_period(self):
         records = [
@@ -517,8 +553,8 @@ class DashboardViewTests(unittest.TestCase):
         self.assertEqual([item["id"] for item in filtered["recent"]], ["aa1002"])
         self.assertEqual(filtered["recent"][0]["category"], "")
         self.assertNotIn("pending", filtered["recent"][0])
-        self.assertIn("aa1001", [row["id"] for row in filtered["raw_expenses"]])
-        self.assertIn("cc1001", [row["id"] for row in filtered["card_usage"]])
+        self.assertIn("aa1001", [item["id"] for item in full["recent"]])
+        self.assertIn("cc1001", [item["id"] for item in full["recent"]])
 
     def test_recent_person_filter_follows_logged_by_and_keeps_label_order(self):
         records = [

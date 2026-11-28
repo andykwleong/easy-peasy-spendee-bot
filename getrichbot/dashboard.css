@@ -120,11 +120,19 @@ h2 { font-size: 1.7rem; letter-spacing: -0.03em; }
 .filters { display: flex; gap: 8px; flex-wrap: wrap; }
 .chip[aria-pressed="true"] { background: var(--green); color: white; border-color: var(--green); }
 .page-head.recent-head { align-items: flex-start; }
-.recent-tools {
-  display: grid;
-  gap: 8px;
-  justify-items: stretch;
+.tx-title { display: grid; gap: 8px; flex: 1; min-width: min(100%, 520px); }
+.tx-period { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.tx-period select {
+  min-height: 40px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: white;
+  color: var(--ink);
+  font: inherit;
+  padding: 8px 14px;
 }
+.tx-period .recent-search { flex: 1; min-width: 180px; }
+.recent-head .filters { justify-content: flex-end; }
 .recent-search { display: block; margin: 0; }
 .recent-search input {
   width: 100%;
@@ -402,29 +410,6 @@ th { color: var(--muted); font-size: 0.82rem; font-weight: 700; }
 .total td { font-weight: 750; }
 .net td { background: var(--green-soft); font-weight: 750; }
 .scroll { overflow-x: auto; }
-.raw-frame {
-  overflow: hidden;
-  background: var(--card);
-  border: 1px solid var(--line);
-  border-radius: 16px;
-  box-shadow: var(--shadow);
-  cursor: grab;
-}
-.raw-frame.is-panning { cursor: grabbing; user-select: none; }
-.raw-frame button,
-.raw-frame a,
-.raw-frame input,
-.raw-frame select { cursor: pointer; }
-.raw-frame .raw-block {
-  overflow: visible;
-  margin: 0;
-  border: 0;
-  border-radius: 0;
-  box-shadow: none;
-  background: transparent;
-}
-.raw-frame table { width: max-content; min-width: 1280px; }
-.raw-frame th, .raw-frame td { white-space: nowrap; }
 .panel { margin-bottom: 14px; box-shadow: var(--shadow); }
 .panel h3 { margin-bottom: 8px; }
 .later-box {
@@ -456,7 +441,7 @@ th { color: var(--muted); font-size: 0.82rem; font-weight: 700; }
     border-top: 1px solid var(--line);
     padding: 8px 0 10px;
   }
-  .recent-tools { width: 100%; }
+  .tx-period { width: 100%; }
   .tx-top { align-items: flex-start; }
   .tx-line {
     grid-template-columns: minmax(0, 1fr) auto;

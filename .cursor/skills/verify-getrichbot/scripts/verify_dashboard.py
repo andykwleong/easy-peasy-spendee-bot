@@ -68,6 +68,12 @@ def main() -> None:
     click.add_argument("--wait-text")
     click.set_defaults(func=cmd_browser_click)
 
+    fill = sub.add_parser("browser-fill")
+    fill.add_argument("--label", required=True)
+    fill.add_argument("--value", required=True)
+    fill.add_argument("--wait-text")
+    fill.set_defaults(func=cmd_browser_fill)
+
     select = sub.add_parser("browser-select")
     select.add_argument("--label", required=True)
     select.add_argument("--value", required=True)
@@ -245,11 +251,34 @@ def cmd_serve(args: argparse.Namespace) -> None:
             os.environ.pop(key, None)
     sys.path.insert(0, str(REPO))
     os.chdir(STATE)
+    from getrichbot.bot import FinanceBot
     from getrichbot.categories import DEFAULT_CATEGORY_CONFIG, configure_category_config
     from getrichbot.dashboard_http import DashboardApp, DashboardContext, DashboardHTTPServer
 
     configure_category_config({**DEFAULT_CATEGORY_CONFIG, "source": "verification-public-example"})
     sheets = FakeSheets()
+
+    class _VerifyBotSettings:
+        raw_expenses_sheet = "Raw Expenses"
+        monthly_summary_sheet = "Monthly Summary"
+        payment_methods_sheet = "Payment Methods"
+        card_limits_sheet = "Card Limits"
+        card_usage_sheet = "Card Usage"
+        me_label = "Alex"
+        wife_label = "Sam"
+        me_card_button_label = "Andy's Cards"
+        wife_card_button_label = "FX's Cards"
+        openai_api_key = None
+        openai_model = "test-model"
+        telegram_chat_id = -100
+
+        def label_for_user(self, user_id):
+            return _label_for_user(user_id)
+
+    async def _remember_group_post(text: str):
+        sheets.group_posts.append(text)
+        return 1
+
     context = DashboardContext(
         bot_token=VERIFY_TOKEN,
         allowed_user_ids={111, 222},
@@ -264,6 +293,9 @@ def cmd_serve(args: argparse.Namespace) -> None:
     if ":" in context.bot_token or context.bot_token != VERIFY_TOKEN:
         raise SystemExit("Refusing to start with a token that is not the local verification token.")
     app = DashboardApp(context)
+    expense_bot = FinanceBot(_VerifyBotSettings(), sheets)
+    expense_bot.group_notifier = _remember_group_post
+    app.attach_expense_bot(expense_bot)
     original_handle = app.handle
 
     def handle(method, target, headers, body, *, secure):
@@ -348,6 +380,15 @@ def cmd_browser_click(args: argparse.Namespace) -> None:
         if args.wait_text:
             _wait_for_text(cdp, args.wait_text)
     print(f"clicked role={args.role} name={result}")
+
+
+def cmd_browser_fill(args: argparse.Namespace) -> None:
+    instance = _require_instance()
+    with _cdp(instance) as cdp:
+        _fill(cdp, args.label, args.value)
+        if args.wait_text:
+            _wait_for_text(cdp, args.wait_text)
+    print(f"filled label={args.label}")
 
 
 def cmd_browser_select(args: argparse.Namespace) -> None:
@@ -619,6 +660,7 @@ class FakeSheets:
             ["group_post:aa1001", "Message sent"],
             ["group_post:bb2002", "message fail"],
         ]
+        self.group_posts: list[str] = []
         self.eval_rows = [
             ["2026-09-20", "sample-cafe-mail", "cafe@example.com", "Sample cafe", "pass", "logged", "aa1001", "Food", "keyword", "Food"],
             ["2026-09-18", "sample-market-mail", "market@example.com", "Sample market", "pass", "logged", "bb2002", "Groceries", "keyword", "Food"],
@@ -653,6 +695,10 @@ class FakeSheets:
 
     def get_state_rows(self, sheet_name):
         return [list(row) for row in self.state_rows]
+
+    def set_state_value(self, sheet_name, key, value):
+        self.state_rows = [row for row in self.state_rows if not row or row[0] != key]
+        self.state_rows.append([key, value])
 
     def get_eval_log_rows(self):
         return [list(row) for row in self.eval_rows]
@@ -1154,6 +1200,26 @@ def _wait_for_text(cdp: _Cdp, text: str, timeout: float = 8) -> str:
             return latest
         time.sleep(0.15)
     raise SystemExit(f"Timed out waiting for {text!r}.\n{latest[:1500]}")
+
+
+def _fill(cdp: _Cdp, label: str, value: str) -> None:
+    expression = """
+        (() => {
+          const label = %s;
+          const value = %s;
+          const accessibleName = (el) => (el.getAttribute('aria-label') || '').replace(/\\s+/g, ' ').trim();
+          const fields = [...document.querySelectorAll('input, textarea')].filter((el) => accessibleName(el) === label);
+          if (fields.length !== 1) return {ok: false, count: fields.length};
+          const field = fields[0];
+          field.focus();
+          field.value = value;
+          field.dispatchEvent(new Event('input', {bubbles: true}));
+          return {ok: true};
+        })()
+    """ % (json.dumps(label), json.dumps(value))
+    result = _evaluate(cdp, expression)
+    if not result or not result.get("ok"):
+        raise SystemExit(f"Could not fill {label!r}: {result}")
 
 
 def _click(cdp: _Cdp, role: str, name: str) -> str:

@@ -151,6 +151,35 @@ h2 { font-size: 1.7rem; letter-spacing: -0.03em; }
   border-color: var(--green);
 }
 
+.expense-box { display: grid; gap: 8px; margin: 0 0 18px; }
+.expense-line { display: flex; gap: 8px; align-items: center; }
+.expense-line input {
+  flex: 1;
+  min-width: 0;
+  min-height: 40px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: white;
+  color: var(--ink);
+  font: inherit;
+  padding: 8px 14px;
+}
+.expense-line input:focus {
+  outline: 2px solid var(--green);
+  outline-offset: 1px;
+  border-color: var(--green);
+}
+.expense-line .primary { flex: 0 0 auto; }
+.expense-error { color: var(--red); }
+.expense-reply {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 12px 14px;
+}
+.expense-reply-text { white-space: pre-wrap; }
+.expense-buttons { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+
 .tx {
   background: var(--card);
   border: 1px solid var(--line);

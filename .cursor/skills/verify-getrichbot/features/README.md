@@ -48,3 +48,4 @@ Each feature file starts with an H1 title and one paragraph describing the user-
 - [Monthly summary](./monthly-summary.md) covers the household month table built from the saved rows.
 - [Eval](./eval.md) covers the mail, category, and group-note scores after Month.
 - [Delete a row](./delete-row.md) covers the confirm dialog, cancel, and a confirmed delete.
+- [Add an expense](./add-expense.md) covers typing the same expense text as Telegram and choosing the payment button the handler returns.

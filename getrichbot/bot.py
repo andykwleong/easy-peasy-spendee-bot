@@ -7,6 +7,8 @@ import logging
 import traceback
 import re
 import uuid
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from decimal import Decimal, InvalidOperation
 from datetime import time
@@ -233,10 +235,23 @@ class CachedPaymentConfig:
     loaded_at: datetime
 
 
+_dashboard_expense: ContextVar[bool] = ContextVar("dashboard_expense", default=False)
+
+
+@contextmanager
+def dashboard_expense_turn():
+    token = _dashboard_expense.set(True)
+    try:
+        yield
+    finally:
+        _dashboard_expense.reset(token)
+
+
 class FinanceBot:
     def __init__(self, settings: Settings, sheets: SheetsClient):
         self.settings = settings
         self.sheets = sheets
+        self.group_notifier = None
         self.pending: dict[str, PendingExpense] = {}
         self.pending_deletes: dict[tuple[int, int], PendingDelete] = {}
         self.pending_duplicates: dict[tuple[int, int], PendingDuplicate] = {}
@@ -3554,14 +3569,10 @@ class FinanceBot:
         chat_id: int | str | None,
         entry_ids: list[str] | None = None,
     ) -> None:
-        """Send the confirmation. The sheet row is already written.
-
-        A reply in the household group is the group post. The first try is awaited
-        so the next chat prompt stays after it. If that try errors, one retry runs
-        in the background. A chat that is not the household group is unchanged.
-        """
         if not self._targets_group(chat_id):
             await sender()
+            if _dashboard_expense.get():
+                await self._send_household_confirmation(text, entry_ids)
             return
         ids = list(entry_ids) if entry_ids is not None else logged_row_ids(text)
         kind, message_id = await one_attempt(sender)
@@ -3572,6 +3583,21 @@ class FinanceBot:
             return
         LOGGER.warning("The group post failed. One retry will run in the background. The sheet row is already saved.")
         self._schedule_group_retry(ids, sender)
+
+    async def _send_household_confirmation(self, text: str, entry_ids: list[str] | None) -> None:
+        notifier = self.group_notifier
+        group = getattr(self.settings, "telegram_chat_id", None)
+        if notifier is None or group in (None, ""):
+            return
+
+        async def send():
+            return await notifier(text)
+
+        mark, _message_id = await deliver_group_post(send)
+        if not mark:
+            return
+        ids = list(entry_ids) if entry_ids is not None else logged_row_ids(text)
+        self.store_group_marks(ids, mark)
 
     def _logged_line(self, row: ExpenseRow) -> str:
         if row.transaction_type.lower() == "income":
@@ -3998,6 +4024,8 @@ def main() -> None:
     finance_bot = FinanceBot(settings, sheets)
     email_service = attach_email(finance_bot, settings, sheets)
     dashboard_server = start_page_and_mail(settings, sheets, email_service)
+    if dashboard_server is not None:
+        dashboard_server.dashboard_app.attach_expense_bot(finance_bot)
 
     print("Loading Telegram library...", flush=True)
     from telegram import Update
@@ -4016,6 +4044,13 @@ def main() -> None:
             raise
         LOGGER.info("Connected to Telegram as @%s. Send /whoami in the group chat.", bot_user.username)
         finance_bot.attach_household_sender(application.bot, asyncio.get_running_loop())
+
+        async def send_household_confirmation(text: str):
+            if settings.telegram_chat_id is None:
+                return None
+            return await application.bot.send_message(chat_id=settings.telegram_chat_id, text=text)
+
+        finance_bot.group_notifier = send_household_confirmation
         await configure_dashboard_menu(application, settings, dashboard_server, bot_user.username)
         if settings.telegram_chat_id is None:
             LOGGER.warning("TELEGRAM_CHAT_ID is not set. Monthly reminder messages will not be sent.")

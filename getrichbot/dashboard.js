@@ -39,7 +39,11 @@ const state = {
   recentQuery: "",
   pickedMonth: "",
   pickedYear: "",
-  openCardKey: ""
+  openCardKey: "",
+  expenseText: "",
+  expenseReplies: [],
+  expenseBusy: false,
+  expenseError: ""
 };
 
 const app = document.querySelector("#app");
@@ -182,6 +186,10 @@ async function loginWithWidget(user) {
   state.deleting = false;
   state.view = "recent";
   state.saving = null;
+  state.expenseText = "";
+  state.expenseReplies = [];
+  state.expenseBusy = false;
+  state.expenseError = "";
   if (await loadDashboard()) watchChanges();
 }
 
@@ -202,6 +210,10 @@ async function logout() {
   state.pickedYear = "";
   state.openCardKey = "";
   state.view = "recent";
+  state.expenseText = "";
+  state.expenseReplies = [];
+  state.expenseBusy = false;
+  state.expenseError = "";
   state.message = "Logged out. This browser has forgotten you.";
   renderLogin();
 }
@@ -303,6 +315,7 @@ function render() {
   shell.append(renderTop());
   const main = el("main");
   const wrap = el("div", "wrap");
+  wrap.append(renderExpenseBox());
   if (state.view === "recent") wrap.append(renderRecent());
   else if (state.view === "cards") wrap.append(renderCards());
   else if (state.view === "month") wrap.append(renderMonth());
@@ -360,6 +373,122 @@ function scopeChip(id, label) {
     loadDashboard();
   });
   return chip;
+}
+
+function renderExpenseBox() {
+  const box = el("form", "expense-box");
+  box.addEventListener("submit", onExpenseSubmit);
+  box.append(el("p", "sub", "Add an expense"));
+  const line = el("div", "expense-line");
+  const input = document.createElement("input");
+  input.type = "text";
+  input.value = state.expenseText;
+  input.placeholder = "lunch 23.40";
+  input.setAttribute("aria-label", "Expense text");
+  input.autocomplete = "off";
+  input.disabled = state.expenseBusy;
+  input.addEventListener("input", (event) => {
+    state.expenseText = event.target.value;
+  });
+  const send = el("button", "primary", state.expenseBusy ? "Sending..." : "Send");
+  send.type = "submit";
+  send.disabled = state.expenseBusy;
+  send.setAttribute("aria-label", "Send expense");
+  line.append(input, send);
+  box.append(line);
+  if (state.expenseError) box.append(el("p", "expense-error", state.expenseError));
+  const replies = el("div", "expense-replies");
+  replies.setAttribute("aria-live", "polite");
+  state.expenseReplies.forEach((reply) => {
+    const block = el("div", "expense-reply");
+    block.append(el("p", "expense-reply-text", reply.text || ""));
+    const buttons = Array.isArray(reply.buttons) ? reply.buttons : [];
+    if (buttons.length) {
+      const row = el("div", "expense-buttons");
+      buttons.forEach((choice) => {
+        if (!choice || !choice.label || !choice.callback) return;
+        const button = el("button", "chip", choice.label);
+        button.type = "button";
+        button.disabled = state.expenseBusy;
+        button.addEventListener("click", () => {
+          sendExpense({ callback: choice.callback });
+        });
+        row.append(button);
+      });
+      block.append(row);
+    }
+    replies.append(block);
+  });
+  box.append(replies);
+  return box;
+}
+
+function onExpenseSubmit(event) {
+  event.preventDefault();
+  const text = state.expenseText.trim();
+  if (!text) {
+    state.expenseError = "Type the expense the same way you would in Telegram.";
+    state.expenseReplies = [];
+    render();
+    return;
+  }
+  sendExpense({ text: text });
+}
+
+async function sendExpense(payload) {
+  if (state.expenseBusy) return;
+  state.expenseBusy = true;
+  state.expenseError = "";
+  render();
+  const result = await postExpense(payload);
+  state.expenseBusy = false;
+  if (result.status === 401) {
+    stopWatching();
+    state.payload = null;
+    state.expenseText = "";
+    state.expenseReplies = [];
+    state.expenseError = "";
+    state.message = ERROR_TEXT[result.error] || ERROR_TEXT.locked;
+    renderLogin();
+    return;
+  }
+  if (!result.ok) {
+    state.expenseError = expenseErrorText(result.error);
+    render();
+    return;
+  }
+  if (payload.text) state.expenseText = "";
+  state.expenseReplies = result.replies.length ? result.replies : [{ text: "No reply. Nothing was logged.", buttons: [] }];
+  const loaded = await loadDashboard({ quiet: true });
+  if (!loaded) render();
+}
+
+function expenseErrorText(error) {
+  if (error === "unavailable") return "The expense box is not connected yet.";
+  if (error === "invalid") return "That message was not sent.";
+  return "That expense was not sent. Check Recent before trying again.";
+}
+
+async function postExpense(payload) {
+  try {
+    const headers = { "Content-Type": "application/json" };
+    if (telegramInitData() && !state.loggedOut) headers["X-Telegram-Init-Data"] = telegramInitData();
+    const response = await fetch("/api/dashboard/expense", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: headers,
+      body: JSON.stringify(payload)
+    });
+    const body = await response.json().catch(() => ({ ok: false, error: "sheet" }));
+    return {
+      ok: response.ok && body.ok,
+      status: response.status,
+      error: body.error || "sheet",
+      replies: Array.isArray(body.replies) ? body.replies : []
+    };
+  } catch (error) {
+    return { ok: false, status: 0, error: "sheet", replies: [] };
+  }
 }
 
 function renderRecent() {

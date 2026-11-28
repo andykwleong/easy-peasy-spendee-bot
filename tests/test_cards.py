@@ -4,7 +4,16 @@ import unittest
 from datetime import date
 from decimal import Decimal
 
-from getrichbot.cards import build_card_summary, current_card_period, format_card_summary, parse_payment_config
+from getrichbot.cards import (
+    CardWarningKind,
+    build_card_summary,
+    card_limit_opened_key,
+    card_use_warning,
+    current_card_period,
+    format_card_limit_warning,
+    format_card_summary,
+    parse_payment_config,
+)
 from getrichbot.models import CardUsageRecord, ExpenseRecord
 
 
@@ -368,3 +377,153 @@ class TestCardTracking(unittest.TestCase):
 
         self.assertEqual(item.total_spend, Decimal("120"))
         self.assertEqual(item.limits[0].spent, Decimal("120"))
+
+
+class TestCardUseWarning(unittest.TestCase):
+    def test_first_note_uses_the_ninety_percent_sentence_and_keeps_orange(self):
+        items = _summary("100", [record("one111", "90", "Food", "Sample Visa")])
+        warning = card_use_warning(items, "Sample Visa", opened=False)
+
+        self.assertEqual(warning.kind, CardWarningKind.FIRST)
+        self.assertEqual(warning.owner, "Me")
+        self.assertEqual(warning.period_start, date(2026, 7, 1))
+        self.assertEqual(
+            format_card_limit_warning(warning),
+            "Sample Visa is at 90% of its $100.00 limit. $90.00 is used in this cycle.",
+        )
+        self.assertEqual(
+            card_limit_opened_key(warning.owner, warning.payment_method, warning.period_start),
+            "card_limit_90_opened:2026-07-01:Me:Sample Visa",
+        )
+        self.assertIn("(🟠 90%)", format_card_summary(items))
+
+    def test_later_use_above_ninety_and_under_one_hundred_repeats(self):
+        items = _summary("100", [record("one111", "95", "Food", "Sample Visa")])
+        warning = card_use_warning(items, "Sample Visa", opened=True)
+
+        self.assertEqual(warning.kind, CardWarningKind.REPEAT)
+        self.assertEqual(
+            format_card_limit_warning(warning),
+            "Sample Visa is at 95% of its limit. $95.00 of $100.00 is used in this cycle.",
+        )
+
+    def test_exactly_ninety_after_the_first_note_stays_quiet(self):
+        items = _summary("100", [record("one111", "90", "Food", "Sample Visa")])
+        self.assertIsNone(card_use_warning(items, "Sample Visa", opened=True))
+
+    def test_reaching_one_hundred_uses_the_other_card_sentence(self):
+        items = _summary("100", [record("one111", "100", "Food", "Sample Visa")])
+        warning = card_use_warning(items, "Sample Visa", opened=False)
+        self.assertEqual(warning.kind, CardWarningKind.REACHED)
+        self.assertEqual(
+            format_card_limit_warning(warning),
+            "Sample Visa has reached its limit. Use another card for your next purchase.",
+        )
+        again = card_use_warning(
+            _summary("100", [record("one111", "120", "Food", "Sample Visa")]),
+            "Sample Visa",
+            opened=True,
+        )
+        self.assertEqual(again.kind, CardWarningKind.REACHED)
+
+    def test_spending_under_ninety_uncapped_and_blank_limits_stay_quiet(self):
+        self.assertIsNone(card_use_warning(_summary("100", [record("one111", "89.99", "Food", "Sample Visa")]), "Sample Visa", False))
+        methods = [
+            ["Payment Method", "Owner", "Type", "Cycle Type", "Cycle Start Day", "Active"],
+            ["Sample Visa", "Me", "Credit Card", "Calendar", "1", "TRUE"],
+        ]
+        no_limit = parse_payment_config(methods, [["Payment Method", "Owner", "Category", "Limit Amount", "Active"]])
+        blank_limit = parse_payment_config(
+            methods,
+            [
+                ["Payment Method", "Owner", "Category", "Limit Amount", "Active"],
+                ["Sample Visa", "Me", "All", "", "TRUE"],
+            ],
+        )
+        spent = [record("one111", "500", "Food", "Sample Visa")]
+        self.assertIsNone(card_use_warning(build_card_summary(no_limit, spent, "Me", date(2026, 7, 10)), "Sample Visa", False))
+        self.assertIsNone(card_use_warning(build_card_summary(blank_limit, spent, "Me", date(2026, 7, 10)), "Sample Visa", False))
+
+    def test_the_highest_limit_supplies_the_amounts(self):
+        config = parse_payment_config(
+            [
+                ["Payment Method", "Owner", "Type", "Cycle Type", "Cycle Start Day", "Active"],
+                ["Sample Visa", "Me", "Credit Card", "Calendar", "1", "TRUE"],
+            ],
+            [
+                ["Payment Method", "Owner", "Category", "Limit Amount", "Active"],
+                ["Sample Visa", "Me", "Food", "100", "TRUE"],
+                ["Sample Visa", "Me", "Groceries", "100", "TRUE"],
+            ],
+        )
+        items = build_card_summary(
+            config,
+            [
+                record("food11", "95", "Food", "Sample Visa"),
+                record("groc11", "10", "Groceries", "Sample Visa"),
+            ],
+            "Me",
+            date(2026, 7, 10),
+        )
+        warning = card_use_warning(items, "Sample Visa", opened=False)
+        self.assertEqual(warning.spent, Decimal("95"))
+        self.assertNotIn("Groceries", format_card_limit_warning(warning))
+
+    def test_billing_cycle_key_uses_the_cycle_start(self):
+        config = parse_payment_config(
+            [
+                ["Payment Method", "Owner", "Type", "Cycle Type", "Cycle Start Day", "Active"],
+                ["Sample Visa", "Me", "Credit Card", "Billing", "17", "TRUE"],
+            ],
+            [
+                ["Payment Method", "Owner", "Category", "Limit Amount", "Active"],
+                ["Sample Visa", "Me", "All", "100", "TRUE"],
+            ],
+        )
+        items = build_card_summary(
+            config,
+            [record("one111", "95", "Food", "Sample Visa", expense_date="2026-07-10")],
+            "Me",
+            date(2026, 7, 10),
+        )
+        warning = card_use_warning(items, "Sample Visa", opened=False)
+        self.assertEqual(
+            card_limit_opened_key(warning.owner, warning.payment_method, warning.period_start),
+            "card_limit_90_opened:2026-06-17:Me:Sample Visa",
+        )
+
+    def test_card_usage_can_reach_ninety_percent(self):
+        config = parse_payment_config(
+            [
+                ["Payment Method", "Owner", "Type", "Cycle Type", "Cycle Start Day", "Active"],
+                ["Sample Visa", "Me", "Credit Card", "Calendar", "1", "TRUE"],
+            ],
+            [
+                ["Payment Method", "Owner", "Category", "Limit Amount", "Active"],
+                ["Sample Visa", "Me", "All", "100", "TRUE"],
+            ],
+        )
+        items = build_card_summary(
+            config,
+            [record("one111", "40", "Food", "Sample Visa")],
+            "Me",
+            date(2026, 7, 10),
+            [card_usage("claim1", "50", "Sample Visa")],
+        )
+        warning = card_use_warning(items, "Sample Visa", opened=False)
+        self.assertEqual(warning.kind, CardWarningKind.FIRST)
+        self.assertEqual(warning.spent, Decimal("90"))
+
+
+def _summary(limit: str, records: list[ExpenseRecord], today: date = date(2026, 7, 10)) -> list:
+    config = parse_payment_config(
+        [
+            ["Payment Method", "Owner", "Type", "Cycle Type", "Cycle Start Day", "Active"],
+            ["Sample Visa", "Me", "Credit Card", "Calendar", "1", "TRUE"],
+        ],
+        [
+            ["Payment Method", "Owner", "Category", "Limit Amount", "Active"],
+            ["Sample Visa", "Me", "All", limit, "TRUE"],
+        ],
+    )
+    return build_card_summary(config, records, "Me", today)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import calendar
+import html
 import logging
 import traceback
 import re
@@ -32,10 +33,19 @@ from getrichbot.shop_category import resolve_shop_category_tap
 from getrichbot.shop_category import shop_category_callback
 from getrichbot.shop_category import shop_choice_state_key
 from getrichbot.shop_category import shop_choices_from_state
-from getrichbot.cards import PaymentConfig, build_card_summary, format_card_summary
+from getrichbot.cards import (
+    CardWarningKind,
+    PaymentConfig,
+    build_card_summary,
+    card_limit_opened_key,
+    card_use_note_key,
+    card_use_warning,
+    format_card_limit_warning,
+    format_card_summary,
+)
 from getrichbot.image_utils import prepare_image_for_vision
 from getrichbot.logging_utils import configure_logging
-from getrichbot.models import CardUsageRow, ExpenseDraft, ExpenseRecord, ExpenseRow
+from getrichbot.models import CardUsageRecord, CardUsageRow, ExpenseDraft, ExpenseRecord, ExpenseRow
 from getrichbot.parser import categorize_description, extract_date_phrase, extract_standalone_date, parse_expense, parse_expenses
 from getrichbot.row_edits import category_for_linked_message, expense_kind, format_saved_row, match_category, parse_immediate_edit, plan_edit, record_for_message_id, row_for_immediate_correction
 from getrichbot.sheet_changes import SheetChanges
@@ -239,6 +249,8 @@ class FinanceBot:
         self.recent_logged: list[RecentLoggedExpense] = []
         self.email_service = None
         self.ai = None
+        self.household_bot = None
+        self._household_loop = None
         # In-flight group-post retries. There is no timer. Each task ends after one retry.
         self._group_post_tasks: set[asyncio.Task] = set()
 
@@ -2083,6 +2095,7 @@ class FinanceBot:
         if duplicate is None:
             self._append_expense(row)
             self._remember_logged(row)
+            await self._send_card_use_warning(row)
             return self._logged_line(row)
 
         key = (update.effective_chat.id, update.effective_user.id)
@@ -2131,6 +2144,7 @@ class FinanceBot:
         self._drop_duplicate_copies(pending)
         self._append_expense(pending.row)
         self._remember_logged(pending.row)
+        await self._send_card_use_warning(pending.row)
         if pending.pending_id is not None:
             self.pending.pop(pending.pending_id, None)
         if key in self.pending_payment_batches:
@@ -2293,6 +2307,7 @@ class FinanceBot:
                 return WriteOutcome(logged=False, text=self._duplicate_prompt(row, duplicate))
         self._append_expense(row)
         self._remember_logged(row)
+        self._schedule_card_use_warning(row)
         return WriteOutcome(logged=True, text=self._email_logged_line(row))
 
     def _drop_duplicate_copies(self, pending: PendingDuplicate) -> None:
@@ -2415,6 +2430,81 @@ class FinanceBot:
         summary = build_spending_summary(records, period)
         await bot.send_message(chat_id=self.settings.telegram_chat_id, text=format_spending_summary(summary))
         self.sheets.set_state_value(self.settings.bot_state_sheet, state_key, "yes")
+
+    def attach_household_sender(self, bot, loop) -> None:
+        self.household_bot = bot
+        self._household_loop = loop
+
+    def _schedule_card_use_warning(self, row: ExpenseRow | CardUsageRow) -> None:
+        if self.household_bot is None or self._household_loop is None:
+            return
+        asyncio.run_coroutine_threadsafe(self._send_card_use_warning(row), self._household_loop)
+
+    async def _send_card_use_warning(self, row: ExpenseRow | CardUsageRow) -> None:
+        if self.household_bot is None or getattr(self.settings, "telegram_chat_id", None) is None:
+            return
+        entry_id = str(getattr(row, "entry_id", "") or "")
+        if not entry_id:
+            return
+        note_key = card_use_note_key(entry_id)
+        try:
+            if self.sheets.get_state_value(self.settings.bot_state_sheet, note_key) == "yes":
+                return
+            warning = self._card_warning_for_use(row)
+        except Exception:
+            LOGGER.exception("Card limit warning was not sent")
+            return
+        if warning is None:
+            return
+        opened_key = card_limit_opened_key(warning.owner, warning.payment_method, warning.period_start)
+        wrote_opened = False
+        self.sheets.set_state_value(self.settings.bot_state_sheet, note_key, "yes")
+        if warning.kind is CardWarningKind.FIRST and self.sheets.get_state_value(self.settings.bot_state_sheet, opened_key) != "yes":
+            self.sheets.set_state_value(self.settings.bot_state_sheet, opened_key, "yes")
+            wrote_opened = True
+        text = f"{_owner_mention(self.settings, warning.owner)} {html.escape(format_card_limit_warning(warning))}"
+        try:
+            await self.household_bot.send_message(
+                chat_id=self.settings.telegram_chat_id,
+                text=text,
+                parse_mode="HTML",
+            )
+        except Exception:
+            self.sheets.set_state_value(self.settings.bot_state_sheet, note_key, "")
+            if wrote_opened:
+                self.sheets.set_state_value(self.settings.bot_state_sheet, opened_key, "")
+            LOGGER.exception("Card limit warning was not sent")
+
+    def _card_warning_for_use(self, row: ExpenseRow | CardUsageRow):
+        if str(getattr(row, "transaction_type", "Expense")).casefold() in {"income", "fixed"}:
+            return None
+        if str(getattr(row, "input_type", "")).casefold() == "fixed":
+            return None
+        owner = (getattr(row, "payment_owner", "") or getattr(row, "logged_by", "") or "").strip()
+        method_name = (getattr(row, "payment_method", "") or "").strip()
+        if not owner or not method_name:
+            return None
+        config = self._load_payment_config()
+        method = config.method_for(owner, method_name)
+        if method is None or not method.is_credit_card:
+            return None
+        when = row.timestamp.date()
+        records = list(self.sheets.get_expense_records(self.settings.raw_expenses_sheet))
+        if hasattr(self.sheets, "get_card_usage_records"):
+            usage_records = list(self.sheets.get_card_usage_records(self.settings.card_usage_sheet))
+        else:
+            usage_records = []
+        if isinstance(row, CardUsageRow):
+            usage_records = _include_card_use(usage_records, _usage_record(row))
+        else:
+            records = _include_card_use(records, _expense_record(row))
+        items = build_card_summary(config, records, owner, when, usage_records)
+        item = next((candidate for candidate in items if candidate.payment_method.name.casefold() == method.name.casefold()), None)
+        opened = False
+        if item is not None:
+            opened_key = card_limit_opened_key(item.payment_method.owner, item.payment_method.name, item.period_start)
+            opened = self.sheets.get_state_value(self.settings.bot_state_sheet, opened_key) == "yes"
+        return card_use_warning(items, method.name, opened)
 
     def _pending_extractions_message(self, expenses, logged_by: str, update: Update, reason: str, title: str) -> str:
         lines = [title]
@@ -3230,6 +3320,7 @@ class FinanceBot:
         if pending.reason == "card_usage":
             row = self._card_usage_row_from_pending(pending, payment_method, payment_owner, payment_channel)
             self.sheets.append_card_usage(self.settings.card_usage_sheet, row)
+            await self._send_card_use_warning(row)
             self.pending.pop(pending_id, None)
             await query.edit_message_reply_markup(reply_markup=None)
             notice = self._card_usage_logged_line(row)
@@ -3614,6 +3705,66 @@ def _is_date_change_request(text: str) -> bool:
     )
 
 
+def _include_card_use(records, row):
+    if any(record.entry_id == row.entry_id for record in records):
+        return records
+    return [*records, row]
+
+
+def _expense_record(row: ExpenseRow) -> ExpenseRecord:
+    return ExpenseRecord(
+        row_number=0,
+        entry_id=row.entry_id,
+        timestamp=row.timestamp.strftime("%H:%M:%S"),
+        expense_date=row.timestamp.strftime("%Y-%m-%d"),
+        month=row.timestamp.strftime("%Y-%m"),
+        logged_by=row.logged_by,
+        raw_input=row.raw_input,
+        amount=row.amount,
+        category=row.category,
+        description=row.description,
+        input_type=row.input_type,
+        status=row.status,
+        transaction_type=row.transaction_type,
+        payment_method=row.payment_method,
+        payment_owner=row.payment_owner,
+        payment_channel=row.payment_channel,
+    )
+
+
+def _usage_record(row: CardUsageRow) -> CardUsageRecord:
+    return CardUsageRecord(
+        row_number=0,
+        entry_id=row.entry_id,
+        timestamp=row.timestamp.strftime("%H:%M:%S"),
+        usage_date=row.timestamp.strftime("%Y-%m-%d"),
+        month=row.timestamp.strftime("%Y-%m"),
+        logged_by=row.logged_by,
+        raw_input=row.raw_input,
+        amount=row.amount,
+        payment_method=row.payment_method,
+        description=row.description,
+        usage_type=row.usage_type,
+        status=row.status,
+        payment_owner=row.payment_owner,
+        payment_channel=row.payment_channel,
+    )
+
+
+def _owner_mention(settings, owner: str) -> str:
+    if owner == settings.me_label:
+        raw_ids = settings.me_telegram_ids
+    elif owner == settings.wife_label:
+        raw_ids = settings.wife_telegram_ids
+    else:
+        raw_ids = ()
+    ids = tuple(sorted(raw_ids))
+    label = html.escape(owner)
+    if not ids:
+        return label
+    return " ".join(f'<a href="tg://user?id={user_id}">{label}</a>' for user_id in ids)
+
+
 def _last_day_of_month(value) -> object:
     return value.replace(day=calendar.monthrange(value.year, value.month)[1])
 
@@ -3864,6 +4015,7 @@ def main() -> None:
             LOGGER.exception("Telegram startup check failed. Check TELEGRAM_BOT_TOKEN and internet access.")
             raise
         LOGGER.info("Connected to Telegram as @%s. Send /whoami in the group chat.", bot_user.username)
+        finance_bot.attach_household_sender(application.bot, asyncio.get_running_loop())
         await configure_dashboard_menu(application, settings, dashboard_server, bot_user.username)
         if settings.telegram_chat_id is None:
             LOGGER.warning("TELEGRAM_CHAT_ID is not set. Monthly reminder messages will not be sent.")
